@@ -1,0 +1,35 @@
+name: Build Kernel
+on:
+  workflow_dispatch:
+
+jobs:
+  Build-Kernel:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Build
+        uses: dabao1955/kernel_build_action@d562505c190de0b8e852c6b763c76118b0432ab2
+        with:
+          # Your specific repository and branch
+          kernel-url: https://github.com/royd-jpg/android_kernel_samsung_exynos9810
+          kernel-branch: lineage-23.0-ksun3-susfs2
+          
+          # Blueprint for S9+ (star2lte)
+          config: exynos9810-star2lte_defconfig
+          arch: arm64
+          
+          # Modern Toolchain for Lineage 23.0
+          android-version: 14
+          aosp-clang: true
+          aosp-clang-version: r487747c
+          aosp-gcc: true
+          
+          # Low Latency & Feature Optimization
+          disable-lto: true
+          ksu: true
+          ksu-version: main
+          
+          # Final Packaging
+          anykernel3: true
