@@ -13,25 +13,26 @@ jobs:
     steps:
       - name: Build Kernel
         uses: dabao1955/kernel_build_action@main
-        with:
-          # Your specific repository and branch
+       with:
+          # Your specific source and branch
           kernel-url: https://github.com/royd-jpg/android_kernel_samsung_exynos9810
           kernel-branch: lineage-23.0-ksun3-susfs2
           
-          # Blueprint for S9+ (star2lte)
+          # The "Blueprint" for S9+ (star2lte)
           config: exynos9810-star2lte_defconfig
           arch: arm64
           
-          # Modern Toolchain for Lineage 23.0
+          # Modern Toolchain (Clang 17 for Lineage 23.0)
           android-version: 14
           aosp-clang: true
           aosp-clang-version: r487747c
           aosp-gcc: true
           
-          # Low Latency & Feature Optimization
-          disable-lto: true
+          # Performance & Latency Tweaks
           ksu: true
           ksu-version: main
+          disable-lto: true # Lower latency by reducing code complexity
+          ccache: true     # Faster builds if you run it multiple times
           
           # Final Packaging
           anykernel3: true
