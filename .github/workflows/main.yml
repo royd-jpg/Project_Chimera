@@ -1,4 +1,4 @@
-            - name: Android Kernel Build Action
+            - name: main
   # You may pin to the exact commit or the version.
   # uses: dabao1955/kernel_build_action@d562505c190de0b8e852c6b763c76118b0432ab2
   uses: dabao1955/kernel_build_action@v1.9.2
