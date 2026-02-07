@@ -1,40 +1,69 @@
-name: Build Kernel
+name: Android Kernel Build (Exynos9810)
+
 on:
   workflow_dispatch:
 
 jobs:
-  Build-Kernel:
-    strategy:
-      fail-fast: false
-    runs-on: ubuntu-latest
+  build:
+    name: Build Android Kernel
+    runs-on: ubuntu-22.04
+
     permissions:
       contents: write
 
+    env:
+      ARCH: arm64
+      SUBARCH: arm64
+
     steps:
-      - name: Build Kernel
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install build dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y bc bison build-essential curl flex git libssl-dev libncurses-dev libelf-dev lzop python3 unzip zip
+
+      - name: Android Kernel Build Action
+        # pinned to the latest compatible release you referenced
         uses: dabao1955/kernel_build_action@v1.9.2
         with:
+          # Kernel source
           kernel-url: https://github.com/royd-jpg/android_kernel_samsung_exynos9810
           kernel-branch: lineage-23.0-ksun3-susfs2
-          # This is the exact config for the S9+ Exynos
+          kernel-dir: kernel
+          depth: 1
+
+          # Build target
           config: exynos9810-star2lte_defconfig
           arch: arm64
           android-version: 14
+
+          # Toolchains
           aosp-clang: true
-          # Using the stable modern Clang for Lineage 23.0
           aosp-clang-version: r487747c
           aosp-gcc: true
-          ksu: true
-          ksu-version: main
-          disable-lto: true
-          anykernel3: true
 
-      - name: Verify Build
-        run: |
-          # Check for the kernel image in the output folder
-          if [ -f "out/arch/arm64/boot/Image.gz" ] || [ -f "out/arch/arm64/boot/Image" ]; then
-            echo "Success: Kernel image found. Build verified."
-          else
-            echo "Error: Kernel image missing. Build failed."
-            exit 1
-          fi
+          # Build options
+          ccache: true
+          disable-lto: false
+          extra-make-args: '["LOCALVERSION=-CI"]'
+
+          # KernelSU
+          ksu: true
+          ksu-lkm: false
+
+          # Packaging / release (safe defaults; change when ready)
+          anykernel3: false
+          release: false
+
+      - name: Upload kernel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: exynos9810-kernel
+          path: |
+            out/arch/arm64/boot/Image*
+            out/arch/arm64/boot/dts/**/*.dtb
+            out/*.zip
