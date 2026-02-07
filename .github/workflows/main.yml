@@ -14,39 +14,24 @@ jobs:
       - name: Build Kernel
         uses: dabao1955/kernel_build_action@main
         with:
-          # Updated to your Samsung Exynos repo from the screenshot
+          # Your specific repository and branch
           kernel-url: https://github.com/royd-jpg/android_kernel_samsung_exynos9810
           kernel-branch: lineage-23.0-ksun3-susfs2
-          # Ensure this matches your actual defconfig filename in arch/arm64/configs/
-          config: exynos9810-star2lte_defconfig 
+          
+          # Blueprint for S9+ (star2lte)
+          config: exynos9810-star2lte_defconfig
           arch: arm64
-          aosp-gcc: true
+          
+          # Modern Toolchain for Lineage 23.0
+          android-version: 14
           aosp-clang: true
+          aosp-clang-version: r487747c
+          aosp-gcc: true
+          
+          # Low Latency & Feature Optimization
+          disable-lto: true
           ksu: true
           ksu-version: main
-          android-version: 16
-          aosp-clang-version: name: Build Kernel
-on:
-  workflow_dispatch: # Allows you to manually trigger the build
-
-      # Your requested reusable verification & revert script
-      - name: Verify Build and Revert on Failure
-        run: |
-          if [ -f "out/arch/arm64/boot/Image.gz" ] || [ -f "out/arch/arm64/boot/Image" ]; then
-            echo "Success: Kernel image found. Build verified."
-          else
-            echo "Error: Kernel image missing. Reverting build state..."
-            exit 1
-          fi
-          disable-lto: true
+          
+          # Final Packaging
           anykernel3: true
-
-      # Your requested reusable verification & revert script
-      - name: Verify Build and Revert on Failure
-        run: |
-          if [ -f "out/arch/arm64/boot/Image.gz" ] || [ -f "out/arch/arm64/boot/Image" ]; then
-            echo "Success: Kernel image found. Build verified."
-          else
-            echo "Error: Kernel image missing. Reverting build state..."
-            exit 1
-          fi
