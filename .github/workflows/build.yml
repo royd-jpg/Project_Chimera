@@ -1,0 +1,86 @@
+            - name: Build
+  # You may pin to the exact commit or the version.
+  # uses: dabao1955/kernel_build_action@d562505c190de0b8e852c6b763c76118b0432ab2
+  uses: dabao1955/kernel_build_action@v1.9.2
+  with:
+    # URL of the Android kernel source repository
+    kernel-url: https://github.com/royd-jpg/android_kernel_samsung_exynos9810
+    # Branch name of the main kernel source repository
+    kernel-branch: lineage-23.0-ksun3-susfs2 # optional, default is main
+    # Directory name for storing kernel source code
+    kernel-dir: kernel # optional, default is kernel
+    # Git clone depth for faster downloads
+    depth: 1 # optional, default is 1
+    # Name of the kernel configuration file to use
+    config: exynos9810-star2lte_defconfig # default is defconfig
+    # Target CPU architecture for cross-compilation
+    arch: arm64 # default is arm64
+    # Android version for AOSP toolchain selection
+    android-version: 14 # optional, default is 
+    # Enable vendor kernel source code integration
+    vendor: false # optional, default is false
+    # URL of the vendor kernel source repository
+    vendor-url: # optional
+    # Branch name of the vendor kernel source repository
+    vendor-branch: # optional, default is main
+    # Directory name for storing vendor kernel source
+    vendor-dir: # optional, default is vendor
+    # Use AOSP Clang toolchain
+    aosp-clang: true # optional, default is false
+    # Version of AOSP Clang toolchain to use
+    aosp-clang-version: r487747c # optional, default is r383902
+    # Use AOSP GCC toolchain
+    aosp-gcc: true # optional, default is false
+    # URL of custom Clang toolchain
+    other-clang-url: # optional
+    # Branch of the custom Clang toolchain
+    other-clang-branch: main # optional, default is main
+    # URL of custom 64-bit GCC toolchain
+    other-gcc64-url: # optional
+    # Branch of custom 64-bit GCC toolchain
+    other-gcc64-branch: # optional, default is main
+    # URL of custom 32-bit GCC toolchain
+    other-gcc32-url: # optional
+    # Branch of custom 32-bit GCC toolchain
+    other-gcc32-branch: # optional, default is main
+    # Enable KernelSU integration
+    ksu: true # optional, default is false
+    # Version of KernelSU to integrate
+    ksu-version: main # optional, default is main
+    # Build KernelSU as a loadable kernel module
+    ksu-lkm: false # optional, default is false
+    # Use a third-party KernelSU fork
+    ksu-other: false # optional, default is false
+    # URL of the third-party KernelSU fork
+    ksu-url: # optional
+    # Enable Re-Kernel support
+    rekernel: false # optional, default is false
+    # Enable Kali NetHunter support
+    nethunter: false # optional, default is false
+    # Apply NetHunter-specific patches
+    nethunter-patch: false # optional, default is false
+    # Enable LXC/Docker container support
+    lxc: false # optional, default is false
+    # Apply LXC-specific patches
+    lxc-patch: false # optional, default is false
+    # Enable KVM (Kernel Virtual Machine) support
+    kvm: false # optional, default is false
+    # Enable BaseBandGuard support
+    bbg: false # optional, default is false
+    # Disable Link Time Optimization (LTO)
+    disable-lto: false # optional, default is false
+    # Enable ccache compilation cache
+    ccache: true # optional, default is false
+    # Use AnyKernel3 packaging method
+    anykernel3: false# optional, default is false
+    # URL of custom AnyKernel3 repository
+    anykernel3-url: # optional
+    # URL to download the original boot.img file
+    bootimg-url: # optional
+    # Automatically create a GitHub Release
+    release: false # optional, default is false
+    # GitHub personal access token for releases
+    access-token: # optional
+    # Additional make arguments in JSON array format
+    extra-make-args: [] # optional, default is []
+          
