@@ -1,6 +1,6 @@
 name: Build Kernel
 on:
-  workflow_dispatch: # Allows you to manually trigger the build
+  workflow_dispatch:
 
 jobs:
   Build-Kernel:
@@ -8,31 +8,33 @@ jobs:
       fail-fast: false
     runs-on: ubuntu-latest
     permissions:
-      contents: read
-      
-      steps:
+      contents: write
+
+    steps:
       - name: Build Kernel
-        uses: dabao1955/kernel_build_action@main
-       with:
-          # Your specific source and branch
+        uses: dabao1955/kernel_build_action@v1.9.2
+        with:
           kernel-url: https://github.com/royd-jpg/android_kernel_samsung_exynos9810
           kernel-branch: lineage-23.0-ksun3-susfs2
-          
-          # The "Blueprint" for S9+ (star2lte)
+          # This is the exact config for the S9+ Exynos
           config: exynos9810-star2lte_defconfig
           arch: arm64
-          
-          # Modern Toolchain (Clang 17 for Lineage 23.0)
           android-version: 14
           aosp-clang: true
+          # Using the stable modern Clang for Lineage 23.0
           aosp-clang-version: r487747c
           aosp-gcc: true
-          
-          # Performance & Latency Tweaks
           ksu: true
           ksu-version: main
-          disable-lto: true # Lower latency by reducing code complexity
-          ccache: true     # Faster builds if you run it multiple times
-          
-          # Final Packaging
+          disable-lto: true
           anykernel3: true
+
+      - name: Verify Build
+        run: |
+          # Check for the kernel image in the output folder
+          if [ -f "out/arch/arm64/boot/Image.gz" ] || [ -f "out/arch/arm64/boot/Image" ]; then
+            echo "Success: Kernel image found. Build verified."
+          else
+            echo "Error: Kernel image missing. Build failed."
+            exit 1
+          fi
