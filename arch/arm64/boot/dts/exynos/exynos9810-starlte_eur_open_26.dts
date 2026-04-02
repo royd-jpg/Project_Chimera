@@ -6556,8 +6556,8 @@
 
 				s2mpb02-buck1 {
 					regulator-name = "VDD_EXT_1P3_PB03";
-					regulator-min-microvolt = <1300000>;
-					regulator-max-microvolt = <1300000>;
+					regulator-min-microvolt = <1250000>;
+					regulator-max-microvolt = <1250000>;
 					regulator-always-on;
 					regulator-boot-on;
 					linux,phandle = <572>;
@@ -6566,8 +6566,8 @@
 
 				s2mpb02-buck2 {
 					regulator-name = "VDD_EXT_1P3_PB02";
-					regulator-min-microvolt = <1300000>;
-					regulator-max-microvolt = <1300000>;
+					regulator-min-microvolt = <1250000>;
+					regulator-max-microvolt = <1250000>;
 					linux,phandle = <573>;
 					phandle = <573>;
 				};
@@ -8791,7 +8791,7 @@
 				BUCK2 {
 					regulator-name = "vdd_cpucl1";
 					regulator-min-microvolt = <450000>;
-					regulator-max-microvolt = <1300000>;
+					regulator-max-microvolt = <1250000>;
 					regulator-always-on;
 					regulator-ramp-delay = <6000>;
 					regulator-initial-mode = <1>;
@@ -8802,7 +8802,7 @@
 				BUCK3 {
 					regulator-name = "vdd_cpucl0";
 					regulator-min-microvolt = <450000>;
-					regulator-max-microvolt = <1300000>;
+					regulator-max-microvolt = <1250000>;
 					regulator-always-on;
 					regulator-ramp-delay = <6000>;
 					regulator-initial-mode = <1>;
@@ -8846,7 +8846,7 @@
 				BUCK7 {
 					regulator-name = "vdd_cpucl1_m";
 					regulator-min-microvolt = <450000>;
-					regulator-max-microvolt = <1300000>;
+					regulator-max-microvolt = <1250000>;
 					regulator-always-on;
 					regulator-ramp-delay = <6000>;
 					regulator-initial-mode = <1>;
@@ -8857,7 +8857,7 @@
 				BUCK8 {
 					regulator-name = "vdd2_mem";
 					regulator-min-microvolt = <900000>;
-					regulator-max-microvolt = <1300000>;
+					regulator-max-microvolt = <1250000>;
 					regulator-always-on;
 					regulator-ramp-delay = <6000>;
 					regulator-initial-mode = <3>;
@@ -8890,7 +8890,7 @@
 				BUCK11 {
 					regulator-name = "vdd_lldo2";
 					regulator-min-microvolt = <900000>;
-					regulator-max-microvolt = <1300000>;
+					regulator-max-microvolt = <1250000>;
 					regulator-always-on;
 					regulator-ramp-delay = <6000>;
 					regulator-initial-mode = <3>;
@@ -8998,7 +8998,7 @@
 				LDO8 {
 					regulator-name = "vdd_ldo8";
 					regulator-min-microvolt = <700000>;
-					regulator-max-microvolt = <1300000>;
+					regulator-max-microvolt = <1250000>;
 					regulator-always-on;
 					regulator-ramp-delay = <12000>;
 					regulator-initial-mode = <1>;
