@@ -116,6 +116,7 @@ menu "Caches"
 source "fs/fscache/Kconfig"
 source "fs/cachefiles/Kconfig"
 
+source "fs/susfs/Kconfig"
 endmenu
 
 if BLOCK
@@ -124,6 +125,7 @@ menu "CD-ROM/DVD Filesystems"
 source "fs/isofs/Kconfig"
 source "fs/udf/Kconfig"
 
+source "fs/susfs/Kconfig"
 endmenu
 endif # BLOCK
 
@@ -134,6 +136,7 @@ source "fs/fat/Kconfig"
 source "fs/ntfs/Kconfig"
 source "fs/sdfat/Kconfig"
 
+source "fs/susfs/Kconfig"
 endmenu
 endif # BLOCK
 
@@ -213,6 +216,7 @@ config ARCH_HAS_GIGANTIC_PAGE
 source "fs/configfs/Kconfig"
 source "fs/efivarfs/Kconfig"
 
+source "fs/susfs/Kconfig"
 endmenu
 
 menuconfig MISC_FILESYSTEMS
@@ -319,4 +323,5 @@ source "fs/nls/Kconfig"
 source "fs/dlm/Kconfig"
 source "fs/unicode/Kconfig"
 
+source "fs/susfs/Kconfig"
 endmenu
