@@ -831,6 +831,8 @@ static int sugov_init(struct cpufreq_policy *policy)
 		}
 		policy->governor_data = sg_policy;
 		sg_policy->tunables = global_tunables;
+    tunables->up_rate_limit_us = CHIMERA_UP_RATE_LIMIT_US;
+    tunables->down_rate_limit_us = CHIMERA_DOWN_RATE_LIMIT_US;
 
 		gov_attr_set_get(&global_tunables->attr_set, &sg_policy->tunables_hook);
 		goto out;
