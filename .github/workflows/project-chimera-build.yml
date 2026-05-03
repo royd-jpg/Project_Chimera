@@ -1,0 +1,291 @@
+name: Project Chimera Build
+
+on:
+  push:
+    branches:
+      - '**'
+  workflow_dispatch:
+    inputs:
+      do_release:
+        description: 'Create a GitHub Release with the zip'
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    env:
+      NEUTRON_CLANG_SERIES: "19"
+      NEUTRON_CATALOG_API: "https://api.github.com/repos/Neutron-Toolchains/clang-build-catalogue/releases/latest"
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          path: kernel
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -yqq \
+            git curl wget bc flex bison \
+            libssl-dev libelf-dev python3 \
+            build-essential zip zstd
+
+      # ── Resolve Neutron version for cache-key stability ───────────────────
+      - name: Resolve Neutron Clang version
+        id: neutron-version
+        run: |
+          set -euo pipefail
+          REL_JSON="$(curl -fsSL \"$NEUTRON_CATALOG_API\")"
+          ASSET_NAME="$(python3 - << 'PY' "$REL_JSON" "$NEUTRON_CLANG_SERIES"
+import json, sys
+release = json.loads(sys.argv[1])
+series = sys.argv[2]
+assets = [a.get("name", "") for a in release.get("assets", [])]
+hits = [n for n in assets if f"clang-{series}" in n and n.endswith(".tar.zst")]
+print(hits[0] if hits else "")
+PY
+)"
+          if [[ -z "$ASSET_NAME" ]]; then
+            echo "ERROR: Could not resolve Neutron Clang asset for clang-$NEUTRON_CLANG_SERIES"
+            exit 1
+          fi
+          VERSION="${ASSET_NAME%.tar.zst}"
+          echo "asset_name=$ASSET_NAME" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      # ── Neutron Clang ────────────────────────────────────────────────────
+      - name: Cache Neutron Clang
+        id: cache-neutron
+        uses: actions/cache@v4
+        with:
+          path: neutron-clang
+          key: neutron-clang-${{ steps.neutron-version.outputs.version }}
+
+      - name: Download Neutron Clang
+        if: steps.cache-neutron.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p neutron-clang
+          URL="$(curl -fsSL \"$NEUTRON_CATALOG_API\" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+asset='${{ steps.neutron-version.outputs.asset_name }}'
+hits=[a['browser_download_url'] for a in d.get('assets',[]) if a.get('name') == asset]
+print(hits[0] if hits else '')
+")"
+          if [[ -z "$URL" ]]; then
+            echo "ERROR: Could not find download URL for ${{ steps.neutron-version.outputs.asset_name }}"
+            exit 1
+          fi
+
+          wget -qO /tmp/neutron.tar.zst "$URL"
+          tar --zstd -xf /tmp/neutron.tar.zst -C neutron-clang --strip-components=1
+
+      # ── Eva GCC ──────────────────────────────────────────────────────────
+      - name: Cache Eva GCC
+        id: cache-eva
+        uses: actions/cache@v4
+        with:
+          path: |
+            toolchains/Eva-GCC-64
+            toolchains/Eva-GCC-32
+          key: eva-gcc-20241001
+
+      - name: Download Eva GCC
+        if: steps.cache-eva.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p toolchains
+          git clone --depth=1 https://github.com/mvaisakh/gcc-arm64 toolchains/Eva-GCC-64
+          git clone --depth=1 https://github.com/mvaisakh/gcc-arm   toolchains/Eva-GCC-32
+
+      - name: Set toolchain PATH
+        run: |
+          set -euo pipefail
+          echo "$GITHUB_WORKSPACE/neutron-clang/bin" >> "$GITHUB_PATH"
+          echo "$GITHUB_WORKSPACE/toolchains/Eva-GCC-64/bin" >> "$GITHUB_PATH"
+          echo "$GITHUB_WORKSPACE/toolchains/Eva-GCC-32/bin" >> "$GITHUB_PATH"
+
+      # ── Source patching (modularized) ────────────────────────────────────
+      - name: Apply source patches
+        working-directory: kernel
+        run: |
+          set -euo pipefail
+
+          replace_or_fail() {
+            local file="$1" from="$2" to="$3"
+            if ! rg -q --fixed-strings "$from" "$file"; then
+              echo "ERROR: Target not found in $file: $from"
+              exit 1
+            fi
+            sed -i "s|$from|$to|" "$file"
+          }
+
+          apply_kconfig_value() {
+            local file="$1" key="$2" val="$3"
+            if rg -q "^${key}=" "$file"; then
+              sed -i "s|^${key}=.*|${key}=${val}|" "$file"
+            elif rg -q "^# ${key} is not set" "$file"; then
+              sed -i "s|^# ${key} is not set|${key}=${val}|" "$file"
+            else
+              echo "${key}=${val}" >> "$file"
+            fi
+          }
+
+          DEFCONFIG="arch/arm64/configs/exynos9810-star2lte_defconfig"
+          apply_kconfig_value "$DEFCONFIG" CONFIG_HZ_300 y
+          apply_kconfig_value "$DEFCONFIG" CONFIG_HZ 300
+          replace_or_fail "$DEFCONFIG" "CONFIG_HZ_1000=y" "# CONFIG_HZ_1000 is not set"
+          replace_or_fail "$DEFCONFIG" "CONFIG_HZ_250=y" "# CONFIG_HZ_250 is not set"
+
+          apply_kconfig_value "$DEFCONFIG" CONFIG_PREEMPT y
+          apply_kconfig_value "$DEFCONFIG" CONFIG_HIGH_RES_TIMERS y
+          apply_kconfig_value "$DEFCONFIG" CONFIG_NO_HZ_IDLE y
+
+          apply_kconfig_value "$DEFCONFIG" CONFIG_CPU_FREQ_GOV_SCHEDUTIL y
+          apply_kconfig_value "$DEFCONFIG" CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL y
+          replace_or_fail "$DEFCONFIG" "CONFIG_CPU_FREQ_DEFAULT_GOV_INTERACTIVE=y" "# CONFIG_CPU_FREQ_DEFAULT_GOV_INTERACTIVE is not set"
+
+          apply_kconfig_value "$DEFCONFIG" CONFIG_KPROBES y
+          apply_kconfig_value "$DEFCONFIG" CONFIG_KPROBE_EVENTS y
+
+          apply_kconfig_value "$DEFCONFIG" CONFIG_IOSCHED_DEADLINE y
+          apply_kconfig_value "$DEFCONFIG" CONFIG_DEFAULT_IOSCHED '"deadline"'
+          apply_kconfig_value "$DEFCONFIG" CONFIG_DEFAULT_DEADLINE y
+
+          apply_kconfig_value "$DEFCONFIG" CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE y
+          replace_or_fail "$DEFCONFIG" "CONFIG_CC_OPTIMIZE_FOR_SIZE=y" "# CONFIG_CC_OPTIMIZE_FOR_SIZE is not set"
+
+          DTS="arch/arm64/boot/dts/exynos"
+
+          CMA=""
+          for f in "$DTS/exynos9810-reserve-2memory-star2lte.dtsi" "$DTS/exynos9810-reserve-2memory.dtsi"; do
+            [[ -f "$f" ]] && CMA="$f" && break
+          done
+          [[ -n "$CMA" ]] || { echo "ERROR: CMA DTS not found"; exit 1; }
+
+          python3 - "$CMA" << 'PY'
+import re, sys
+p = sys.argv[1]
+with open(p) as f:
+    txt = f.read()
+
+def patch(txt, label, new_size):
+    pat = rf'({re.escape(label)}[^{{]*{{[^}}]*?reg\s*=\s*<[^>]*?\s)(0x[0-9a-fA-F]+)(\s*>)'
+    out, n = re.subn(pat, lambda m: m.group(1) + new_size + m.group(3), txt, flags=re.DOTALL)
+    if n == 0:
+        raise SystemExit(f"ERROR: Did not find region for {label} in {p}")
+    return out
+
+txt = patch(txt, 'camera_region', '0x10000000')
+txt = patch(txt, 'mfc_region',    '0x04000000')
+with open(p, 'w') as f:
+    f.write(txt)
+print(f"CMA patched: {p}")
+PY
+
+          CONN=""
+          for f in "$DTS/exynos9810-star2lte-connectivity.dtsi" "$DTS/exynos9810-connectivity.dtsi"; do
+            [[ -f "$f" ]] && CONN="$f" && break
+          done
+          [[ -n "$CONN" ]] || { echo "ERROR: Connectivity DTS not found"; exit 1; }
+
+          if ! rg -q "bt-addr-path|samsung,bt-addr-path" "$CONN"; then
+            if ! rg -q 'compatible.*bcm-bt-plat' "$CONN"; then
+              echo "ERROR: Bluetooth compatibility anchor not found in $CONN"
+              exit 1
+            fi
+            sed -i '/compatible.*bcm-bt-plat/a\t\tsamsung,bt-addr-path = "/efs/bluetooth/bt_addr";' "$CONN"
+          fi
+
+          IDLE="arch/arm64/boot/dts/exynos/exynos9810.dtsi"
+          [[ -f "$IDLE" ]] || { echo "ERROR: $IDLE not found"; exit 1; }
+          replace_or_fail "$IDLE" "min-residency-us = <2000>" "min-residency-us = <400>"
+          replace_or_fail "$IDLE" "min-residency-us = <10000>" "min-residency-us = <4000>"
+
+      # ── Build ──────────────────────────────────────────────────────────────
+      - name: Build kernel
+        working-directory: kernel
+        run: |
+          set -euo pipefail
+          MAKE=(
+            make -j"$(nproc)"
+            ARCH=arm64 SUBARCH=arm64
+            CC=clang
+            CLANG_TRIPLE=aarch64-elf-
+            CROSS_COMPILE=aarch64-elf-
+            CROSS_COMPILE_ARM32=arm-eabi-
+            LD=ld.lld
+            AR=llvm-ar NM=llvm-nm
+            OBJCOPY=llvm-objcopy
+            OBJDUMP=llvm-objdump
+            STRIP=llvm-strip
+            KCFLAGS="-std=gnu11 -fcommon"
+          )
+          "${MAKE[@]}" exynos9810-star2lte_defconfig
+          "${MAKE[@]}" Image.gz dtbs 2>&1 | tee build.log
+
+      # ── AnyKernel3 package ─────────────────────────────────────────────────
+      - name: Package flashable zip
+        run: |
+          set -euo pipefail
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AnyKernel3
+
+          cat > AnyKernel3/anykernel.sh << 'AK3'
+properties() { '
+kernel.string=Project Chimera — crDroid A16
+do.devicecheck=1
+do.modules=0
+do.cleanup=1
+do.cleanuponabort=0
+device.name1=star2lte
+device.name2=SM-G965F
+device.name3=SM-G965U
+device.name4=SM-G965N
+device.name5=SM-G9650
+'; }
+block=boot;
+is_slot_device=0;
+ramdisk_compression=auto;
+patch_vbmeta_flag=auto;
+. tools/ak3-core.sh;
+dump_boot;
+write_boot;
+AK3
+
+          cp kernel/arch/arm64/boot/Image.gz AnyKernel3/
+          find kernel/arch/arm64/boot/dts/exynos/ -name "*.dtb" -exec cp {} AnyKernel3/ \;
+
+          cd AnyKernel3
+          zip -r9 "../chimera-crDroid-$(date +%Y%m%d-%H%M).zip" . -x "*.git*"
+          cd ..
+          ls -lh chimera-*.zip
+
+      - name: Upload flashable zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: chimera-crDroid-${{ github.run_number }}
+          path: chimera-*.zip
+          retention-days: 14
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ github.run_number }}
+          path: kernel/build.log
+          retention-days: 7
+
+      - name: Create GitHub Release
+        if: ${{ inputs.do_release }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: chimera-${{ github.run_number }}
+          name: Project Chimera — crDroid A16 Build ${{ github.run_number }}
+          body: |
+            Built from chimera-mk5-r3.1
+            Tuning: HZ_300, SchedUtil, CMA 256MB, BT fix, CPU idle states
+          files: chimera-*.zip
