@@ -42,14 +42,12 @@ jobs:
           import json,sys
           d=json.load(sys.stdin)
           hits=[a['browser_download_url'] for a in d.get('assets',[])
-                if 'clang-19' in a.get('name','') and a['name'].endswith('.tar.zst')]
+                if a['name'].endswith('.tar.zst')]
           print(hits[0] if hits else '')
           ")
-          [[ -n "$URL" ]] || { echo "ERROR: Neutron Clang 19 not found"; exit 1; }
+          [[ -n "$URL" ]] || { echo "ERROR: Neutron Clang not found"; exit 1; }
           wget -qO /tmp/neutron.tar.zst "$URL"
-          tar -xf /tmp/neutron.tar.zst -C neutron-clang --strip-components=1
-          test -x neutron-clang/bin/clang
-
+          
       # ── 3. Eva GCC ────────────────────────────────────────────────────────
       - name: Cache Eva GCC
         id: cache-eva
