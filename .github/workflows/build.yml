@@ -1,0 +1,71 @@
+name: Chimera Kernel Production
+
+on:
+  workflow_dispatch: # Allows you to start the build manually
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source & Submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Install Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison flex libssl-dev libelf-dev clang lld llvm aarch64-linux-gnu-gcc
+
+      - name: Clandestine Injection
+        run: |
+          # 1. Inject SchedUtil Tunables (2ms/8ms)
+          sed -i '/#include/a \\n/* Project Chimera Tunables */\n#define CHIMERA_UP_RATE_LIMIT_US   2000\n#define CHIMERA_DOWN_RATE_LIMIT_US 8000' kernel/sched/cpufreq_schedutil.c
+          
+          # 2. Enable SuSFS and KSU-Next in defconfig
+          # We append to the existing defconfig to ensure these features are compiled
+          echo "CONFIG_KSU=y" >> arch/arm64/configs/chimera_defconfig
+          echo "CONFIG_KSU_NEXT=y" >> arch/arm64/configs/chimera_defconfig
+          echo "CONFIG_KSU_SUSFS=y" >> arch/arm64/configs/chimera_defconfig
+          echo "CONFIG_KSU_SUSFS_SUSP_MOUNT=y" >> arch/arm64/configs/chimera_defconfig
+          echo "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_PATH=y" >> arch/arm64/configs/chimera_defconfig
+
+      - name: Compile Chimera Kernel
+        run: |
+          # Force a fresh compile for the injected schedutil code
+          rm -f kernel/sched/cpufreq_schedutil.o
+          
+          # Build process
+          make O=out chimera_defconfig ARCH=arm64
+          make -j$(nproc) O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
+               CC=clang \
+               CLANG_TRIPLE=aarch64-linux-gnu-
+
+      - name: Package AnyKernel3 (LOS 23.2)
+        run: |
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AnyKernel3
+          
+          # Setup AnyKernel3 for S9+ (star2lte) and Android 16
+          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
+          sed -i 's/supported.versions=/supported.versions=16/g' AnyKernel3/anykernel.sh
+          
+          # Move compiled Image.gz and DTBs into the zip folder
+          if [ -f out/arch/arm64/boot/Image.gz ]; then
+            cp out/arch/arm64/boot/Image.gz AnyKernel3/Image.gz
+          else
+            cp out/arch/arm64/boot/Image AnyKernel3/Image
+          fi
+          
+          find out/arch/arm64/boot/dts/exynos/ -name "exynos9810-star2lte*.dtb" -exec cp {} AnyKernel3/ \;
+          
+          cd AnyKernel3
+          zip -r9 "../Chimera-$(date +%Y%m%d).zip" . -x "*.git*"
+
+      - name: Upload Flashable Kernel
+        uses: actions/upload-artifact@v4
+        with:
+          name: Chimera-Kernel-Package
+          path: "*.zip"
