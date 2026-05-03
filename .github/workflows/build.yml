@@ -18,8 +18,8 @@ jobs:
       - name: Install Build Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison flex libssl-dev libelf-dev clang lld llvm aarch64-linux-gnu-gcc
-
+          sudo apt-get install -y bc bison flex libssl-dev libelf-dev clang lld llvm gcc-aarch64-linux-gnu
+    
       - name: Clandestine Injection
         run: |
           # 1. Inject SchedUtil Tunables (2ms/8ms)
