@@ -40,14 +40,14 @@ jobs:
           set -euo pipefail
           REL_JSON="$(curl -fsSL \"$NEUTRON_CATALOG_API\")"
           ASSET_NAME="$(python3 - << 'PY' "$REL_JSON" "$NEUTRON_CLANG_SERIES"
-import json, sys
-release = json.loads(sys.argv[1])
-series = sys.argv[2]
-assets = [a.get("name", "") for a in release.get("assets", [])]
-hits = [n for n in assets if f"clang-{series}" in n and n.endswith(".tar.zst")]
-print(hits[0] if hits else "")
-PY
-)"
+            import json, sys
+            release = json.loads(sys.argv[1])
+            series = sys.argv[2]
+            assets = [a.get("name", "") for a in release.get("assets", [])]
+            hits = [n for n in assets if f"clang-{series}" in n and n.endswith(".tar.zst")]
+            print(hits[0] if hits else "")
+            PY
+            )"
           if [[ -z "$ASSET_NAME" ]]; then
             echo "ERROR: Could not resolve Neutron Clang asset for clang-$NEUTRON_CLANG_SERIES"
             exit 1
@@ -70,14 +70,14 @@ PY
           set -euo pipefail
           mkdir -p neutron-clang
           URL="$(curl -fsSL \"$NEUTRON_CATALOG_API\" | python3 -c "
-import json,sys
-d=json.load(sys.stdin)
-asset='${{ steps.neutron-version.outputs.asset_name }}'
-hits=[a['browser_download_url'] for a in d.get('assets',[]) if a.get('name') == asset]
-print(hits[0] if hits else '')
-")"
-          if [[ -z "$URL" ]]; then
-            echo "ERROR: Could not find download URL for ${{ steps.neutron-version.outputs.asset_name }}"
+          import json,sys
+          d=json.load(sys.stdin)
+          asset='${{ steps.neutron-version.outputs.asset_name }}'
+          hits=[a['browser_download_url'] for a in d.get('assets',[]) if a.get('name') == asset]
+          print(hits[0] if hits else '')
+          ")"
+                    if [[ -z "$URL" ]]; then
+                      echo "ERROR: Could not find download URL for ${{ steps.neutron-version.outputs.asset_name }}"
             exit 1
           fi
 
@@ -168,24 +168,24 @@ print(hits[0] if hits else '')
           [[ -n "$CMA" ]] || { echo "ERROR: CMA DTS not found"; exit 1; }
 
           python3 - "$CMA" << 'PY'
-import re, sys
-p = sys.argv[1]
-with open(p) as f:
-    txt = f.read()
-
-def patch(txt, label, new_size):
-    pat = rf'({re.escape(label)}[^{{]*{{[^}}]*?reg\s*=\s*<[^>]*?\s)(0x[0-9a-fA-F]+)(\s*>)'
-    out, n = re.subn(pat, lambda m: m.group(1) + new_size + m.group(3), txt, flags=re.DOTALL)
-    if n == 0:
-        raise SystemExit(f"ERROR: Did not find region for {label} in {p}")
-    return out
-
-txt = patch(txt, 'camera_region', '0x10000000')
-txt = patch(txt, 'mfc_region',    '0x04000000')
-with open(p, 'w') as f:
-    f.write(txt)
-print(f"CMA patched: {p}")
-PY
+            import re, sys
+            p = sys.argv[1]
+            with open(p) as f:
+                txt = f.read()
+            
+            def patch(txt, label, new_size):
+                pat = rf'({re.escape(label)}[^{{]*{{[^}}]*?reg\s*=\s*<[^>]*?\s)(0x[0-9a-fA-F]+)(\s*>)'
+                out, n = re.subn(pat, lambda m: m.group(1) + new_size + m.group(3), txt, flags=re.DOTALL)
+                if n == 0:
+                    raise SystemExit(f"ERROR: Did not find region for {label} in {p}")
+                return out
+            
+            txt = patch(txt, 'camera_region', '0x10000000')
+            txt = patch(txt, 'mfc_region',    '0x04000000')
+            with open(p, 'w') as f:
+                f.write(txt)
+            print(f"CMA patched: {p}")
+            PY
 
           CONN=""
           for f in "$DTS/exynos9810-star2lte-connectivity.dtsi" "$DTS/exynos9810-connectivity.dtsi"; do
@@ -235,31 +235,31 @@ PY
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AnyKernel3
 
           cat > AnyKernel3/anykernel.sh << 'AK3'
-properties() { '
-kernel.string=Project Chimera — crDroid A16
-do.devicecheck=1
-do.modules=0
-do.cleanup=1
-do.cleanuponabort=0
-device.name1=star2lte
-device.name2=SM-G965F
-device.name3=SM-G965U
-device.name4=SM-G965N
-device.name5=SM-G9650
-'; }
-block=boot;
-is_slot_device=0;
-ramdisk_compression=auto;
-patch_vbmeta_flag=auto;
-. tools/ak3-core.sh;
-dump_boot;
-write_boot;
-AK3
-
-          cp kernel/arch/arm64/boot/Image.gz AnyKernel3/
-          find kernel/arch/arm64/boot/dts/exynos/ -name "*.dtb" -exec cp {} AnyKernel3/ \;
-
-          cd AnyKernel3
+            properties() { '
+            kernel.string=Project Chimera — crDroid A16
+            do.devicecheck=1
+            do.modules=0
+            do.cleanup=1
+            do.cleanuponabort=0
+            device.name1=star2lte
+            device.name2=SM-G965F
+            device.name3=SM-G965U
+            device.name4=SM-G965N
+            device.name5=SM-G9650
+            '; }
+            block=boot;
+            is_slot_device=0;
+            ramdisk_compression=auto;
+            patch_vbmeta_flag=auto;
+            . tools/ak3-core.sh;
+            dump_boot;
+            write_boot;
+            AK3
+            
+                      cp kernel/arch/arm64/boot/Image.gz AnyKernel3/
+                      find kernel/arch/arm64/boot/dts/exynos/ -name "*.dtb" -exec cp {} AnyKernel3/ \;
+            
+                      cd AnyKernel3
           zip -r9 "../chimera-crDroid-$(date +%Y%m%d-%H%M).zip" . -x "*.git*"
           cd ..
           ls -lh chimera-*.zip
