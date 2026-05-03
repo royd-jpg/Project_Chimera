@@ -1,0 +1,73 @@
+name: Chimera Kernel Production
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source & Submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Install Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison flex libssl-dev libelf-dev clang lld llvm aarch64-linux-gnu-gcc
+
+      - name: Clandestine Injection
+        run: |
+          # 1. Inject SchedUtil Tunables (2ms/8ms) 
+          # Using the exact path from royd-jpg tree
+          sed -i '/#include/a \\n/* Project Chimera Tunables */\n#define CHIMERA_UP_RATE_LIMIT_US   2000\n#define CHIMERA_DOWN_RATE_LIMIT_US 8000' kernel/sched/cpufreq_schedutil.c
+          
+          # 2. Enable SuSFS and KSU-Next in the REAL defconfig
+          # Using exynos9810-star2lte_defconfig as found in your repo
+          CONF="arch/arm64/configs/exynos9810-star2lte_defconfig"
+          echo "CONFIG_KSU=y" >> $CONF
+          echo "CONFIG_KSU_NEXT=y" >> $CONF
+          echo "CONFIG_KSU_SUSFS=y" >> $CONF
+          echo "CONFIG_KSU_SUSFS_SUSP_MOUNT=y" >> $CONF
+          echo "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_PATH=y" >> $CONF
+
+      - name: Compile Chimera Kernel
+        run: |
+          rm -f kernel/sched/cpufreq_schedutil.o
+          
+          # Build process using the correct defconfig
+          make O=out exynos9810-star2lte_defconfig ARCH=arm64
+          make -j$(nproc) O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
+               CC=clang \
+               CLANG_TRIPLE=aarch64-linux-gnu-
+
+      - name: Package AnyKernel3 (LOS 23.2)
+        run: |
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AnyKernel3
+          
+          # Setup AnyKernel3 for S9+ (star2lte)
+          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
+          sed -i 's/supported.versions=/supported.versions=16/g' AnyKernel3/anykernel.sh
+          
+          # Move compiled Image.gz and DTBs
+          if [ -f out/arch/arm64/boot/Image.gz ]; then
+            cp out/arch/arm64/boot/Image.gz AnyKernel3/Image.gz
+          else
+            cp out/arch/arm64/boot/Image AnyKernel3/Image
+          fi
+          
+          # S9+ specific DTB pathing for Exynos 9810
+          find out/arch/arm64/boot/dts/samsung/ -name "*star2lte*.dtb" -exec cp {} AnyKernel3/ \;
+          
+          cd AnyKernel3
+          zip -r9 "../Chimera-S9Plus-$(date +%Y%m%d).zip" . -x "*.git*"
+
+      - name: Upload Flashable Kernel
+        uses: actions/upload-artifact@v4
+        with:
+          name: Chimera-S9Plus-Package
+          path: "*.zip"
