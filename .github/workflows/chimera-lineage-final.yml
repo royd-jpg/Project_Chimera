@@ -62,7 +62,7 @@ jobs:
             https://github.com/royd-jpg/android_kernel_samsung_exynos9810 \
             kernel
 
-            # ── 4. KernelSU Next & SUSFS Prep ──────────────────────────────────────
+                  # ── 4. KernelSU Next & SUSFS Prep ──────────────────────────────────────
       - name: Integrate KernelSU Next and SUSFS
         working-directory: kernel
         run: |
@@ -80,15 +80,27 @@ jobs:
           if ! grep -q "^endmenu" drivers/Kconfig; then echo "endmenu" >> drivers/Kconfig; fi
           sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
 
-          # Prep SUSFS Headers (Using a more stable raw link)
+          # Prep SUSFS Headers (Using the absolute raw link for 4.9 kernels)
           mkdir -p include/linux/susfs
-          # We use -L to follow redirects and -S to show errors
-          wget -qS -O include/linux/susfs.h https://raw.githubusercontent.com/sid75/susfs_patches/main/Kernel_Patches/include/linux/susfs.h || \
-          wget -qS -O include/linux/susfs.h https://raw.githubusercontent.com/sid75/susfs_patches/main/Kernel_Patches/Kernel_4.9/include/linux/susfs.h
+          
+          # Try the most common stable locations for the 4.9 header
+          HEADERS=(
+            "https://raw.githubusercontent.com/sid75/susfs_patches/main/Kernel_Patches/Kernel_4.9/include/linux/susfs.h"
+            "https://raw.githubusercontent.com/sid75/susfs_patches/main/Kernel_Patches/include/linux/susfs.h"
+            "https://gitlab.com/simonpunk/susfs4ksu/-/raw/main/kernel_patches/include/linux/susfs.h"
+          )
 
-          # Verify the file is not empty
+          for url in "${HEADERS[@]}"; do
+            echo "Attempting to fetch SUSFS header from: $url"
+            if wget -q -S -O include/linux/susfs.h "$url" 2>&1 | grep -q "200 OK"; then
+              echo "Successfully downloaded susfs.h"
+              break
+            fi
+          done
+
+          # Final verification: if the file is empty or missing, fail the build
           if [ ! -s include/linux/susfs.h ]; then
-            echo "ERROR: susfs.h is empty or download failed"
+            echo "ERROR: Could not find a valid susfs.h header. Check repository paths."
             exit 1
           fi
           
