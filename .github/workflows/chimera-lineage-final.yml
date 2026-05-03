@@ -62,24 +62,37 @@ jobs:
             https://github.com/royd-jpg/android_kernel_samsung_exynos9810 \
             kernel
 
-      # ── 4. KernelSU Next & SUSFS Prep ──────────────────────────────────────
+            # ── 4. KernelSU Next & SUSFS Prep ──────────────────────────────────────
       - name: Integrate KernelSU Next and SUSFS
         working-directory: kernel
         run: |
+          # Clean up previous attempts
           rm -rf drivers/kernelsu KernelSU KernelSU-Next
           
           # Integrate KernelSU Next
           git clone --depth=1 https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU-Next
           ln -s ../KernelSU-Next/kernel drivers/kernelsu
+          
+          # Remove existing Kconfig entries to prevent duplicates
           sed -i '/kernelsu\/Kconfig/d' drivers/Kconfig
+          
+          # Ensure endmenu exists and inject Kconfig
           if ! grep -q "^endmenu" drivers/Kconfig; then echo "endmenu" >> drivers/Kconfig; fi
           sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
 
-          # Prep SUSFS Headers
+          # Prep SUSFS Headers (Using a more stable raw link)
           mkdir -p include/linux/susfs
-          wget -qO include/linux/susfs.h https://raw.githubusercontent.com/sid75/susfs_patches/main/Kernel_Patches/include/linux/susfs.h
+          # We use -L to follow redirects and -S to show errors
+          wget -qS -O include/linux/susfs.h https://raw.githubusercontent.com/sid75/susfs_patches/main/Kernel_Patches/include/linux/susfs.h || \
+          wget -qS -O include/linux/susfs.h https://raw.githubusercontent.com/sid75/susfs_patches/main/Kernel_Patches/Kernel_4.9/include/linux/susfs.h
+
+          # Verify the file is not empty
+          if [ ! -s include/linux/susfs.h ]; then
+            echo "ERROR: susfs.h is empty or download failed"
+            exit 1
+          fi
           
-          echo "KernelSU Next and SUSFS headers integrated"
+          echo "KernelSU Next and SUSFS headers integrated successfully"
 
       # ── 5. Defconfig & Makefile Surgical Fixes ────────────────────────────
       - name: Patch Kernel Core for Clang 19
