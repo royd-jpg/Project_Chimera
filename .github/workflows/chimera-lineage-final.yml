@@ -59,6 +59,14 @@ jobs:
             https://github.com/royd-jpg/android_kernel_samsung_exynos9810 \
             kernel
 
+      - name: Apply Project Chimera Source Patches
+        working-directory: kernel
+        run: |
+          # SchedUtil Fix / Tunables
+          sed -i '/#include/a \\n/* Project Chimera Tunables */\n#define CHIMERA_UP_RATE_LIMIT_US   2000\n#define CHIMERA_DOWN_RATE_LIMIT_US 8000' kernel/sched/cpufreq_schedutil.c
+          
+          echo "Source-level tunables applied."
+
       - name: Integrate KernelSU Next and SUSFS
         working-directory: kernel
         run: |
