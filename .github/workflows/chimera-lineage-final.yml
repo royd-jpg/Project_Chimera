@@ -62,43 +62,45 @@ jobs:
             https://github.com/royd-jpg/android_kernel_samsung_exynos9810 \
             kernel
 
-                       # ── 4. KernelSU Next & SUSFS Prep ──────────────────────────────────────
+                             # ── 4. KernelSU Next & SUSFS Prep ──────────────────────────────────────
       - name: Integrate KernelSU Next and SUSFS
         working-directory: kernel
         run: |
-          # Clean up previous attempts
-          rm -rf drivers/kernelsu KernelSU KernelSU-Next
-          
-          # Integrate KernelSU Next
+          # 1. Clean up and remove broken references
+          rm -rf drivers/kernelsu KernelSU KernelSU-Next fs/susfs
+          sed -i '/susfs\/Kconfig/d' fs/Kconfig
+          sed -i '/kernelsu\/Kconfig/d' drivers/Kconfig
+
+          # 2. Integrate KernelSU Next
           git clone --depth=1 https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU-Next
           ln -s ../KernelSU-Next/kernel drivers/kernelsu
           
-          # Remove existing Kconfig entries to prevent duplicates
-          sed -i '/kernelsu\/Kconfig/d' drivers/Kconfig
-          
-          # Ensure endmenu exists and inject Kconfig
+          # 3. Inject KernelSU to Kconfig
           if ! grep -q "^endmenu" drivers/Kconfig; then echo "endmenu" >> drivers/Kconfig; fi
           sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
 
-          # Prep SUSFS Headers via Direct Injection (No more 404s!)
+          # 4. Create SUSFS Stubs (Crucial to fix "can't open file" error)
+          mkdir -p fs/susfs
+          echo 'config SUSFS' > fs/susfs/Kconfig
+          echo '    bool "SUSFS Support"' >> fs/susfs/Kconfig
+          echo '    default y' >> fs/susfs/Kconfig
+          
+          echo 'obj-y += susfs.o' > fs/susfs/Makefile
+          echo 'void susfs_stub(void) {}' > fs/susfs/susfs.c
+          
+          # Re-inject SUSFS to fs/Kconfig
+          sed -i '/if BLOCK/i source "fs/susfs/Kconfig"' fs/Kconfig
+
+          # 5. Direct Injection of SUSFS Header
           mkdir -p include/linux/susfs
           cat << 'EOF' > include/linux/susfs.h
-            #ifndef _SUSFS_H
-            #define _SUSFS_H
-            
-            #include <linux/types.h>
-
-              /* Minimal SUSFS definitions for KernelSU-Next compatibility */
-              struct susfs_sus_path {
-              	char *path;
-              };
-              
-              #define SUSFS_VERSION "1.5.1"
-              
-              #endif /* _SUSFS_H */
-              EOF
-                        
-                        echo "KernelSU Next and SUSFS headers prepped (Direct Injection)"
+          #ifndef _SUSFS_H
+          #define _SUSFS_H
+          #include <linux/types.h>
+          #define SUSFS_VERSION "1.5.1"
+          #endif
+          EOF
+                    echo "Environment prepped and stubs created."
 
       # ── 5. Defconfig & Makefile Surgical Fixes ────────────────────────────
       - name: Patch Kernel Core for Clang 19
