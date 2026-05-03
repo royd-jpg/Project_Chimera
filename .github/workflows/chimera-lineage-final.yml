@@ -13,7 +13,6 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      # ── 1. Dependencies ──────────────────────────────────────────────────
       - name: Install dependencies
         run: |
           sudo apt-get update -qq
@@ -24,7 +23,6 @@ jobs:
             gcc-aarch64-linux-gnu \
             gcc-arm-linux-gnueabi
 
-      # ── 2. Neutron Clang 19 ───────────────────────────────────────────────
       - name: Cache Neutron Clang
         id: cache-neutron
         uses: actions/cache@v4
@@ -54,7 +52,6 @@ jobs:
         run: |
           echo "$GITHUB_WORKSPACE/neutron-clang/bin" >> "$GITHUB_PATH"
 
-      # ── 3. Clone kernel ───────────────────────────────────────────────────
       - name: Clone kernel tree
         run: |
           git clone --depth=1 \
@@ -62,83 +59,73 @@ jobs:
             https://github.com/royd-jpg/android_kernel_samsung_exynos9810 \
             kernel
 
-                             # ── 4. KernelSU Next & SUSFS Prep ──────────────────────────────────────
       - name: Integrate KernelSU Next and SUSFS
         working-directory: kernel
         run: |
-          # 1. Clean up and remove broken references
           rm -rf drivers/kernelsu KernelSU KernelSU-Next fs/susfs
           sed -i '/susfs\/Kconfig/d' fs/Kconfig
           sed -i '/kernelsu\/Kconfig/d' drivers/Kconfig
 
-          # 2. Integrate KernelSU Next
           git clone --depth=1 https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU-Next
           ln -s ../KernelSU-Next/kernel drivers/kernelsu
-          
-          # 3. Inject KernelSU to Kconfig
+
           if ! grep -q "^endmenu" drivers/Kconfig; then echo "endmenu" >> drivers/Kconfig; fi
           sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
 
-          # 4. Create SUSFS Stubs (Crucial to fix "can't open file" error)
           mkdir -p fs/susfs
-          echo 'config SUSFS' > fs/susfs/Kconfig
-          echo '    bool "SUSFS Support"' >> fs/susfs/Kconfig
-          echo '    default y' >> fs/susfs/Kconfig
-          
-          echo 'obj-y += susfs.o' > fs/susfs/Makefile
-          echo 'void susfs_stub(void) {}' > fs/susfs/susfs.c
-          
-          # Re-inject SUSFS to fs/Kconfig
+          echo 'config SUSFS'                >> fs/susfs/Kconfig
+          echo '    bool "SUSFS Support"'    >> fs/susfs/Kconfig
+          echo '    default y'               >> fs/susfs/Kconfig
+          echo 'obj-y += susfs.o'            > fs/susfs/Makefile
+          echo 'void susfs_stub(void) {}'    > fs/susfs/susfs.c
+
           sed -i '/if BLOCK/i source "fs/susfs/Kconfig"' fs/Kconfig
 
-          # 5. Direct Injection of SUSFS Header
-          mkdir -p include/linux/susfs
-          cat << 'EOF' > include/linux/susfs.h
+          mkdir -p include/linux
+          cat > include/linux/susfs.h << 'EOF'
           #ifndef _SUSFS_H
           #define _SUSFS_H
           #include <linux/types.h>
           #define SUSFS_VERSION "1.5.1"
           #endif
           EOF
-                    echo "Environment prepped and stubs created."
 
-      # ── 5. Defconfig & Makefile Surgical Fixes ────────────────────────────
-      - name: Patch Kernel Core for Clang 19
+          echo "KernelSU Next and SUSFS stubs ready."
+
+      - name: Patch kernel for Clang 19
         working-directory: kernel
         run: |
-          # 1. Force GNU11 and relax duplicate symbols (Fixes init/main.c and Crypto errors)
           sed -i 's/-std=gnu89/-std=gnu11 -fcommon/g' Makefile
           sed -i 's/HOSTCFLAGS   :=/HOSTCFLAGS   := -std=gnu11 -fcommon /' Makefile
 
-          # 2. Add Clang 19 suppressions and SUSFS flag
           END_LINE=$(grep -n "^\s*-std=gnu" Makefile | tail -1 | cut -d: -f1)
           sed -i "${END_LINE}a KBUILD_CFLAGS += -Wno-address-of-packed-member -Wno-int-in-bool-context -Wno-asm-operand-widths -DSUSFS_VERSION=1.5.1" Makefile
 
-          # 3. Defconfig Tuning
           F="arch/arm64/configs/exynos9810-star2lte_defconfig"
           kset() {
             local key="$1" val="$2"
-            grep -q "^${key}=" "$F" && sed -i "s|^${key}=.*|${key}=${val}|" "$F" || echo "${key}=${val}" >> "$F"
+            grep -q "^${key}=" "$F" \
+              && sed -i "s|^${key}=.*|${key}=${val}|" "$F" \
+              || echo "${key}=${val}" >> "$F"
           }
           kset CONFIG_HZ_300 y
           kset CONFIG_HZ 300
           kset CONFIG_PREEMPT y
           kset CONFIG_KSU y
           kset CONFIG_KSU_ALLOWLIST_WORKAROUND y
-          # Built-in crypto to avoid module symbol conflicts
           sed -i 's/^CONFIG_CRYPTO_\(.*\)=m$/CONFIG_CRYPTO_\1=y/' "$F"
 
-      # ── 6. DTS Tuning ─────────────────────────────────────────────────────
+          echo "Clang 19 patches applied."
+
       - name: Patch DTS
         working-directory: kernel
         run: |
           DTS="arch/arm64/boot/dts/exynos/exynos9810-star2lte_eur_open_26.dts"
-          # Expand Camera ION heap
           sed -i 's/size = <461373440>;/size = <603979776>;/' "$DTS" || true
-          # Tune CPU Idle
-          sed -i 's/min-residency-us = <2000>/min-residency-us = <400>/' arch/arm64/boot/dts/exynos/exynos9810.dtsi || true
+          sed -i 's/min-residency-us = <2000>/min-residency-us = <400>/' \
+            arch/arm64/boot/dts/exynos/exynos9810.dtsi 2>/dev/null || true
+          echo "DTS patches applied."
 
-      # ── 7. Build ──────────────────────────────────────────────────────────
       - name: Build kernel
         working-directory: kernel
         run: |
@@ -151,29 +138,83 @@ jobs:
             CROSS_COMPILE=aarch64-linux-gnu-
             CROSS_COMPILE_ARM32=arm-linux-gnueabi-
             LD=$GITHUB_WORKSPACE/neutron-clang/bin/ld.lld
-            AR=llvm-ar NM=llvm-nm
-            OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump
+            AR=llvm-ar
+            NM=llvm-nm
+            OBJCOPY=llvm-objcopy
+            OBJDUMP=llvm-objdump
             STRIP=llvm-strip
             KCFLAGS="-std=gnu11 -fcommon -Wno-implicit-function-declaration -Wno-implicit-int -Wno-return-type"
           )
-
           "${MAKE[@]}" exynos9810-star2lte_defconfig
-          "${MAKE[@]}" Image.gz dtbs 2>&1 | tee build.log
+          "${MAKE[@]}" Image dtbs 2>&1 | tee build.log
 
-      # ── 8. Package ────────────────────────────────────────────────────────
+          test -f arch/arm64/boot/Image || \
+            { echo "ERROR: Image not produced"; exit 1; }
+          echo "Build succeeded: $(du -h arch/arm64/boot/Image)"
+
       - name: Package flashable zip
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AnyKernel3
-          cp kernel/arch/arm64/boot/Image.gz AnyKernel3/
-          find kernel/arch/arm64/boot/dts/exynos/ -name "*.dtb" -exec cp {} AnyKernel3/ \;
-          
-          cd AnyKernel3
-          zip -r9 "../chimera-lineage23.2-$(date +%Y%m%d).zip" . -x "*.git*"
-          cd ..
 
-      # ── 9. Upload ─────────────────────────────────────────────────────────
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: Project-Chimera-Build
-          path: chimera-*.zip
+          cat > AnyKernel3/anykernel.sh << 'AK3'
+              properties() { '
+              kernel.string=Project Chimera — Lineage 23.2 / star2lte
+              do.devicecheck=1
+              do.modules=0
+              do.cleanup=1
+              do.cleanuponabort=0
+              device.name1=star2lte
+              device.name2=SM-G965F
+              device.name3=SM-G965U
+              device.name4=SM-G965N
+              device.name5=SM-G9650
+              '; }
+              block=boot;
+              is_slot_device=0;
+              ramdisk_compression=auto;
+              patch_vbmeta_flag=auto;
+              . tools/ak3-core.sh;
+              dump_boot;
+              write_boot;
+              AK3
+              
+                        cp kernel/arch/arm64/boot/Image AnyKernel3/
+                        find kernel/arch/arm64/boot/dts/exynos/ -name "*.dtb" \
+                          -exec cp {} AnyKernel3/ \; 2>/dev/null || true
+              
+                        cd AnyKernel3
+                        zip -r9 "../chimera-lineage23.2-$(date +%Y%m%d-%H%M).zip" . -x "*.git*"
+                        cd ..
+                        ls -lh chimera-*.zip
+              
+                    - name: Upload flashable zip
+                      uses: actions/upload-artifact@v4
+                      with:
+                        name: chimera-lineage23.2-${{ github.run_number }}
+                        path: chimera-*.zip
+                        retention-days: 30
+              
+                    - name: Upload build log
+                      if: always()
+                      uses: actions/upload-artifact@v4
+                      with:
+                        name: build-log-${{ github.run_number }}
+                        path: kernel/build.log
+                        retention-days: 7
+              
+                    - name: Create GitHub Release
+                      if: ${{ inputs.do_release }}
+                      uses: softprops/action-gh-release@v2
+                      with:
+                        tag_name: chimera-${{ github.run_number }}
+                        name: "Project Chimera — Lineage 23.2 Build #${{ github.run_number }}"
+                        body: |
+                          ## Project Chimera — Exynos 9810 / star2lte
+                          Built from: chimera-mk5-r3.1 + KernelSU Next
+              
+                          ### Flash order
+                          1. Flash Lineage 23.2 + its recovery
+                          2. Sideload this zip via recovery
+                          3. Install KernelSU Next manager APK
+                          4. Reboot
+                        files: chimera-*.zip
