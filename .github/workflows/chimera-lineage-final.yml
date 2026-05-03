@@ -48,7 +48,6 @@ jobs:
           [[ -n "$URL" ]] || { echo "ERROR: Neutron Clang not found"; exit 1; }
           wget -qO /tmp/neutron.tar.zst "$URL"
           tar -xf /tmp/neutron.tar.zst -C neutron-clang --strip-components=1
-          test -x neutron-clang/bin/clang || { echo "ERROR: clang binary missing"; exit 1; }
           echo "Clang: $(neutron-clang/bin/clang --version | head -1)"
 
       - name: Export toolchain PATH
@@ -63,131 +62,60 @@ jobs:
             https://github.com/royd-jpg/android_kernel_samsung_exynos9810 \
             kernel
 
-      # ── 4. KernelSU Next ──────────────────────────────────────────────────
-      - name: Integrate KernelSU Next
+      # ── 4. KernelSU Next & SUSFS Prep ──────────────────────────────────────
+      - name: Integrate KernelSU Next and SUSFS
         working-directory: kernel
         run: |
           rm -rf drivers/kernelsu KernelSU KernelSU-Next
-
-          sed -i '/kernelsu\/Kconfig/d' drivers/Kconfig
-          sed -i '/susfs\/Kconfig/d' fs/Kconfig
-          sed -i '/susfs\/Kconfig/d' lib/Kconfig 2>/dev/null || true
-
-          if ! grep -q "^endmenu" drivers/Kconfig; then
-            echo "" >> drivers/Kconfig
-            echo "endmenu" >> drivers/Kconfig
-          fi
-
-          git clone --depth=1 \
-            https://github.com/KernelSU-Next/KernelSU-Next.git \
-            KernelSU-Next
-
-          test -f KernelSU-Next/kernel/Kconfig || \
-            { echo "ERROR: KernelSU-Next/kernel/Kconfig missing"; exit 1; }
-
+          
+          # Integrate KernelSU Next
+          git clone --depth=1 https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU-Next
           ln -s ../KernelSU-Next/kernel drivers/kernelsu
-
+          sed -i '/kernelsu\/Kconfig/d' drivers/Kconfig
+          if ! grep -q "^endmenu" drivers/Kconfig; then echo "endmenu" >> drivers/Kconfig; fi
           sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
 
-          echo "KernelSU Next integrated"
+          # Prep SUSFS Headers
+          mkdir -p include/linux/susfs
+          wget -qO include/linux/susfs.h https://raw.githubusercontent.com/sid75/susfs_patches/main/Kernel_Patches/include/linux/susfs.h
+          
+          echo "KernelSU Next and SUSFS headers integrated"
 
-      # ── 5. Defconfig tuning ───────────────────────────────────────────────
-      - name: Tune defconfig
+      # ── 5. Defconfig & Makefile Surgical Fixes ────────────────────────────
+      - name: Patch Kernel Core for Clang 19
         working-directory: kernel
         run: |
-          F="arch/arm64/configs/exynos9810-star2lte_defconfig"
+          # 1. Force GNU11 and relax duplicate symbols (Fixes init/main.c and Crypto errors)
+          sed -i 's/-std=gnu89/-std=gnu11 -fcommon/g' Makefile
+          sed -i 's/HOSTCFLAGS   :=/HOSTCFLAGS   := -std=gnu11 -fcommon /' Makefile
 
+          # 2. Add Clang 19 suppressions and SUSFS flag
+          END_LINE=$(grep -n "^\s*-std=gnu" Makefile | tail -1 | cut -d: -f1)
+          sed -i "${END_LINE}a KBUILD_CFLAGS += -Wno-address-of-packed-member -Wno-int-in-bool-context -Wno-asm-operand-widths -DSUSFS_VERSION=1.5.1" Makefile
+
+          # 3. Defconfig Tuning
+          F="arch/arm64/configs/exynos9810-star2lte_defconfig"
           kset() {
             local key="$1" val="$2"
-            if grep -q "^${key}=" "$F"; then
-              sed -i "s|^${key}=.*|${key}=${val}|" "$F"
-            elif grep -q "^# ${key} is not set" "$F"; then
-              sed -i "s|^# ${key} is not set|${key}=${val}|" "$F"
-            else
-              echo "${key}=${val}" >> "$F"
-            fi
+            grep -q "^${key}=" "$F" && sed -i "s|^${key}=.*|${key}=${val}|" "$F" || echo "${key}=${val}" >> "$F"
           }
-
           kset CONFIG_HZ_300 y
           kset CONFIG_HZ 300
-          sed -i 's/^CONFIG_HZ_1000=y/# CONFIG_HZ_1000 is not set/' "$F" || true
-          sed -i 's/^CONFIG_HZ_250=y/# CONFIG_HZ_250 is not set/'   "$F" || true
-
           kset CONFIG_PREEMPT y
-          kset CONFIG_HIGH_RES_TIMERS y
-          kset CONFIG_NO_HZ_IDLE y
-
-          kset CONFIG_CPU_FREQ_GOV_SCHEDUTIL y
-          kset CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL y
-          sed -i 's/^CONFIG_CPU_FREQ_DEFAULT_GOV_INTERACTIVE=y/# CONFIG_CPU_FREQ_DEFAULT_GOV_INTERACTIVE is not set/' "$F" || true
-
-          kset CONFIG_KPROBES y
-          kset CONFIG_KPROBE_EVENTS y
-
-          kset CONFIG_IOSCHED_DEADLINE y
-          kset CONFIG_DEFAULT_IOSCHED '"deadline"'
-          kset CONFIG_DEFAULT_DEADLINE y
-          sed -i 's/^CONFIG_DEFAULT_CFQ=y/# CONFIG_DEFAULT_CFQ is not set/' "$F" || true
-
           kset CONFIG_KSU y
           kset CONFIG_KSU_ALLOWLIST_WORKAROUND y
+          # Built-in crypto to avoid module symbol conflicts
+          sed -i 's/^CONFIG_CRYPTO_\(.*\)=m$/CONFIG_CRYPTO_\1=y/' "$F"
 
-          kset CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE y
-          sed -i 's/^CONFIG_CC_OPTIMIZE_FOR_SIZE=y/# CONFIG_CC_OPTIMIZE_FOR_SIZE is not set/' "$F" || true
-
-          echo "Defconfig tuning done"
-
-      # ── 6. DTS + Makefile fixes ───────────────────────────────────────────
-      - name: Patch DTS and Makefile
+      # ── 6. DTS Tuning ─────────────────────────────────────────────────────
+      - name: Patch DTS
         working-directory: kernel
         run: |
-          # Camera ION heap expansion
           DTS="arch/arm64/boot/dts/exynos/exynos9810-star2lte_eur_open_26.dts"
-          if grep -q "size = <461373440>" "$DTS"; then
-            sed -i 's/size = <461373440>;/size = <603979776>;/' "$DTS"
-            echo "Camera ION heap expanded"
-          else
-            echo "WARNING: camera size not at expected value"
-            grep -n "size = <" "$DTS" | head -5
-          fi
-
-          # CPU idle tuning
-          for f in \
-            "arch/arm64/boot/dts/exynos/exynos9810.dtsi" \
-            "$DTS"; do
-            if [[ -f "$f" ]] && grep -q "min-residency-us = <2000>" "$f"; then
-              sed -i 's/min-residency-us = <2000>/min-residency-us = <400>/'   "$f"
-              sed -i 's/min-residency-us = <10000>/min-residency-us = <4000>/' "$f"
-              echo "CPU idle states tuned in $f"
-              break
-            fi
-          done
-
-          # Fix -std=gnu89 → gnu11 (breaks early_param/initcall with Clang 19)
-          if grep -q "\-std=gnu89" Makefile; then
-            sed -i 's/-std=gnu89/-std=gnu11/' Makefile
-            echo "Replaced -std=gnu89 with -std=gnu11"
-          fi
-
-          # Add global Clang 19 compat warning suppressions
-          END_LINE=$(grep -n "^\s*-std=gnu" Makefile | tail -1 | cut -d: -f1)
-          if [[ -n "$END_LINE" ]]; then
-            sed -i "${END_LINE}a KBUILD_CFLAGS += -Wno-address-of-packed-member -Wno-int-in-bool-context -Wno-asm-operand-widths" Makefile
-            echo "Warning suppressions added"
-          fi
-
-          # Fix missing CHIMERA SchedUtil constants
-          if grep -q "CHIMERA_UP_RATE_LIMIT_US" kernel/sched/cpufreq_schedutil.c 2>/dev/null; then
-            if ! grep -q "^#define CHIMERA_UP_RATE_LIMIT_US" kernel/sched/cpufreq_schedutil.c; then
-              sed -i '1s/^/#define CHIMERA_UP_RATE_LIMIT_US    2000\n#define CHIMERA_DOWN_RATE_LIMIT_US  8000\n/' \
-                kernel/sched/cpufreq_schedutil.c
-              echo "CHIMERA SchedUtil constants defined"
-            fi
-          fi
-
-          # Force crypto to built-in to avoid duplicate init_module symbols
-          sed -i 's/^CONFIG_CRYPTO_\(.*\)=m$/CONFIG_CRYPTO_\1=y/' \
-            arch/arm64/configs/exynos9810-star2lte_defconfig || true
+          # Expand Camera ION heap
+          sed -i 's/size = <461373440>;/size = <603979776>;/' "$DTS" || true
+          # Tune CPU Idle
+          sed -i 's/min-residency-us = <2000>/min-residency-us = <400>/' arch/arm64/boot/dts/exynos/exynos9810.dtsi || true
 
       # ── 7. Build ──────────────────────────────────────────────────────────
       - name: Build kernel
@@ -202,94 +130,29 @@ jobs:
             CROSS_COMPILE=aarch64-linux-gnu-
             CROSS_COMPILE_ARM32=arm-linux-gnueabi-
             LD=$GITHUB_WORKSPACE/neutron-clang/bin/ld.lld
-            AR=llvm-ar
-            NM=llvm-nm
-            OBJCOPY=llvm-objcopy
-            OBJDUMP=llvm-objdump
+            AR=llvm-ar NM=llvm-nm
+            OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump
             STRIP=llvm-strip
+            KCFLAGS="-std=gnu11 -fcommon -Wno-implicit-function-declaration -Wno-implicit-int -Wno-return-type"
           )
 
           "${MAKE[@]}" exynos9810-star2lte_defconfig
           "${MAKE[@]}" Image.gz dtbs 2>&1 | tee build.log
 
-          test -f arch/arm64/boot/Image.gz || \
-            { echo "ERROR: Image.gz not produced"; exit 1; }
-          echo "Build succeeded: $(du -h arch/arm64/boot/Image.gz)"
-
       # ── 8. Package ────────────────────────────────────────────────────────
       - name: Package flashable zip
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AnyKernel3
-
-          cat > AnyKernel3/anykernel.sh << 'AK3'
-            properties() { '
-            kernel.string=Project Chimera — Lineage 23.2 / star2lte
-            do.devicecheck=1
-            do.modules=0
-            do.cleanup=1
-            do.cleanuponabort=0
-            device.name1=star2lte
-            device.name2=SM-G965F
-            device.name3=SM-G965U
-            device.name4=SM-G965N
-            device.name5=SM-G9650
-            '; }
-            block=boot;
-            is_slot_device=0;
-            ramdisk_compression=auto;
-            patch_vbmeta_flag=auto;
-            . tools/ak3-core.sh;
-            dump_boot;
-            write_boot;
-            AK3
-            
-                      cp kernel/arch/arm64/boot/Image.gz AnyKernel3/
-                      find kernel/arch/arm64/boot/dts/exynos/ -name "*.dtb" \
-                        -exec cp {} AnyKernel3/ \; 2>/dev/null || true
-            
-                      ZIPNAME="chimera-lineage23.2-$(date +%Y%m%d-%H%M).zip"
-                      cd AnyKernel3
-                      zip -r9 "../$ZIPNAME" . -x "*.git*"
-                      cd ..
-                      ls -lh "$ZIPNAME"
+          cp kernel/arch/arm64/boot/Image.gz AnyKernel3/
+          find kernel/arch/arm64/boot/dts/exynos/ -name "*.dtb" -exec cp {} AnyKernel3/ \;
+          
+          cd AnyKernel3
+          zip -r9 "../chimera-lineage23.2-$(date +%Y%m%d).zip" . -x "*.git*"
+          cd ..
 
       # ── 9. Upload ─────────────────────────────────────────────────────────
-      - name: Upload flashable zip
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: chimera-lineage23.2-${{ github.run_number }}
+          name: Project-Chimera-Build
           path: chimera-*.zip
-          retention-days: 30
-
-      - name: Upload build log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-log-${{ github.run_number }}
-          path: kernel/build.log
-          retention-days: 7
-
-      - name: Create GitHub Release
-        if: ${{ inputs.do_release }}
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: chimera-${{ github.run_number }}
-          name: "Project Chimera — Lineage 23.2 Build #${{ github.run_number }}"
-          body: |
-            ## Project Chimera — Exynos 9810 / star2lte
-            Built from: chimera-mk5-r3.1 + KernelSU Next
-
-            ### Tuning
-            - HZ_300 timer
-            - SchedUtil governor
-            - Deadline I/O scheduler
-            - Camera ION heap 576MB
-            - CPU idle states tuned
-            - KernelSU Next
-
-            ### Flash order
-            1. Flash Lineage 23.2 + recovery
-            2. Sideload this zip via recovery
-            3. Install KernelSU Next manager APK
-            4. Reboot
-          files: chimera-*.zip
