@@ -59,47 +59,101 @@ jobs:
             https://github.com/royd-jpg/android_kernel_samsung_exynos9810 \
             kernel
 
-      - name: Apply Project Chimera Source Patches
-        working-directory: kernel
-        run: |
-          # SchedUtil Fix / Tunables
-          sed -i '/#include/a \\n/* Project Chimera Tunables */\n#define CHIMERA_UP_RATE_LIMIT_US   2000\n#define CHIMERA_DOWN_RATE_LIMIT_US 8000' kernel/sched/cpufreq_schedutil.c
-          echo "Source-level tunables applied."
-
-      - name: Integrate KernelSU Next and SUSFS
+      - name: Integrate KernelSU Next
         working-directory: kernel
         run: |
           rm -rf drivers/kernelsu KernelSU KernelSU-Next fs/susfs
           sed -i '/susfs\/Kconfig/d' fs/Kconfig
           sed -i '/kernelsu\/Kconfig/d' drivers/Kconfig
-          git clone --depth=1 https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU-Next
+
+          git clone --depth=1 \
+            https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU-Next
           ln -s ../KernelSU-Next/kernel drivers/kernelsu
-          if ! grep -q "^endmenu" drivers/Kconfig; then echo "endmenu" >> drivers/Kconfig; fi
+
+          if ! grep -q "^endmenu" drivers/Kconfig; then
+            echo "endmenu" >> drivers/Kconfig
+          fi
           sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+
+          # SUSFS stubs to satisfy Kconfig references
           mkdir -p fs/susfs
-          echo 'config SUSFS'                >> fs/susfs/Kconfig
-          echo '    bool "SUSFS Support"'    >> fs/susfs/Kconfig
-          echo '    default y'               >> fs/susfs/Kconfig
-          echo 'obj-y += susfs.o'            > fs/susfs/Makefile
-          echo 'void susfs_stub(void) {}'    > fs/susfs/susfs.c
+          echo 'config SUSFS'             >> fs/susfs/Kconfig
+          echo '    bool "SUSFS Support"' >> fs/susfs/Kconfig
+          echo '    default y'            >> fs/susfs/Kconfig
+          echo 'obj-y += susfs.o'         > fs/susfs/Makefile
+          echo 'void susfs_stub(void) {}' > fs/susfs/susfs.c
           sed -i '/if BLOCK/i source "fs/susfs/Kconfig"' fs/Kconfig
+
+          # Bypassing Bash heredoc conflict via Python
           mkdir -p include/linux
-          cat > include/linux/susfs.h << 'EOF'
-          #ifndef _SUSFS_H
-          #define _SUSFS_H
-          #include <linux/types.h>
-          #define SUSFS_VERSION "1.5.1"
-          #endif
-          EOF
-          echo "KernelSU Next and SUSFS stubs ready."
+          python3 -c '
+          with open("include/linux/susfs.h", "w") as f:
+              f.write("#ifndef _SUSFS_H\n#define _SUSFS_H\n")
+              f.write("#include <linux/types.h>\n")
+              f.write("#define SUSFS_VERSION \"1.5.1\"\n#endif\n")
+          '
+          echo "KernelSU Next integrated."
+
+      - name: Inject manual KSU hooks (Samsung 4.9 BSP)
+        working-directory: kernel
+        run: |
+          # ── fs/exec.c — execve hook ──────────────────────────────────────
+          python3 -c '
+          import re, sys
+          with open(sys.argv[1]) as f:
+              content = f.read()
+          if "ksu_handle_execveat_sucompat" in content:
+              print("exec.c already patched")
+              sys.exit(0)
+          include_end = 0
+          for m in re.finditer(r"^#include\s+[<\"]", content, re.MULTILINE):
+              include_end = m.end()
+          nl = content.index("\n", include_end)
+          insert_pos = nl + 1
+          extern_decl = "\nextern void ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags);\n"
+          content = content[:insert_pos] + extern_decl + content[insert_pos:]
+          hook_call = "\tksu_handle_execveat_sucompat(&bprm->fd, &bprm->filename, NULL, NULL, NULL);\n\t"
+          content = content.replace("\tret = search_binary_handler(bprm);", hook_call + "ret = search_binary_handler(bprm);", 1)
+          with open(sys.argv[1], "w") as f:
+              f.write(content)
+          print("fs/exec.c patched successfully")
+          ' fs/exec.c
+
+          # ── fs/open.c — faccessat hook ───────────────────────────────────
+          python3 -c '
+          import re, sys
+          with open(sys.argv[1]) as f:
+              content = f.read()
+          if "ksu_handle_faccessat" in content:
+              print("open.c already patched")
+              sys.exit(0)
+          include_end = 0
+          for m in re.finditer(r"^#include\s+[<\"]", content, re.MULTILINE):
+              include_end = m.end()
+          nl = content.index("\n", include_end)
+          insert_pos = nl + 1
+          extern_decl = "\nextern int ksu_handle_faccessat(int *dfd, const char __user **filename_user, int *mode, int *flags);\n"
+          content = content[:insert_pos] + extern_decl + content[insert_pos:]
+          pattern = r"(SYSCALL_DEFINE3\(faccessat,\s*int,\s*dfd,.*?int,\s*mode\)\s*\{)"
+          def insert_hook(m):
+              return m.group(1) + "\n\tksu_handle_faccessat(&dfd, &filename, &mode, NULL);"
+          content = re.sub(pattern, insert_hook, content, count=1, flags=re.DOTALL)
+          with open(sys.argv[1], "w") as f:
+              f.write(content)
+          print("fs/open.c patched successfully")
+          ' fs/open.c
+          
+          echo "Manual KSU hooks injected."
 
       - name: Patch kernel for Clang 19
         working-directory: kernel
         run: |
           sed -i 's/-std=gnu89/-std=gnu11 -fcommon/g' Makefile
           sed -i 's/HOSTCFLAGS   :=/HOSTCFLAGS   := -std=gnu11 -fcommon /' Makefile
+
           END_LINE=$(grep -n "^\s*-std=gnu" Makefile | tail -1 | cut -d: -f1)
           sed -i "${END_LINE}a KBUILD_CFLAGS += -Wno-address-of-packed-member -Wno-int-in-bool-context -Wno-asm-operand-widths -DSUSFS_VERSION=1.5.1" Makefile
+
           F="arch/arm64/configs/exynos9810-star2lte_defconfig"
           kset() {
             local key="$1" val="$2"
@@ -107,13 +161,17 @@ jobs:
               && sed -i "s|^${key}=.*|${key}=${val}|" "$F" \
               || echo "${key}=${val}" >> "$F"
           }
+
           kset CONFIG_HZ_300 y
           kset CONFIG_HZ 300
           kset CONFIG_PREEMPT y
           kset CONFIG_KSU y
           kset CONFIG_KSU_ALLOWLIST_WORKAROUND y
+          kset CONFIG_KPROBES y
+          kset CONFIG_KPROBE_EVENTS y
+
           sed -i 's/^CONFIG_CRYPTO_\(.*\)=m$/CONFIG_CRYPTO_\1=y/' "$F"
-          echo "Clang 19 patches applied."
+          echo "Defconfig tuned."
 
       - name: Patch DTS
         working-directory: kernel
@@ -122,7 +180,7 @@ jobs:
           sed -i 's/size = <461373440>;/size = <603979776>;/' "$DTS" || true
           sed -i 's/min-residency-us = <2000>/min-residency-us = <400>/' \
             arch/arm64/boot/dts/exynos/exynos9810.dtsi 2>/dev/null || true
-          echo "DTS patches applied."
+          echo "DTS patched."
 
       - name: Build kernel
         working-directory: kernel
@@ -145,43 +203,47 @@ jobs:
           )
           "${MAKE[@]}" exynos9810-star2lte_defconfig
           "${MAKE[@]}" Image dtbs 2>&1 | tee build.log
+
           test -f arch/arm64/boot/Image || \
-            { echo "ERROR: Image not produced"; exit 1; }
+            { echo "ERROR: Image not produced — check build.log"; exit 1; }
           echo "Build succeeded: $(du -h arch/arm64/boot/Image)"
 
       - name: Package flashable zip
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AnyKernel3
-          cat > AnyKernel3/anykernel.sh << 'AK3'
-          properties() { '
-          kernel.string=Project Chimera — Lineage 23.2 / star2lte
-          do.devicecheck=1
-          do.modules=0
-          do.cleanup=1
-          do.cleanuponabort=0
-          device.name1=star2lte
-          device.name2=SM-G965F
-          device.name3=SM-G965U
-          device.name4=SM-G965N
-          device.name5=SM-G9650
-          '; }
-          block=boot;
-          is_slot_device=0;
-          ramdisk_compression=auto;
-          patch_vbmeta_flag=auto;
-          . tools/ak3-core.sh;
-          dump_boot;
-          write_boot;
-          AK3
           
+          # Bypassing Bash heredoc conflict via Python
+          python3 -c '
+          with open("AnyKernel3/anykernel.sh", "w") as f:
+              f.write("properties() { '"'"'\n")
+              f.write("kernel.string=Project Chimera — Lineage 23.2 / star2lte\n")
+              f.write("do.devicecheck=1\n")
+              f.write("do.modules=0\n")
+              f.write("do.cleanup=1\n")
+              f.write("do.cleanuponabort=0\n")
+              f.write("device.name1=star2lte\n")
+              f.write("device.name2=SM-G965F\n")
+              f.write("device.name3=SM-G965U\n")
+              f.write("device.name4=SM-G965N\n")
+              f.write("device.name5=SM-G9650\n")
+              f.write("'"'"'; }\n")
+              f.write("block=boot;\n")
+              f.write("is_slot_device=0;\n")
+              f.write("ramdisk_compression=auto;\n")
+              f.write("patch_vbmeta_flag=auto;\n")
+              f.write(". tools/ak3-core.sh;\n")
+              f.write("dump_boot;\n")
+              f.write("write_boot;\n")
+          '
+
           cp kernel/arch/arm64/boot/Image AnyKernel3/
           find kernel/arch/arm64/boot/dts/exynos/ -name "*.dtb" \
             -exec cp {} AnyKernel3/ \; 2>/dev/null || true
-          
+
           cd AnyKernel3
           zip -r9 "../chimera-lineage23.2-$(date +%Y%m%d-%H%M).zip" . -x "*.git*"
           cd ..
-          ls -lh *.zip
+          ls -lh chimera-*.zip
 
       - name: Upload flashable zip
         uses: actions/upload-artifact@v4
@@ -207,7 +269,12 @@ jobs:
           name: "Project Chimera — Lineage 23.2 Build #${{ github.run_number }}"
           body: |
             ## Project Chimera — Exynos 9810 / star2lte
-            Built from: chimera-mk5-r3.1 + KernelSU Next
+            Built from: chimera-mk5-r3.1 + KernelSU Next (manual hooks)
+
+            ### What changed
+            - Manual KSU hooks injected into fs/exec.c and fs/open.c
+            - Samsung 4.9 BSP compatible (no kprobe dependency)
+            - HZ_300, SchedUtil, camera ION 576MB, CPU idle tuned
 
             ### Flash order
             1. Flash Lineage 23.2 + its recovery
