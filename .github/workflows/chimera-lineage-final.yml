@@ -8,60 +8,130 @@ on:
         type: boolean
         default: false
 
+permissions:
+  contents: write
+
+concurrency:
+  group: chimera-lineage23-2-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  KERNEL_BRANCH: chimera-mk5-r3.1
+  KERNEL_REPO: https://github.com/royd-jpg/android_kernel_samsung_exynos9810
+  NEUTRON_CATALOG_API: https://api.github.com/repos/Neutron-Toolchains/clang-build-catalogue/releases/latest
+  NEUTRON_CLANG_SERIES: '19'
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+  CCACHE_COMPILERCHECK: content
+  CCACHE_MAXSIZE: 2G
+
 jobs:
   build:
     runs-on: ubuntu-24.04
+    timeout-minutes: 120
 
     steps:
       - name: Install dependencies
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -yqq \
-            git curl wget bc flex bison python3 \
+          set -euo pipefail
+          retry() {
+            local attempts=3 delay=10 n=1
+            until "$@"; do
+              if (( n >= attempts )); then
+                echo "ERROR: command failed after ${attempts} attempts: $*" >&2
+                return 1
+              fi
+              echo "WARN: command failed (attempt ${n}/${attempts}); retrying in ${delay}s: $*" >&2
+              sleep "$delay"
+              n=$((n + 1))
+            done
+          }
+          retry sudo apt-get update -qq
+          retry sudo apt-get install -yqq --no-install-recommends \
+            git curl ca-certificates bc flex bison python3 ccache \
             libssl-dev libelf-dev build-essential \
             zip zstd lz4 \
             gcc-aarch64-linux-gnu \
             gcc-arm-linux-gnueabi
+
+      - name: Resolve Neutron Clang release
+        id: neutron-release
+        run: |
+          set -euo pipefail
+          release_json="$(curl -fsSL --retry 5 --retry-delay 10 --retry-all-errors "$NEUTRON_CATALOG_API")"
+          RELEASE_JSON="$release_json" python3 - "$NEUTRON_CLANG_SERIES" "$GITHUB_OUTPUT" <<'PY'
+          import json
+          import os
+          import sys
+
+          series = sys.argv[1]
+          output = sys.argv[2]
+          release = json.loads(os.environ["RELEASE_JSON"])
+          assets = release.get("assets", [])
+          matches = [
+              asset for asset in assets
+              if asset.get("name", "").endswith(".tar.zst")
+              and (f"clang-{series}" in asset.get("name", "") or series in asset.get("name", ""))
+              and asset.get("browser_download_url")
+          ]
+          if not matches:
+              raise SystemExit(f"ERROR: no Neutron Clang {series} .tar.zst asset found")
+          asset = matches[0]
+          with open(output, "a", encoding="utf-8") as fh:
+              fh.write(f"asset_name={asset['name']}\n")
+              fh.write(f"download_url={asset['browser_download_url']}\n")
+              fh.write(f"cache_key={asset['name'].removesuffix('.tar.zst')}\n")
+          print(f"Selected Neutron Clang asset: {asset['name']}")
+          PY
 
       - name: Cache Neutron Clang
         id: cache-neutron
         uses: actions/cache@v4
         with:
           path: neutron-clang
-          key: neutron-clang-10032024
+          key: neutron-clang-${{ steps.neutron-release.outputs.cache_key }}
 
       - name: Download Neutron Clang
         if: steps.cache-neutron.outputs.cache-hit != 'true'
         run: |
+          set -euo pipefail
           mkdir -p neutron-clang
-          URL=$(curl -fsSL \
-            https://api.github.com/repos/Neutron-Toolchains/clang-build-catalogue/releases/latest \
-            | python3 -c "
-          import json,sys
-          d=json.load(sys.stdin)
-          hits=[a['browser_download_url'] for a in d.get('assets',[])
-                if a['name'].endswith('.tar.zst')]
-          print(hits[0] if hits else '')
-          ")
-          [[ -n "$URL" ]] || { echo "ERROR: Neutron Clang not found"; exit 1; }
-          wget -qO /tmp/neutron.tar.zst "$URL"
-          tar -xf /tmp/neutron.tar.zst -C neutron-clang --strip-components=1
+          curl -fL --retry 5 --retry-delay 10 --retry-all-errors \
+            -o /tmp/neutron.tar.zst \
+            "${{ steps.neutron-release.outputs.download_url }}"
+          tar --zstd -xf /tmp/neutron.tar.zst -C neutron-clang --strip-components=1
+          test -x neutron-clang/bin/clang || { echo "ERROR: neutron-clang/bin/clang missing after extraction" >&2; exit 1; }
           echo "Clang: $(neutron-clang/bin/clang --version | head -1)"
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ env.KERNEL_BRANCH }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ env.KERNEL_BRANCH }}-
+            ccache-${{ runner.os }}-
 
       - name: Export toolchain PATH
         run: |
+          set -euo pipefail
           echo "$GITHUB_WORKSPACE/neutron-clang/bin" >> "$GITHUB_PATH"
 
       - name: Clone kernel tree
         run: |
-          git clone --depth=1 \
-            -b chimera-mk5-r3.1 \
-            https://github.com/royd-jpg/android_kernel_samsung_exynos9810 \
+          set -euo pipefail
+          git clone --depth=1 --single-branch \
+            -b "$KERNEL_BRANCH" \
+            "$KERNEL_REPO" \
             kernel
 
       - name: Integrate KernelSU Next
         working-directory: kernel
         run: |
+          set -euo pipefail
           rm -rf drivers/kernelsu KernelSU KernelSU-Next fs/susfs
           sed -i '/susfs\/Kconfig/d' fs/Kconfig
           sed -i '/kernelsu\/Kconfig/d' drivers/Kconfig
@@ -97,6 +167,7 @@ jobs:
       - name: Inject manual KSU hooks (Samsung 4.9 BSP)
         working-directory: kernel
         run: |
+          set -euo pipefail
           # ── fs/exec.c — execve hook ──────────────────────────────────────
           python3 -c '
           import re, sys
@@ -108,12 +179,17 @@ jobs:
           include_end = 0
           for m in re.finditer(r"^#include\s+[<\"]", content, re.MULTILINE):
               include_end = m.end()
+          if include_end == 0:
+              raise SystemExit(f"ERROR: no include block found in {sys.argv[1]}")
           nl = content.index("\n", include_end)
           insert_pos = nl + 1
           extern_decl = "\nextern void ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags);\n"
           content = content[:insert_pos] + extern_decl + content[insert_pos:]
+          anchor = "\tret = search_binary_handler(bprm);"
+          if anchor not in content:
+              raise SystemExit("ERROR: search_binary_handler anchor not found in fs/exec.c")
           hook_call = "\tksu_handle_execveat_sucompat(&bprm->fd, &bprm->filename, NULL, NULL, NULL);\n\t"
-          content = content.replace("\tret = search_binary_handler(bprm);", hook_call + "ret = search_binary_handler(bprm);", 1)
+          content = content.replace(anchor, hook_call + "ret = search_binary_handler(bprm);", 1)
           with open(sys.argv[1], "w") as f:
               f.write(content)
           print("fs/exec.c patched successfully")
@@ -130,6 +206,8 @@ jobs:
           include_end = 0
           for m in re.finditer(r"^#include\s+[<\"]", content, re.MULTILINE):
               include_end = m.end()
+          if include_end == 0:
+              raise SystemExit(f"ERROR: no include block found in {sys.argv[1]}")
           nl = content.index("\n", include_end)
           insert_pos = nl + 1
           extern_decl = "\nextern int ksu_handle_faccessat(int *dfd, const char __user **filename_user, int *mode, int *flags);\n"
@@ -137,7 +215,9 @@ jobs:
           pattern = r"(SYSCALL_DEFINE3\(faccessat,\s*int,\s*dfd,.*?int,\s*mode\)\s*\{)"
           def insert_hook(m):
               return m.group(1) + "\n\tksu_handle_faccessat(&dfd, &filename, &mode, NULL);"
-          content = re.sub(pattern, insert_hook, content, count=1, flags=re.DOTALL)
+          content, replaced = re.subn(pattern, insert_hook, content, count=1, flags=re.DOTALL)
+          if replaced != 1:
+              raise SystemExit("ERROR: faccessat syscall anchor not found in fs/open.c")
           with open(sys.argv[1], "w") as f:
               f.write(content)
           print("fs/open.c patched successfully")
@@ -148,6 +228,7 @@ jobs:
       - name: Patch kernel for Clang 19
         working-directory: kernel
         run: |
+          set -euo pipefail
           sed -i 's/-std=gnu89/-std=gnu11 -fcommon/g' Makefile
           sed -i 's/HOSTCFLAGS   :=/HOSTCFLAGS   := -std=gnu11 -fcommon /' Makefile
 
@@ -176,6 +257,7 @@ jobs:
       - name: Patch DTS
         working-directory: kernel
         run: |
+          set -euo pipefail
           DTS="arch/arm64/boot/dts/exynos/exynos9810-star2lte_eur_open_26.dts"
           sed -i 's/size = <461373440>;/size = <603979776>;/' "$DTS" || true
           sed -i 's/min-residency-us = <2000>/min-residency-us = <400>/' \
@@ -185,11 +267,14 @@ jobs:
       - name: Build kernel
         working-directory: kernel
         run: |
+          set -euo pipefail
+          ccache --zero-stats
           MAKE=(
             make -j"$(nproc)"
             ARCH=arm64
             SUBARCH=arm64
-            CC=clang
+            CC="ccache clang"
+            HOSTCC="ccache gcc"
             CLANG_TRIPLE=aarch64-linux-gnu-
             CROSS_COMPILE=aarch64-linux-gnu-
             CROSS_COMPILE_ARM32=arm-linux-gnueabi-
@@ -207,10 +292,12 @@ jobs:
           test -f arch/arm64/boot/Image || \
             { echo "ERROR: Image not produced — check build.log"; exit 1; }
           echo "Build succeeded: $(du -h arch/arm64/boot/Image)"
+          ccache --show-stats
 
       - name: Package flashable zip
         run: |
-          git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AnyKernel3
+          set -euo pipefail
+          git clone --depth=1 --single-branch https://github.com/osm0sis/AnyKernel3 AnyKernel3
           
           # Bypassing Bash heredoc conflict via Python
           python3 -c '
@@ -236,13 +323,15 @@ jobs:
               f.write("write_boot;\n")
           '
 
+          test -f kernel/arch/arm64/boot/Image || { echo "ERROR: kernel Image missing before packaging" >&2; exit 1; }
           cp kernel/arch/arm64/boot/Image AnyKernel3/
-          find kernel/arch/arm64/boot/dts/exynos/ -name "*.dtb" \
-            -exec cp {} AnyKernel3/ \; 2>/dev/null || true
+          dtb_count=$(find kernel/arch/arm64/boot/dts/exynos/ -name "*.dtb" -exec cp {} AnyKernel3/ \; -print | wc -l)
+          if [[ "$dtb_count" -eq 0 ]]; then
+            echo "ERROR: no Exynos DTBs were found for packaging" >&2
+            exit 1
+          fi
 
-          cd AnyKernel3
-          zip -r9 "../chimera-lineage23.2-$(date +%Y%m%d-%H%M).zip" . -x "*.git*"
-          cd ..
+          (cd AnyKernel3 && zip -r9 "../chimera-lineage23.2-$(date +%Y%m%d-%H%M).zip" . -x "*.git*")
           ls -lh chimera-*.zip
 
       - name: Upload flashable zip
@@ -253,12 +342,16 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Upload build log
+      - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: build-log-${{ github.run_number }}
-          path: kernel/build.log
+          name: diagnostics-${{ github.run_number }}
+          path: |
+            kernel/build.log
+            kernel/**/*.rej
+            kernel/**/*.orig
+          if-no-files-found: ignore
           retention-days: 7
 
       - name: Create GitHub Release
