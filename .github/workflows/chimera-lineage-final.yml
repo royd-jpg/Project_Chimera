@@ -23,7 +23,6 @@ env:
   KERNEL_BRANCH: chimera-mk5-r3.1
   KERNEL_REPO: https://github.com/royd-jpg/android_kernel_samsung_exynos9810
   NEUTRON_CATALOG_API: https://api.github.com/repos/Neutron-Toolchains/clang-build-catalogue/releases/latest
-  NEUTRON_CLANG_SERIES: '19'
   CCACHE_DIR: ${{ github.workspace }}/.ccache
   CCACHE_COMPILERCHECK: content
   CCACHE_MAXSIZE: 2G
@@ -62,23 +61,25 @@ jobs:
         run: |
           set -euo pipefail
           release_json="$(curl -fsSL --retry 5 --retry-delay 10 --retry-all-errors "$NEUTRON_CATALOG_API")"
-          RELEASE_JSON="$release_json" python3 - "$NEUTRON_CLANG_SERIES" "$GITHUB_OUTPUT" <<'PY'
+          RELEASE_JSON="$release_json" python3 - "$GITHUB_OUTPUT" <<'PY'
           import json
           import os
           import sys
 
-          series = sys.argv[1]
-          output = sys.argv[2]
+          output = sys.argv[1]
           release = json.loads(os.environ["RELEASE_JSON"])
           assets = release.get("assets", [])
+          
+          # Simplified filter: just find the first .tar.zst asset available
           matches = [
               asset for asset in assets
               if asset.get("name", "").endswith(".tar.zst")
-              and (f"clang-{series}" in asset.get("name", "") or series in asset.get("name", ""))
               and asset.get("browser_download_url")
           ]
+          
           if not matches:
-              raise SystemExit(f"ERROR: no Neutron Clang {series} .tar.zst asset found")
+              raise SystemExit("ERROR: no valid .tar.zst asset found in the latest Neutron release")
+          
           asset = matches[0]
           with open(output, "a", encoding="utf-8") as fh:
               fh.write(f"asset_name={asset['name']}\n")
