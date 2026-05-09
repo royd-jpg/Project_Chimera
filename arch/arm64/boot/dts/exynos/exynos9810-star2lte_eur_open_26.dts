@@ -63,7 +63,7 @@
 			compatible = "exynos8890-ion,vstream";
 			ion,secure;
 			ion,reusable;
-			size = <113246208>;
+			size = <67108864>;
 			alloc-ranges = <0 1073741824 2952790016>;
 			alignment = <0 4194304>;
 			id = <3>;
@@ -142,7 +142,7 @@
 		camera {
 			compatible = "exynos8890-ion,camera";
 			ion,recyclable;
-			size = <461373440>;
+			size = <268435456>;
 			alloc-ranges = <0 1073741824 3221225472>;
 			alignment = <0 4194304>;
 			id = <10>;
@@ -4657,7 +4657,7 @@
 			bot-overutil = <35 35 35 35 35 35 35 35>;
 			up-threshold = <79>;
 			down-threshold = <128>;
-			min-residency-us = <8192>;
+			min-residency-us = <400>;
 		};
 
 		cpu@0000 {
@@ -4757,7 +4757,7 @@
 				arm,psci-suspend-param = <65536>;
 				entry-latency-us = <70>;
 				exit-latency-us = <160>;
-				min-residency-us = <2000>;
+				min-residency-us = <1200>;
 				status = "okay";
 				linux,phandle = <61>;
 				phandle = <61>;
@@ -4769,7 +4769,7 @@
 				arm,psci-suspend-param = <65536>;
 				entry-latency-us = <235>;
 				exit-latency-us = <220>;
-				min-residency-us = <3500>;
+				min-residency-us = <4000>;
 				status = "okay";
 				linux,phandle = <64>;
 				phandle = <64>;
@@ -13855,6 +13855,8 @@
 	};
 
 	bluetooth {
+		samsung,bt-addr-path = "/efs/bluetooth/bt_addr";
+		local-bd-address = [00 00 00 00 00 00];
 		compatible = "samsung,bcm43xx";
 		gpios = <76 7 0 127 0 0 130 3 15>;
 		pinctrl-names = "default";

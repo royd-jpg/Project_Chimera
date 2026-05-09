@@ -13,11 +13,19 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
+      - name: Checkout kernel tree
+        uses: actions/checkout@v4
+        with:
+          path: kernel
+          submodules: recursive
+          fetch-depth: 1
+
       - name: Install dependencies
         run: |
+          set -euo pipefail
           sudo apt-get update -qq
           sudo apt-get install -yqq \
-            git curl wget bc flex bison python3 \
+            git curl wget bc flex bison python3 ripgrep \
             libssl-dev libelf-dev build-essential \
             zip zstd lz4 \
             gcc-aarch64-linux-gnu \
@@ -33,6 +41,7 @@ jobs:
       - name: Download Neutron Clang
         if: steps.cache-neutron.outputs.cache-hit != 'true'
         run: |
+          set -euo pipefail
           mkdir -p neutron-clang
           URL=$(curl -fsSL \
             https://api.github.com/repos/Neutron-Toolchains/clang-build-catalogue/releases/latest \
@@ -45,146 +54,170 @@ jobs:
           ")
           [[ -n "$URL" ]] || { echo "ERROR: Neutron Clang not found"; exit 1; }
           wget -qO /tmp/neutron.tar.zst "$URL"
-          tar -xf /tmp/neutron.tar.zst -C neutron-clang --strip-components=1
+          tar --zstd -xf /tmp/neutron.tar.zst -C neutron-clang --strip-components=1
           echo "Clang: $(neutron-clang/bin/clang --version | head -1)"
 
       - name: Export toolchain PATH
         run: |
+          set -euo pipefail
           echo "$GITHUB_WORKSPACE/neutron-clang/bin" >> "$GITHUB_PATH"
 
-      - name: Clone kernel tree
-        run: |
-          git clone --depth=1 \
-            -b chimera-mk5-r3.1 \
-            https://github.com/royd-jpg/android_kernel_samsung_exynos9810 \
-            kernel
-
-      - name: Integrate KernelSU Next
+      - name: Validate KernelSU Next and SUSFS tree
         working-directory: kernel
         run: |
-          rm -rf drivers/kernelsu KernelSU KernelSU-Next fs/susfs
-          sed -i '/susfs\/Kconfig/d' fs/Kconfig
-          sed -i '/kernelsu\/Kconfig/d' drivers/Kconfig
+          set -euo pipefail
+          test -e drivers/kernelsu/Kconfig || {
+            echo "ERROR: drivers/kernelsu/Kconfig missing. The KernelSU-Next v3.2.0 legacy submodule was not checked out."
+            exit 1
+          }
+          test -f fs/susfs.c || { echo "ERROR: fs/susfs.c missing"; exit 1; }
+          test -f fs/susfs/Kconfig || { echo "ERROR: fs/susfs/Kconfig missing"; exit 1; }
+          echo "KernelSU Next legacy and SUSFS are present in the checked-out tree."
 
-          git clone --depth=1 \
-            https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU-Next
-          ln -s ../KernelSU-Next/kernel drivers/kernelsu
-
-          if ! grep -q "^endmenu" drivers/Kconfig; then
-            echo "endmenu" >> drivers/Kconfig
-          fi
-          sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
-
-          # SUSFS stubs to satisfy Kconfig references
-          mkdir -p fs/susfs
-          echo 'config SUSFS'             >> fs/susfs/Kconfig
-          echo '    bool "SUSFS Support"' >> fs/susfs/Kconfig
-          echo '    default y'            >> fs/susfs/Kconfig
-          echo 'obj-y += susfs.o'         > fs/susfs/Makefile
-          echo 'void susfs_stub(void) {}' > fs/susfs/susfs.c
-          sed -i '/if BLOCK/i source "fs/susfs/Kconfig"' fs/Kconfig
-
-          # Bypassing Bash heredoc conflict via Python
-          mkdir -p include/linux
-          python3 -c '
-          with open("include/linux/susfs.h", "w") as f:
-              f.write("#ifndef _SUSFS_H\n#define _SUSFS_H\n")
-              f.write("#include <linux/types.h>\n")
-              f.write("#define SUSFS_VERSION \"1.5.1\"\n#endif\n")
-          '
-          echo "KernelSU Next integrated."
-
-      - name: Inject manual KSU hooks (Samsung 4.9 BSP)
+      - name: Apply Chimera build fixes
         working-directory: kernel
         run: |
-          # ── fs/exec.c — execve hook ──────────────────────────────────────
-          python3 -c '
-          import re, sys
-          with open(sys.argv[1]) as f:
-              content = f.read()
-          if "ksu_handle_execveat_sucompat" in content:
-              print("exec.c already patched")
-              sys.exit(0)
-          include_end = 0
-          for m in re.finditer(r"^#include\s+[<\"]", content, re.MULTILINE):
-              include_end = m.end()
-          nl = content.index("\n", include_end)
-          insert_pos = nl + 1
-          extern_decl = "\nextern void ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags);\n"
-          content = content[:insert_pos] + extern_decl + content[insert_pos:]
-          hook_call = "\tksu_handle_execveat_sucompat(&bprm->fd, &bprm->filename, NULL, NULL, NULL);\n\t"
-          content = content.replace("\tret = search_binary_handler(bprm);", hook_call + "ret = search_binary_handler(bprm);", 1)
-          with open(sys.argv[1], "w") as f:
-              f.write(content)
-          print("fs/exec.c patched successfully")
-          ' fs/exec.c
+          set -euo pipefail
 
-          # ── fs/open.c — faccessat hook ───────────────────────────────────
-          python3 -c '
-          import re, sys
-          with open(sys.argv[1]) as f:
-              content = f.read()
-          if "ksu_handle_faccessat" in content:
-              print("open.c already patched")
-              sys.exit(0)
-          include_end = 0
-          for m in re.finditer(r"^#include\s+[<\"]", content, re.MULTILINE):
-              include_end = m.end()
-          nl = content.index("\n", include_end)
-          insert_pos = nl + 1
-          extern_decl = "\nextern int ksu_handle_faccessat(int *dfd, const char __user **filename_user, int *mode, int *flags);\n"
-          content = content[:insert_pos] + extern_decl + content[insert_pos:]
-          pattern = r"(SYSCALL_DEFINE3\(faccessat,\s*int,\s*dfd,.*?int,\s*mode\)\s*\{)"
-          def insert_hook(m):
-              return m.group(1) + "\n\tksu_handle_faccessat(&dfd, &filename, &mode, NULL);"
-          content = re.sub(pattern, insert_hook, content, count=1, flags=re.DOTALL)
-          with open(sys.argv[1], "w") as f:
-              f.write(content)
-          print("fs/open.c patched successfully")
-          ' fs/open.c
-          
-          echo "Manual KSU hooks injected."
-
-      - name: Patch kernel for Clang 19
-        working-directory: kernel
-        run: |
-          sed -i 's/-std=gnu89/-std=gnu11 -fcommon/g' Makefile
-          sed -i 's/HOSTCFLAGS   :=/HOSTCFLAGS   := -std=gnu11 -fcommon /' Makefile
-
-          END_LINE=$(grep -n "^\s*-std=gnu" Makefile | tail -1 | cut -d: -f1)
-          sed -i "${END_LINE}a KBUILD_CFLAGS += -Wno-address-of-packed-member -Wno-int-in-bool-context -Wno-asm-operand-widths -DSUSFS_VERSION=1.5.1" Makefile
-
-          F="arch/arm64/configs/exynos9810-star2lte_defconfig"
           kset() {
-            local key="$1" val="$2"
-            grep -q "^${key}=" "$F" \
-              && sed -i "s|^${key}=.*|${key}=${val}|" "$F" \
-              || echo "${key}=${val}" >> "$F"
+            local file="$1" key="$2" val="$3"
+            if rg -q "^${key}=" "$file"; then
+              sed -i "s|^${key}=.*|${key}=${val}|" "$file"
+            elif rg -q "^# ${key} is not set" "$file"; then
+              sed -i "s|^# ${key} is not set|${key}=${val}|" "$file"
+            else
+              echo "${key}=${val}" >> "$file"
+            fi
           }
 
-          kset CONFIG_HZ_300 y
-          kset CONFIG_HZ 300
-          kset CONFIG_PREEMPT y
-          kset CONFIG_KSU y
-          kset CONFIG_KSU_ALLOWLIST_WORKAROUND y
-          kset CONFIG_KPROBES y
-          kset CONFIG_KPROBE_EVENTS y
+          kunset() {
+            local file="$1" key="$2"
+            if rg -q "^${key}=|^# ${key} is not set" "$file"; then
+              sed -i -E "/^${key}=|^# ${key} is not set/c\# ${key} is not set" "$file"
+            else
+              echo "# ${key} is not set" >> "$file"
+            fi
+          }
 
-          sed -i 's/^CONFIG_CRYPTO_\(.*\)=m$/CONFIG_CRYPTO_\1=y/' "$F"
-          echo "Defconfig tuned."
+          python3 - <<'PY'
+          from pathlib import Path
+          for name, source in [('drivers/Kconfig', 'source "drivers/kernelsu/Kconfig"'),
+                               ('fs/Kconfig', 'source "fs/susfs/Kconfig"')]:
+              p = Path(name)
+              lines = [l for l in p.read_text().splitlines() if l.strip() != source]
+              if name == 'drivers/Kconfig':
+                  for i in range(len(lines)-1, -1, -1):
+                      if lines[i].strip() == 'endmenu':
+                          lines.insert(i, source)
+                          break
+                  else:
+                      raise SystemExit('drivers/Kconfig endmenu not found')
+              else:
+                  for i, line in enumerate(lines):
+                      if line.strip() == 'menu "Network File Systems"':
+                          lines.insert(i, '')
+                          lines.insert(i, source)
+                          break
+                  else:
+                      lines.append(source)
+              p.write_text('\n'.join(lines) + '\n')
+          PY
 
-      - name: Patch DTS
+          sed -i 's/-std=gnu89/-std=gnu11 -fcommon/g' Makefile
+          sed -i 's/HOSTCFLAGS   :=/HOSTCFLAGS   := -std=gnu11 -fcommon /' Makefile
+          if ! rg -q --fixed-strings '-DSUSFS_VERSION=' Makefile; then
+            END_LINE=$(grep -n "^\s*-std=gnu" Makefile | tail -1 | cut -d: -f1)
+            sed -i "${END_LINE}a KBUILD_CFLAGS += -Wno-address-of-packed-member -Wno-int-in-bool-context -Wno-asm-operand-widths -DSUSFS_VERSION=\\\"v2.1.0\\\"" Makefile
+          fi
+
+          DEFCONFIG="arch/arm64/configs/exynos9810-star2lte_defconfig"
+          kunset "$DEFCONFIG" CONFIG_HZ_100
+          kunset "$DEFCONFIG" CONFIG_HZ_250
+          kunset "$DEFCONFIG" CONFIG_HZ_300
+          kset "$DEFCONFIG" CONFIG_HZ_1000 y
+          kset "$DEFCONFIG" CONFIG_HZ 1000
+          kset "$DEFCONFIG" CONFIG_PREEMPT y
+          kset "$DEFCONFIG" CONFIG_IRQ_FORCED_THREADING y
+          kset "$DEFCONFIG" CONFIG_HIGH_RES_TIMERS y
+          kset "$DEFCONFIG" CONFIG_NO_HZ_IDLE y
+
+          kset "$DEFCONFIG" CONFIG_KSU y
+          kset "$DEFCONFIG" CONFIG_KSU_ALLOWLIST_WORKAROUND y
+          for opt in \
+            CONFIG_KSU_SUSFS \
+            CONFIG_KSU_SUSFS_SUS_PATH \
+            CONFIG_KSU_SUSFS_SUS_MOUNT \
+            CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT \
+            CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT \
+            CONFIG_KSU_SUSFS_SUS_KSTAT \
+            CONFIG_KSU_SUSFS_SUS_MAP \
+            CONFIG_KSU_SUSFS_TRY_UMOUNT \
+            CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT \
+            CONFIG_KSU_SUSFS_SPOOF_UNAME \
+            CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
+            CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
+            CONFIG_KSU_SUSFS_OPEN_REDIRECT; do
+            kset "$DEFCONFIG" "$opt" y
+          done
+          kunset "$DEFCONFIG" CONFIG_KSU_SUSFS_ENABLE_LOG
+
+          # Request Maple as the default scheduler with Zen available when the tree contains them.
+          kset "$DEFCONFIG" CONFIG_IOSCHED_MAPLE y
+          kset "$DEFCONFIG" CONFIG_DEFAULT_MAPLE y
+          kset "$DEFCONFIG" CONFIG_IOSCHED_ZEN y
+          kunset "$DEFCONFIG" CONFIG_DEFAULT_ZEN
+          kunset "$DEFCONFIG" CONFIG_DEFAULT_DEADLINE
+          kunset "$DEFCONFIG" CONFIG_DEFAULT_CFQ
+          kunset "$DEFCONFIG" CONFIG_DEFAULT_NOOP
+          kset "$DEFCONFIG" CONFIG_DEFAULT_IOSCHED '"maple"'
+
+          sed -i 's/^CONFIG_CRYPTO_\(.*\)=m$/CONFIG_CRYPTO_\1=y/' "$DEFCONFIG"
+          echo "Defconfig tuned for HZ_1000, PREEMPT, IRQ threading, KernelSU Next legacy, SUSFS, Maple, and Zen."
+
+      - name: Patch DTS for camera, Bluetooth, and idle
         working-directory: kernel
         run: |
+          set -euo pipefail
           DTS="arch/arm64/boot/dts/exynos/exynos9810-star2lte_eur_open_26.dts"
-          sed -i 's/size = <461373440>;/size = <603979776>;/' "$DTS" || true
-          sed -i 's/min-residency-us = <2000>/min-residency-us = <400>/' \
-            arch/arm64/boot/dts/exynos/exynos9810.dtsi 2>/dev/null || true
-          echo "DTS patched."
+          python3 - "$DTS" <<'PY'
+          import re, sys
+          p = sys.argv[1]
+          with open(p) as f:
+              s = f.read()
+          s, n_camera = re.subn(r'(camera \{[^{}]*?size = <)\d+(>;)', lambda m: m.group(1) + '268435456' + m.group(2), s, count=1, flags=re.S)
+          s, n_mfc = re.subn(r'(video_stream \{[^{}]*?size = <)\d+(>;)', lambda m: m.group(1) + '67108864' + m.group(2), s, count=1, flags=re.S)
+          if n_camera != 1 or n_mfc != 1:
+              raise SystemExit('ERROR: camera/video_stream CMA nodes not patched')
+
+          idle_values = ['<400>', '<1200>', '<4000>']
+          def idle_repl(match):
+              idle_repl.i += 1
+              return 'min-residency-us = ' + idle_values[min(idle_repl.i - 1, len(idle_values) - 1)]
+          idle_repl.i = 0
+          s, n_idle = re.subn(r'min-residency-us = <(?:8192|2000|3500)>', idle_repl, s, count=3)
+          if n_idle != 3:
+              raise SystemExit(f'ERROR: expected 3 idle states, patched {n_idle}')
+
+          m = re.search(r'(\tbluetooth \{\n)(.*?\n\t\};)', s, flags=re.S)
+          if not m:
+              raise SystemExit('ERROR: bluetooth node not found')
+          body = m.group(2)
+          insert = ''
+          if 'bt-addr-path' not in body:
+              insert += '\t\tsamsung,bt-addr-path = "/efs/bluetooth/bt_addr";\n'
+          if 'local-bd-address' not in body and 'local-bd-addr' not in body:
+              insert += '\t\tlocal-bd-address = [00 00 00 00 00 00];\n'
+          if insert:
+              s = s[:m.start(2)] + insert + body + s[m.end(2):]
+          with open(p, 'w') as f:
+              f.write(s)
+          PY
+          echo "DTS patched: camera 256MB, MFC/video 64MB, BT address fallback, Android 15 idle residency."
 
       - name: Build kernel
         working-directory: kernel
         run: |
+          set -euo pipefail
           MAKE=(
             make -j"$(nproc)"
             ARCH=arm64
@@ -193,7 +226,7 @@ jobs:
             CLANG_TRIPLE=aarch64-linux-gnu-
             CROSS_COMPILE=aarch64-linux-gnu-
             CROSS_COMPILE_ARM32=arm-linux-gnueabi-
-            LD=$GITHUB_WORKSPACE/neutron-clang/bin/ld.lld
+            LD="$GITHUB_WORKSPACE/neutron-clang/bin/ld.lld"
             AR=llvm-ar
             NM=llvm-nm
             OBJCOPY=llvm-objcopy
@@ -210,13 +243,13 @@ jobs:
 
       - name: Package flashable zip
         run: |
+          set -euo pipefail
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AnyKernel3
-          
-          # Bypassing Bash heredoc conflict via Python
+
           python3 -c '
           with open("AnyKernel3/anykernel.sh", "w") as f:
-              f.write("properties() { '"'"'\n")
-              f.write("kernel.string=Project Chimera — Lineage 23.2 / star2lte\n")
+              f.write("properties() { '\''\n")
+              f.write("kernel.string=Project Chimera — Lineage 23.2 / star2lte / KSU-Next v3.2.0 legacy / SUSFS\n")
               f.write("do.devicecheck=1\n")
               f.write("do.modules=0\n")
               f.write("do.cleanup=1\n")
@@ -226,7 +259,7 @@ jobs:
               f.write("device.name3=SM-G965U\n")
               f.write("device.name4=SM-G965N\n")
               f.write("device.name5=SM-G9650\n")
-              f.write("'"'"'; }\n")
+              f.write("'\''; }\n")
               f.write("block=boot;\n")
               f.write("is_slot_device=0;\n")
               f.write("ramdisk_compression=auto;\n")
@@ -269,12 +302,15 @@ jobs:
           name: "Project Chimera — Lineage 23.2 Build #${{ github.run_number }}"
           body: |
             ## Project Chimera — Exynos 9810 / star2lte
-            Built from: chimera-mk5-r3.1 + KernelSU Next (manual hooks)
+            Built from this prepatched tree with KernelSU Next v3.2.0 legacy and SUSFS kernel-4.9 integration.
 
             ### What changed
-            - Manual KSU hooks injected into fs/exec.c and fs/open.c
-            - Samsung 4.9 BSP compatible (no kprobe dependency)
-            - HZ_300, SchedUtil, camera ION 576MB, CPU idle tuned
+            - KernelSU Next legacy is built from the checked-out submodule instead of cloning incompatible HEAD at build time
+            - SUSFS uses the in-tree kernel-4.9 implementation instead of non-functional stubs
+            - Camera CMA/ION set to 256MB and MFC/video carveout set to 64MB
+            - Bluetooth address path plus local-bd-address fallback to avoid setup loops/OOM crashes
+            - Android 15 idle C1/C2/C3 residency tuning
+            - HZ_1000, PREEMPT, IRQ threading, Maple default, and Zen I/O scheduler config
 
             ### Flash order
             1. Flash Lineage 23.2 + its recovery
