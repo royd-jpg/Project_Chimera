@@ -146,40 +146,62 @@ jobs:
         working-directory: kernel
         run: |
           set -euo pipefail
-          # Patch fs/exec.c — Passing &fd local variable (Kernel 4.9 style)
+          # ── fs/exec.c — execve hook (Scope-Aware for Kernel 4.9) ──────────
           python3 -c '
           import re, sys
-          with open(sys.argv[1]) as f: content = f.read()
-          if "ksu_handle_execveat_sucompat" in content: sys.exit(0)
+          with open(sys.argv[1]) as f:
+              content = f.read()
+          if "ksu_handle_execveat_sucompat" in content:
+              sys.exit(0)
+          
+          # 1. Inject extern declaration at the top
           ext = "\nextern void ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags);\n"
-          lines = content.splitlines()
-          for i, line in enumerate(lines):
-              if line.startswith("#include") and not lines[i+1].startswith("#include"):
-                  lines.insert(i+1, ext)
-                  break
-          content = "\n".join(lines)
-          anchor = "\tret = search_binary_handler(bprm);"
-          hook = "\tksu_handle_execveat_sucompat(&fd, &bprm->filename, NULL, NULL, NULL);\n"
+          if "#include" in content:
+              pos = content.rindex("#include")
+              end_line = content.find("\n", pos) + 1
+              content = content[:end_line] + ext + content[end_line:]
+          
+          # 2. Inject hook call using search_binary_handler as the anchor.
+          # This ensures we are inside do_execveat_common where "fd" exists.
+          anchor = "ret = search_binary_handler(bprm);"
+          if anchor not in content:
+              raise SystemExit("ERROR: Could not find search_binary_handler anchor in fs/exec.c")
+          
+          hook = "ksu_handle_execveat_sucompat(&fd, &bprm->filename, NULL, NULL, NULL);\n\t"
           content = content.replace(anchor, hook + anchor, 1)
-          with open(sys.argv[1], "w") as f: f.write(content)
+          
+          with open(sys.argv[1], "w") as f:
+              f.write(content)
+          print("fs/exec.c patched successfully")
           ' fs/exec.c
 
-          # Patch fs/open.c — faccessat hook
+          # ── fs/open.c — faccessat hook ───────────────────────────────────
           python3 -c '
           import re, sys
-          with open(sys.argv[1]) as f: content = f.read()
-          if "ksu_handle_faccessat" in content: sys.exit(0)
+          with open(sys.argv[1]) as f:
+              content = f.read()
+          if "ksu_handle_faccessat" in content:
+              sys.exit(0)
+          
           ext = "\nextern int ksu_handle_faccessat(int *dfd, const char __user **filename_user, int *mode, int *flags);\n"
-          lines = content.splitlines()
-          for i, line in enumerate(lines):
-              if line.startswith("#include") and not lines[i+1].startswith("#include"):
-                  lines.insert(i+1, ext)
-                  break
-          content = "\n".join(lines)
+          if "#include" in content:
+              pos = content.rindex("#include")
+              end_line = content.find("\n", pos) + 1
+              content = content[:end_line] + ext + content[end_line:]
+          
+          # Hook into faccessat syscall
           pattern = r"(SYSCALL_DEFINE3\(faccessat,.*?\{)"
-          content = re.sub(pattern, r"\1\n\tksu_handle_faccessat(&dfd, &filename, &mode, NULL);", content, flags=re.DOTALL)
-          with open(sys.argv[1], "w") as f: f.write(content)
+          replacement = r"\1\n\tksu_handle_faccessat(&dfd, &filename, &mode, NULL);"
+          content, count = re.subn(pattern, replacement, content, flags=re.DOTALL)
+          if count == 0:
+              raise SystemExit("ERROR: Could not find faccessat syscall in fs/open.c")
+          
+          with open(sys.argv[1], "w") as f:
+              f.write(content)
+          print("fs/open.c patched successfully")
           ' fs/open.c
+          
+          echo "Manual KSU hooks injected."
 
       - name: Patch kernel for Clang 19
         working-directory: kernel
