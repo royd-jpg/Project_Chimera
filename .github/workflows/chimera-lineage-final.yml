@@ -144,64 +144,112 @@ jobs:
 
       - name: Inject manual KSU hooks (Samsung 4.9 BSP)
         working-directory: kernel
+        timeout-minutes: 5
         run: |
-          set -euo pipefail
-          # ── fs/exec.c — execve hook (Scope-Aware for Kernel 4.9) ──────────
-          python3 -c '
-          import re, sys
-          with open(sys.argv[1]) as f:
+          set -Eeuo pipefail
+          # ── fs/exec.c — execve hook (Kernel 4.9 Local Scope Fix) ─────────
+          python3 - fs/exec.c <<'PY'
+          import re
+          import sys
+
+          path = sys.argv[1]
+          with open(path, encoding='utf-8') as f:
               content = f.read()
-          if "ksu_handle_execveat_sucompat" in content:
-              sys.exit(0)
+          if 'ksu_handle_execveat_sucompat' in content:
+              print('exec.c already patched')
+              raise SystemExit(0)
+
+          include_end = 0
+          for match in re.finditer(r'^#include\s+[<"]', content, re.MULTILINE):
+              include_end = match.end()
+          if include_end == 0:
+              raise SystemExit('ERROR: no #include block found in fs/exec.c')
+
+          nl = content.index('\n', include_end)
+          extern_decl = '\nextern void ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags);\n'
+          content = content[:nl + 1] + extern_decl + content[nl + 1:]
+
+          # Kernel 4.9 specific: use &fd instead of &bprm->fd
+          needle = '\tret = search_binary_handler(bprm);'
+          hook = '\tksu_handle_execveat_sucompat(&fd, &bprm->filename, NULL, NULL, NULL);\n'
+          if needle not in content:
+              raise SystemExit('ERROR: search_binary_handler anchor not found in fs/exec.c')
+          content = content.replace(needle, hook + needle.lstrip(), 1)
           
-          # 1. Inject extern declaration at the top
-          ext = "\nextern void ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags);\n"
-          if "#include" in content:
-              pos = content.rindex("#include")
-              end_line = content.find("\n", pos) + 1
-              content = content[:end_line] + ext + content[end_line:]
-          
-          # 2. Inject hook call using search_binary_handler as the anchor.
-          # This ensures we are inside do_execveat_common where "fd" exists.
-          anchor = "ret = search_binary_handler(bprm);"
-          if anchor not in content:
-              raise SystemExit("ERROR: Could not find search_binary_handler anchor in fs/exec.c")
-          
-          hook = "ksu_handle_execveat_sucompat(&fd, &bprm->filename, NULL, NULL, NULL);\n\t"
-          content = content.replace(anchor, hook + anchor, 1)
-          
-          with open(sys.argv[1], "w") as f:
+          with open(path, 'w', encoding='utf-8') as f:
               f.write(content)
-          print("fs/exec.c patched successfully")
-          ' fs/exec.c
+          print('fs/exec.c patched successfully for 4.9 BSP')
+          PY
 
           # ── fs/open.c — faccessat hook ───────────────────────────────────
-          python3 -c '
-          import re, sys
-          with open(sys.argv[1]) as f:
+          python3 - fs/open.c <<'PY'
+          import re
+          import sys
+
+          path = sys.argv[1]
+          with open(path, encoding='utf-8') as f:
               content = f.read()
-          if "ksu_handle_faccessat" in content:
-              sys.exit(0)
+          if 'ksu_handle_faccessat' in content:
+              print('open.c already patched')
+              raise SystemExit(0)
+
+          include_end = 0
+          for match in re.finditer(r'^#include\s+[<"]', content, re.MULTILINE):
+              include_end = match.end()
           
-          ext = "\nextern int ksu_handle_faccessat(int *dfd, const char __user **filename_user, int *mode, int *flags);\n"
-          if "#include" in content:
-              pos = content.rindex("#include")
-              end_line = content.find("\n", pos) + 1
-              content = content[:end_line] + ext + content[end_line:]
-          
-          # Hook into faccessat syscall
-          pattern = r"(SYSCALL_DEFINE3\(faccessat,.*?\{)"
-          replacement = r"\1\n\tksu_handle_faccessat(&dfd, &filename, &mode, NULL);"
-          content, count = re.subn(pattern, replacement, content, flags=re.DOTALL)
-          if count == 0:
-              raise SystemExit("ERROR: Could not find faccessat syscall in fs/open.c")
-          
-          with open(sys.argv[1], "w") as f:
+          nl = content.index('\n', include_end)
+          extern_decl = '\nextern int ksu_handle_faccessat(int *dfd, const char __user **filename_user, int *mode, int *flags);\n'
+          content = content[:nl + 1] + extern_decl + content[nl + 1:]
+          pattern = r'(SYSCALL_DEFINE3\(faccessat,\s*int,\s*dfd,.*?int,\s*mode\)\s*\{)'
+          content, count = re.subn(
+              pattern,
+              lambda m: m.group(1) + '\n\tksu_handle_faccessat(&dfd, &filename, &mode, NULL);',
+              content,
+              count=1,
+              flags=re.DOTALL,
+          )
+          if count != 1:
+              raise SystemExit('ERROR: faccessat syscall anchor not found in fs/open.c')
+          with open(path, 'w', encoding='utf-8') as f:
               f.write(content)
-          print("fs/open.c patched successfully")
-          ' fs/open.c
+          print('fs/open.c patched successfully')
+          PY
+          echo 'Manual KSU hooks injected.'
+
+      - name: Patch kernel for Clang 19 & Tuning
+        working-directory: kernel
+        timeout-minutes: 5
+        run: |
+          set -Eeuo pipefail
+          sed -i 's/-std=gnu89/-std=gnu11 -fcommon/g' Makefile
+          sed -i 's/HOSTCFLAGS   :=/HOSTCFLAGS   := -std=gnu11 -fcommon /' Makefile
+
+          end_line="$(grep -n '^[[:space:]]*-std=gnu' Makefile | tail -1 | cut -d: -f1 || true)"
+          sed -i "${end_line}a KBUILD_CFLAGS += -Wno-address-of-packed-member -Wno-int-in-bool-context -Wno-asm-operand-widths -DSUSFS_VERSION=1.5.1" Makefile
+
+          defconfig='arch/arm64/configs/exynos9810-star2lte_defconfig'
+          kset() {
+            local key="$1" val="$2"
+            if grep -q "^${key}=" "$defconfig"; then
+              sed -i "s|^${key}=.*|${key}=${val}|" "$defconfig"
+            else
+              echo "${key}=${val}" >> "$defconfig"
+            fi
+          }
+
+          # Performance & KSU
+          kset CONFIG_HZ_300 y
+          kset CONFIG_HZ 300
+          kset CONFIG_PREEMPT y
+          kset CONFIG_KSU y
+          kset CONFIG_KSU_ALLOWLIST_WORKAROUND y
           
-          echo "Manual KSU hooks injected."
+          # Kprobes Disabled (Manual hooks used instead)
+          kset CONFIG_KPROBES n
+          kset CONFIG_KPROBE_EVENTS n
+
+          sed -i 's/^CONFIG_CRYPTO_\(.*\)=m$/CONFIG_CRYPTO_\1=y/' "$defconfig"
+          echo 'Defconfig tuned (Kprobes disabled).'
 
       - name: Patch kernel for Clang 19
         working-directory: kernel
