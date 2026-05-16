@@ -548,49 +548,46 @@ jobs:
 
       # ── 8b. KernelSU-Next Samsung 4.9 BSP compat ─────────────────────────
       # syscall_fn_t was introduced in kernel 5.4 (linux/syscalls.h).
-      # Samsung 4.9 BSP does not define it, so drivers/kernelsu fails to
-      # compile.  We prepend the typedef directly into syscall_hook.h.
-      #
-      # NOTE: we do NOT check kernel headers for the typedef — even if it
-      # exists somewhere in arch/arm64/include/, syscall_hook.h does not
-      # include that header, so the type is still unknown at compile time.
-      # Idempotency is checked only against the target file itself.
+      # Samsung 4.9 BSP does not define it, causing a compile error in
+      # drivers/kernelsu/core/init.c.
+      # We patch the actual cloned file directly — NOT through the
+      # drivers/kernelsu symlink, whose [ -f ] resolution was unreliable.
+      # KernelSU-Next is always cloned to kernel/KernelSU-Next/ regardless
+      # of whether SKIP_INTEGRATION is true or false.
       - name: Patch KernelSU-Next for Samsung 4.9 BSP compat
         working-directory: kernel
         run: |
           set -Eeuo pipefail
 
-          HOOK_H="drivers/kernelsu/hook/syscall_hook.h"
+          HOOK_DIRECT="KernelSU-Next/kernel/hook/syscall_hook.h"
 
-          if [ ! -f "$HOOK_H" ]; then
-            echo "WARN: $HOOK_H not found — skipping 4.9 compat patch"
+          if [ ! -f "$HOOK_DIRECT" ]; then
+            echo "WARN: $HOOK_DIRECT not found — KernelSU-Next not cloned yet?"
+            ls -la KernelSU-Next/kernel/ 2>/dev/null || echo "KernelSU-Next/kernel/ missing"
+            exit 1
+          fi
+
+          # Idempotent: skip only if THIS FILE already has the typedef
+          if grep -q 'typedef.*syscall_fn_t' "$HOOK_DIRECT"; then
+            echo "syscall_fn_t typedef already present — skipping"
             exit 0
           fi
 
-          # Idempotent: skip only if THIS FILE already contains the typedef
-          if grep -q 'typedef.*syscall_fn_t' "$HOOK_H"; then
-            echo "syscall_fn_t typedef already present in $HOOK_H — skipping"
-            exit 0
-          fi
-
-          # Resolve the real path through the drivers/kernelsu symlink so
-          # cp writes to the actual file, not through a symlink chain
-          REAL_H="$(realpath "$HOOK_H")"
-
-          # Prepend the typedef then the original file into a temp, then replace
+          # Prepend the missing typedef then the original file into a temp,
+          # then copy back to the actual clone (no symlink involved)
           {
             printf '/* Samsung 4.9 BSP compat: syscall_fn_t not in 4.9 headers */\n'
             printf '#ifndef __KSU_SYSCALL_FN_T_COMPAT\n'
             printf '#define __KSU_SYSCALL_FN_T_COMPAT\n'
             printf 'typedef asmlinkage long (*syscall_fn_t)(const struct pt_regs *regs);\n'
             printf '#endif\n\n'
-            cat "$REAL_H"
+            cat "$HOOK_DIRECT"
           } > /tmp/syscall_hook_patched.h
 
-          cp /tmp/syscall_hook_patched.h "$REAL_H"
+          cp /tmp/syscall_hook_patched.h "$HOOK_DIRECT"
 
-          echo "syscall_fn_t compat typedef prepended to $REAL_H"
-          head -8 "$REAL_H" | tee "../$LOG_DIR/ksu-compat-patch.log"
+          echo "syscall_fn_t compat typedef applied to $HOOK_DIRECT"
+          head -8 "$HOOK_DIRECT" | tee "../$LOG_DIR/ksu-compat-patch.log"
 
       # ── 9. Makefile + defconfig ───────────────────────────────────────────
       - name: Patch Makefile and defconfig
