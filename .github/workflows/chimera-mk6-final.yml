@@ -1,10 +1,18 @@
-name: Project Chimera MK6 — Lineage 23.2 Build
+name: Project Chimera MK6 — Lineage 23.2 Build Safe Dry Run
 
 on:
   workflow_dispatch:
     inputs:
+      dry_run:
+        description: "Stop after patch/config validation; do not package/release"
+        type: boolean
+        default: true
       do_release:
-        description: 'Create a GitHub Release'
+        description: "Create a GitHub Release"
+        type: boolean
+        default: false
+      force_repatch:
+        description: "Allow patching even if KSU/SUSFS markers already exist"
         type: boolean
         default: false
 
@@ -12,10 +20,29 @@ jobs:
   build:
     runs-on: ubuntu-24.04
 
+    defaults:
+      run:
+        shell: bash
+
+    env:
+      KERNEL_REPO: https://github.com/royd-jpg/Project_Chimera
+      KERNEL_BRANCH: chimera-mk6
+      SUSFS_REPO: https://gitlab.com/simonpunk/susfs4ksu.git
+      SUSFS_BRANCH: kernel-4.9
+      KSU_REPO: https://github.com/gavdoc38/KernelSU-Next.git
+      KERNEL_DIR: kernel
+      OUT_DIR: kernel-out
+      LOG_DIR: logs
+
     steps:
-      # ── 1. Dependencies ───────────────────────────────────────────────────
+      - name: Prepare directories
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$LOG_DIR"
+
       - name: Install dependencies
         run: |
+          set -Eeuo pipefail
           sudo apt-get update -qq
           sudo apt-get install -yqq \
             git curl wget bc flex bison python3 \
@@ -24,457 +51,330 @@ jobs:
             gcc-aarch64-linux-gnu \
             gcc-arm-linux-gnueabi
 
-      # ── 2. Neutron Clang ──────────────────────────────────────────────────
       - name: Cache Neutron Clang
         id: cache-neutron
         uses: actions/cache@v4
         with:
           path: neutron-clang
-          key: neutron-clang-10032024
+          key: neutron-clang-10032024-v1
 
       - name: Download Neutron Clang
         if: steps.cache-neutron.outputs.cache-hit != 'true'
         run: |
+          set -Eeuo pipefail
           mkdir -p neutron-clang
-          URL=$(curl -fsSL \
-            https://api.github.com/repos/Neutron-Toolchains/clang-build-catalogue/releases/latest \
-            | python3 -c "
-          import json,sys
-          d=json.load(sys.stdin)
-          hits=[a['browser_download_url'] for a in d.get('assets',[])
-                if a['name'].endswith('.tar.zst')]
-          print(hits[0] if hits else '')
-          ")
-          [[ -n "$URL" ]] || { echo "ERROR: Neutron Clang not found"; exit 1; }
+
+          URL="$(
+            curl -fsSL https://api.github.com/repos/Neutron-Toolchains/clang-build-catalogue/releases/latest |
+            python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+hits = [
+    a["browser_download_url"]
+    for a in d.get("assets", [])
+    if a.get("name", "").endswith(".tar.zst")
+]
+print(hits[0] if hits else "")
+'
+          )"
+
+          [[ -n "$URL" ]] || {
+            echo "ERROR: Neutron Clang .tar.zst asset not found" | tee "$LOG_DIR/toolchain.log"
+            exit 1
+          }
+
+          echo "Downloading: $URL" | tee "$LOG_DIR/toolchain.log"
           wget -qO /tmp/neutron.tar.zst "$URL"
           tar -xf /tmp/neutron.tar.zst -C neutron-clang --strip-components=1
-          echo "Clang: $(neutron-clang/bin/clang --version | head -1)"
+
+          test -x neutron-clang/bin/clang
+          neutron-clang/bin/clang --version | tee -a "$LOG_DIR/toolchain.log"
 
       - name: Export toolchain PATH
         run: |
+          set -Eeuo pipefail
           echo "$GITHUB_WORKSPACE/neutron-clang/bin" >> "$GITHUB_PATH"
 
-      # ── 3. Clone kernel (MK6 base — UV + BT already committed) ───────────
       - name: Clone kernel tree
         run: |
-          git clone --depth=1 \
-            -b chimera-mk6 \
-            https://github.com/royd-jpg/Project_Chimera \
-            kernel
+          set -Eeuo pipefail
+          git clone --depth=1 -b "$KERNEL_BRANCH" "$KERNEL_REPO" "$KERNEL_DIR"
+          git -C "$KERNEL_DIR" rev-parse HEAD | tee "$LOG_DIR/kernel-revision.log"
 
-      # ── 4. Clone SUSFS ────────────────────────────────────────────────────
       - name: Clone SUSFS
         run: |
-          git clone --depth=1 \
-            -b kernel-4.9 \
-            https://gitlab.com/simonpunk/susfs4ksu.git \
-            susfs4ksu
+          set -Eeuo pipefail
+          git clone --depth=1 -b "$SUSFS_BRANCH" "$SUSFS_REPO" susfs4ksu
+          git -C susfs4ksu rev-parse HEAD | tee "$LOG_DIR/susfs-revision.log"
 
-      # ── 5. KernelSU Next (gavdoc38 fork — per Chimera tree) ───────────────
+      - name: Preflight tree state
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+
+          {
+            echo "== git status =="
+            git status --short
+            echo
+            echo "== KSU/SUSFS markers =="
+            grep -RsnE 'KernelSU|kernelsu|CONFIG_KSU|KSU_SUSFS|susfs|ksu_handle_' \
+              drivers fs include kernel arch/arm64/configs 2>/dev/null || true
+          } | tee "../$LOG_DIR/preflight.log"
+
+          if [[ "${{ inputs.force_repatch }}" != "true" ]]; then
+            if grep -RqsE 'source "drivers/kernelsu/Kconfig"|CONFIG_KSU_SUSFS|ksu_handle_faccessat|susfs_is_inode_sus_path' \
+              drivers fs include kernel arch/arm64/configs 2>/dev/null; then
+              echo "ERROR: Existing KSU/SUSFS markers found. Refusing to repatch without force_repatch=true." | tee -a "../$LOG_DIR/preflight.log"
+              exit 1
+            fi
+          fi
+
       - name: Integrate KernelSU Next
         working-directory: kernel
         run: |
-          # Clean any broken state from previous attempts
-          git rm -r --cached KernelSU-Next 2>/dev/null || true
-          rm -rf .git/modules/KernelSU-Next KernelSU-Next drivers/kernelsu
+          set -Eeuo pipefail
 
-          # Remove stale Kconfig references
-          sed -i '/kernelsu\/Kconfig/d' drivers/Kconfig
-          sed -i '/susfs\/Kconfig/d' fs/Kconfig
-
-          # Clone gavdoc38's KernelSU-Next (what Chimera tree expects)
-          git clone --depth=1 \
-            https://github.com/gavdoc38/KernelSU-Next.git \
-            KernelSU-Next
-
-          # Wire symlink
+          rm -rf KernelSU-Next drivers/kernelsu
+          git clone --depth=1 "$KSU_REPO" KernelSU-Next
+          test -f KernelSU-Next/kernel/Kconfig
           ln -s ../KernelSU-Next/kernel drivers/kernelsu
 
-          # Add to drivers/Kconfig cleanly
-          if ! grep -q "^endmenu" drivers/Kconfig; then
-            echo "" >> drivers/Kconfig
-            echo "endmenu" >> drivers/Kconfig
-          fi
-          # Remove any duplicate before inserting
           sed -i '/source "drivers\/kernelsu\/Kconfig"/d' drivers/Kconfig
+          grep -q '^endmenu' drivers/Kconfig
           sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
 
-          echo "KernelSU Next (gavdoc38) integrated."
+          grep -n 'drivers/kernelsu/Kconfig' drivers/Kconfig | tee "../$LOG_DIR/ksu-integrate.log"
 
-      # ── 6. SUSFS — apply patch + fix rejects ──────────────────────────────
       - name: Apply SUSFS patch
         working-directory: kernel
         run: |
-          # Apply what applies cleanly, generate .rej for the rest
-          git apply --reject --whitespace=fix \
-            $GITHUB_WORKSPACE/susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.9.patch \
-            2>&1 || true
+          set -Eeuo pipefail
 
-          # Copy actual SUSFS source files
-          cp $GITHUB_WORKSPACE/susfs4ksu/kernel_patches/fs/susfs.c fs/susfs.c
-          cp $GITHUB_WORKSPACE/susfs4ksu/kernel_patches/fs/sus_su.c fs/sus_su.c
-          cp $GITHUB_WORKSPACE/susfs4ksu/kernel_patches/include/linux/susfs.h \
-             include/linux/susfs.h
-          cp $GITHUB_WORKSPACE/susfs4ksu/kernel_patches/include/linux/susfs_def.h \
-             include/linux/susfs_def.h
-          cp $GITHUB_WORKSPACE/susfs4ksu/kernel_patches/include/linux/sus_su.h \
-             include/linux/sus_su.h
+          PATCH="$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.9.patch"
+          test -f "$PATCH"
 
-          echo "SUSFS source files copied."
+          set +e
+          git apply --reject --whitespace=fix "$PATCH" > "../$LOG_DIR/susfs-apply.log" 2>&1
+          APPLY_RC=$?
+          set -e
 
-      - name: Fix SUSFS rejected hunks
-        working-directory: kernel
-        run: |
-          python3 << 'PYEOF'
-import re
+          find . -name '*.rej' -print | tee "../$LOG_DIR/susfs-reject-list.log"
 
-def read(p):
-    with open(p) as f: return f.read()
-
-def write(p, c):
-    with open(p, 'w') as f: f.write(c)
-    print(f"  Fixed: {p}")
-
-def add_include_after(content, anchor, new_line):
-    first = new_line.split('\n')[0]
-    if first in content: return content
-    pos = content.rfind(anchor)
-    if pos == -1: return content
-    end = content.index('\n', pos) + 1
-    return content[:end] + new_line + '\n' + content[end:]
-
-def insert_before(content, anchor, text):
-    if text.split('\n')[0] in content: return content
-    pos = content.find(anchor)
-    if pos == -1: return content
-    return content[:pos] + text + content[pos:]
-
-def insert_after(content, anchor, text):
-    if text.split('\n')[0] in content: return content
-    pos = content.find(anchor)
-    if pos == -1: return content
-    end = pos + len(anchor)
-    return content[:end] + text + content[end:]
-
-# fs/Makefile
-print("fs/Makefile...")
-c = read('fs/Makefile')
-if 'susfs.o' not in c:
-    c += '\nobj-$(CONFIG_KSU_SUSFS) += susfs.o\n'
-    write('fs/Makefile', c)
-
-# fs/namei.c
-print("fs/namei.c...")
-c = read('fs/namei.c')
-c = add_include_after(c, '#include <asm/uaccess.h>',
-    '#if defined(CONFIG_KSU_SUSFS_SUS_PATH) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)\n'
-    '#include <linux/susfs_def.h>\n#endif')
-c = insert_before(c, '\nout:\n\tinode_unlock_shared(inode);',
-    '#ifdef CONFIG_KSU_SUSFS_SUS_PATH\n'
-    '\tif (!IS_ERR(dentry) && dentry->d_inode &&\n'
-    '\t\tunlikely(dentry->d_inode->i_state & INODE_STATE_SUS_PATH) &&\n'
-    '\t\tlikely(current->susfs_task_state & TASK_STRUCT_NON_ROOT_USER_APP_PROC)) {\n'
-    '\t\tdput(dentry);\n\t\treturn ERR_PTR(-ENOENT);\n\t}\n#endif\n')
-write('fs/namei.c', c)
-
-# fs/namespace.c
-print("fs/namespace.c...")
-c = read('fs/namespace.c')
-c = add_include_after(c, '#include <linux/task_work.h>',
-    '#if defined(CONFIG_KSU_SUSFS_SUS_MOUNT) || defined(CONFIG_KSU_SUSFS_TRY_UMOUNT)\n'
-    '#include <linux/susfs_def.h>\n#endif')
-write('fs/namespace.c', c)
-
-# fs/stat.c
-print("fs/stat.c...")
-c = read('fs/stat.c')
-c = add_include_after(c, '#include <linux/pagemap.h>',
-    '#if defined(CONFIG_KSU_SUSFS_SUS_KSTAT) || defined(CONFIG_KSU_SUSFS_SUS_MOUNT)\n'
-    '#include <linux/susfs_def.h>\n#endif\n'
-    '#ifdef CONFIG_KSU_SUSFS_SUS_KSTAT\n'
-    'extern void susfs_sus_ino_for_generic_fillattr(unsigned long ino, struct kstat *stat);\n'
-    '#endif')
-c = insert_before(c, '\tstat->dev = inode->i_sb->s_dev;\n\tstat->ino = inode->i_ino;',
-    '#ifdef CONFIG_KSU_SUSFS_SUS_KSTAT\n'
-    '\tif (likely(current->susfs_task_state & TASK_STRUCT_NON_ROOT_USER_APP_PROC) &&\n'
-    '\t\tunlikely(inode->i_state & INODE_STATE_SUS_KSTAT)) {\n'
-    '\t\tsusfs_sus_ino_for_generic_fillattr(inode->i_ino, stat);\n'
-    '\t\tstat->mode = inode->i_mode;\n'
-    '\t\tstat->rdev = inode->i_rdev;\n'
-    '\t\tstat->uid = inode->i_uid;\n'
-    '\t\tstat->gid = inode->i_gid;\n'
-    '\t\treturn;\n\t}\n#endif\n')
-write('fs/stat.c', c)
-
-# include/linux/mount.h
-print("include/linux/mount.h...")
-c = read('include/linux/mount.h')
-if 'susfs_mnt_id_backup' not in c:
-    c = c.replace('\tint mnt_flags;\n\tvoid *data;\n};',
-        '\tint mnt_flags;\n\tvoid *data;\n'
-        '#ifdef CONFIG_KSU_SUSFS\n\tu64 susfs_mnt_id_backup;\n#endif\n};', 1)
-write('include/linux/mount.h', c)
-
-# include/linux/sched.h
-print("include/linux/sched.h...")
-c = read('include/linux/sched.h')
-if 'susfs_task_state' not in c:
-    c = c.replace('\tstruct thread_struct thread;',
-        '#ifdef CONFIG_KSU_SUSFS\n\tu32 susfs_task_state;\n#endif\n'
-        '\tstruct thread_struct thread;', 1)
-write('include/linux/sched.h', c)
-
-# kernel/sys.c — spoof_uname disabled (causes boot panic on LOS 23.2)
-# Intentionally NOT adding susfs_spoof_uname hook
-
-# fs/proc_namespace.c
-print("fs/proc_namespace.c...")
-c = read('fs/proc_namespace.c')
-c = add_include_after(c, '#include "internal.h"',
-    '#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n'
-    '#include <linux/susfs_def.h>\n'
-    'extern int susfs_sus_mnt_for_show_mountinfo(struct mount *r);\n#endif')
-write('fs/proc_namespace.c', c)
-
-# fs/readdir.c
-print("fs/readdir.c...")
-c = read('fs/readdir.c')
-c = add_include_after(c, '#include <linux/unistd.h>',
-    '#ifdef CONFIG_KSU_SUSFS_SUS_PATH\n'
-    '#include <linux/susfs_def.h>\n'
-    'extern int susfs_sus_ino_for_filldir64(unsigned long ino);\n#endif')
-write('fs/readdir.c', c)
-
-# fs/proc/task_mmu.c
-print("fs/proc/task_mmu.c...")
-c = read('fs/proc/task_mmu.c')
-c = add_include_after(c, '#include <linux/mm_inline.h>',
-    '#ifdef CONFIG_KSU_SUSFS_SUS_MAPS\n'
-    '#include <linux/susfs_def.h>\n'
-    'extern int susfs_sus_ino_for_show_map_vma(unsigned long ino);\n#endif')
-write('fs/proc/task_mmu.c', c)
-
-# fs/proc/cmdline.c
-print("fs/proc/cmdline.c...")
-c = read('fs/proc/cmdline.c')
-if 'susfs_spoof_cmdline' not in c:
-    c = insert_before(c, 'static int cmdline_proc_show',
-        '#ifdef CONFIG_KSU_SUSFS_SPOOF_CMDLINE\n'
-        'extern void susfs_spoof_cmdline(struct seq_file *m);\n#endif\n')
-write('fs/proc/cmdline.c', c)
-
-print("\nAll SUSFS rejected hunks fixed.")
-PYEOF
-
-      # ── 7. Manual KSU hooks (Samsung 4.9 BSP — no kprobe) ────────────────
-      - name: Inject manual KSU hooks
-        working-directory: kernel
-        run: |
-          python3 - fs/exec.c << 'PYEOF'
-import re, sys
-with open(sys.argv[1]) as f:
-    content = f.read()
-if 'ksu_handle_execveat_sucompat' in content:
-    print("exec.c already patched"); sys.exit(0)
-include_end = 0
-for m in re.finditer(r'^#include\s+[<"]', content, re.MULTILINE):
-    include_end = m.end()
-nl = content.index('\n', include_end)
-extern_decl = '\nextern void ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags);\n'
-content = content[:nl+1] + extern_decl + content[nl+1:]
-hook = '\tksu_handle_execveat_sucompat(&bprm->fd, &bprm->filename, NULL, NULL, NULL);\n\t'
-content = content.replace('\tret = search_binary_handler(bprm);',
-    hook + 'ret = search_binary_handler(bprm);', 1)
-with open(sys.argv[1], 'w') as f:
-    f.write(content)
-print("fs/exec.c patched")
-PYEOF
-
-          python3 - fs/open.c << 'PYEOF'
-import re, sys
-with open(sys.argv[1]) as f:
-    content = f.read()
-if 'ksu_handle_faccessat' in content:
-    print("open.c already patched"); sys.exit(0)
-include_end = 0
-for m in re.finditer(r'^#include\s+[<"]', content, re.MULTILINE):
-    include_end = m.end()
-nl = content.index('\n', include_end)
-extern_decl = '\nextern int ksu_handle_faccessat(int *dfd, const char __user **filename_user, int *mode, int *flags);\n'
-content = content[:nl+1] + extern_decl + content[nl+1:]
-pattern = r'(SYSCALL_DEFINE3\(faccessat,\s*int,\s*dfd,.*?int,\s*mode\)\s*\{)'
-content = re.sub(pattern,
-    lambda m: m.group(1) + '\n\tksu_handle_faccessat(&dfd, &filename, &mode, NULL);',
-    content, count=1, flags=re.DOTALL)
-with open(sys.argv[1], 'w') as f:
-    f.write(content)
-print("fs/open.c patched")
-PYEOF
-          echo "KSU manual hooks done."
-
-      # ── 8. Clang 19 fixes + defconfig ─────────────────────────────────────
-      - name: Patch Makefile and defconfig
-        working-directory: kernel
-        run: |
-          # Fix -std=gnu89 → gnu11 (Clang 19 compatibility)
-          sed -i 's/-std=gnu89/-std=gnu11 -fcommon/g' Makefile
-          sed -i 's/HOSTCFLAGS   :=/HOSTCFLAGS   := -std=gnu11 -fcommon /' Makefile
-
-          # Global warning suppressions for Clang 19 on 4.9 BSP
-          END_LINE=$(grep -n "^\s*-std=gnu" Makefile | tail -1 | cut -d: -f1)
-          [[ -n "$END_LINE" ]] && \
-            sed -i "${END_LINE}a KBUILD_CFLAGS += -Wno-address-of-packed-member -Wno-int-in-bool-context -Wno-asm-operand-widths" \
-            Makefile
-
-          # Fix duplicate CHIMERA_UP/DOWN constants (already in tree from MK6)
-          # Only inject if missing
-          if ! grep -q "CHIMERA_UP_RATE_LIMIT" kernel/sched/cpufreq_schedutil.c; then
-            python3 - kernel/sched/cpufreq_schedutil.c << 'PYEOF'
-import sys
-with open(sys.argv[1]) as f:
-    content = f.read()
-block = """
-/* Project Chimera: High-Response Scheduler Tunables */
-#ifndef CHIMERA_DEFINED
-#define CHIMERA_DEFINED
-#define CHIMERA_UP_RATE_LIMIT   500
-#define CHIMERA_DOWN_RATE_LIMIT 2000
-#endif
-"""
-if 'CHIMERA_DEFINED' not in content:
-    content = block + content
-    with open(sys.argv[1], 'w') as f:
-        f.write(content)
-    print("SchedUtil constants injected")
-else:
-    print("SchedUtil constants already present")
-PYEOF
+          if [[ "$APPLY_RC" -ne 0 ]] || [[ -s "../$LOG_DIR/susfs-reject-list.log" ]]; then
+            echo "ERROR: SUSFS patch did not apply cleanly. Review logs/susfs-apply.log and logs/susfs-reject-list.log."
+            exit 1
           fi
+
+          install -m 0644 "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/fs/susfs.c" fs/susfs.c
+          install -m 0644 "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/fs/sus_su.c" fs/sus_su.c
+          install -m 0644 "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/include/linux/susfs.h" include/linux/susfs.h
+          install -m 0644 "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/include/linux/susfs_def.h" include/linux/susfs_def.h
+          install -m 0644 "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/include/linux/sus_su.h" include/linux/sus_su.h
+
+          grep -q 'CONFIG_KSU_SUSFS' fs/Makefile || echo 'obj-$(CONFIG_KSU_SUSFS) += susfs.o' >> fs/Makefile
+
+      - name: Validate KSU hook API
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+
+          grep -Rsn 'ksu_handle_faccessat' KernelSU-Next/kernel | tee "../$LOG_DIR/ksu-hook-api.log"
+          grep -Rsn 'ksu_handle_execveat_sucompat' KernelSU-Next/kernel | tee -a "../$LOG_DIR/ksu-hook-api.log"
+
+          if ! grep -Rqs 'ksu_handle_faccessat' KernelSU-Next/kernel; then
+            echo "ERROR: ksu_handle_faccessat not found in selected KernelSU-Next source"
+            exit 1
+          fi
+
+      - name: Patch Makefile and defconfig safely
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
 
           F="arch/arm64/configs/exynos9810-star2lte_defconfig"
+          test -f "$F"
 
-          kset() {
-            grep -q "^${1}=" "$F" \
-              && sed -i "s|^${1}=.*|${1}=${2}|" "$F" \
-              || echo "${1}=${2}" >> "$F"
+          set_config() {
+            local key="$1"
+            local val="$2"
+            sed -i "/^${key}=.*/d" "$F"
+            sed -i "/^# ${key} is not set/d" "$F"
+            echo "${key}=${val}" >> "$F"
           }
 
-          # Timer
-          kset CONFIG_HZ_300 y
-          kset CONFIG_HZ 300
+          unset_config() {
+            local key="$1"
+            sed -i "/^${key}=.*/d" "$F"
+            sed -i "/^# ${key} is not set/d" "$F"
+            echo "# ${key} is not set" >> "$F"
+          }
 
-          # Preemption
-          kset CONFIG_PREEMPT y
+          for hz in CONFIG_HZ_100 CONFIG_HZ_250 CONFIG_HZ_300 CONFIG_HZ_1000 CONFIG_HZ; do
+            sed -i "/^${hz}=.*/d" "$F"
+            sed -i "/^# ${hz} is not set/d" "$F"
+          done
 
-          # KSU
-          kset CONFIG_KSU y
-          kset CONFIG_KSU_ALLOWLIST_WORKAROUND y
-          kset CONFIG_KPROBES y
-          kset CONFIG_KPROBE_EVENTS y
+          set_config CONFIG_HZ_300 y
+          set_config CONFIG_HZ 300
+          set_config CONFIG_PREEMPT y
 
-          # SUSFS — SAFE CONFIG FOR LOS 23.2
-          # SUS_MOUNT and SPOOF_UNAME intentionally disabled
-          # as they cause boot panic on Android 16 QPR2 due to
-          # AVC denial before SELinux policy is fully loaded
-          kset CONFIG_KSU_SUSFS y
-          kset CONFIG_KSU_SUSFS_SUS_PATH y
-          kset CONFIG_KSU_SUSFS_SUS_KSTAT y
-          kset CONFIG_KSU_SUSFS_TRY_UMOUNT y
-          kset CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT y
-          kset CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT y
-          # Explicitly disable panic-causing options
-          sed -i 's/^CONFIG_KSU_SUSFS_SUS_MOUNT=y/# CONFIG_KSU_SUSFS_SUS_MOUNT is not set/' "$F" || true
-          sed -i 's/^CONFIG_KSU_SUSFS_SPOOF_UNAME=y/# CONFIG_KSU_SUSFS_SPOOF_UNAME is not set/' "$F" || true
-          echo "# CONFIG_KSU_SUSFS_SUS_MOUNT is not set" >> "$F"
-          echo "# CONFIG_KSU_SUSFS_SPOOF_UNAME is not set" >> "$F"
+          set_config CONFIG_KSU y
+          set_config CONFIG_KSU_ALLOWLIST_WORKAROUND y
 
-          # BPF — MUST stay on for Android 16 / LOS 23.2
-          kset CONFIG_BPF y
-          kset CONFIG_BPF_SYSCALL y
-          kset CONFIG_BPF_JIT y
-          kset CONFIG_BPF_EVENTS y
-          kset CONFIG_CGROUP_BPF y
+          set_config CONFIG_KSU_SUSFS y
+          set_config CONFIG_KSU_SUSFS_SUS_PATH y
+          set_config CONFIG_KSU_SUSFS_SUS_KSTAT y
+          set_config CONFIG_KSU_SUSFS_TRY_UMOUNT y
+          set_config CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT y
+          set_config CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT y
 
-          # CMA — 768MB per Chimera tuning
-          kset CONFIG_CMA_SIZE_MBYTES 768
-          kset CONFIG_DMA_CMA y
-          kset CONFIG_CMA y
+          unset_config CONFIG_KSU_SUSFS_SUS_MOUNT
+          unset_config CONFIG_KSU_SUSFS_SPOOF_UNAME
 
-          # Scheduler latency tunables
-          kset CONFIG_SCHED_LATENCY_NS 500000
-          kset CONFIG_SCHED_WAKEUP_GRANULARITY_NS 2000000
+          set_config CONFIG_BPF y
+          set_config CONFIG_BPF_SYSCALL y
+          set_config CONFIG_BPF_JIT y
+          set_config CONFIG_BPF_EVENTS y
+          set_config CONFIG_CGROUP_BPF y
 
-          # ZRAM
-          kset CONFIG_ZRAM_SIZE_PERCENT 50
+          set_config CONFIG_DMA_CMA y
+          set_config CONFIG_CMA y
+          set_config CONFIG_CMA_SIZE_MBYTES 768
 
-          # Crypto — force built-in to avoid duplicate module symbols
           sed -i 's/^CONFIG_CRYPTO_\(.*\)=m$/CONFIG_CRYPTO_\1=y/' "$F"
 
-          echo "Defconfig tuned."
+          git diff -- "$F" Makefile | tee "../$LOG_DIR/config-diff.log"
 
-      # ── 9. DTS patches ────────────────────────────────────────────────────
-      - name: Patch DTS
+      - name: Patch DTS safely
         working-directory: kernel
         run: |
+          set -Eeuo pipefail
+
           DTS="arch/arm64/boot/dts/exynos/exynos9810-star2lte_eur_open_26.dts"
-          # Camera ION heap expansion for face auth (banking apps)
-          if grep -q "size = <461373440>" "$DTS"; then
-            sed -i 's/size = <461373440>;/size = <603979776>;/' "$DTS"
-            echo "Camera ION heap expanded: 440MB → 576MB"
-          fi
-          # CPU idle tuning — lower min-residency for better deep sleep
-          sed -i 's/min-residency-us = <2000>/min-residency-us = <400>/' \
-            arch/arm64/boot/dts/exynos/exynos9810.dtsi 2>/dev/null || true
-          echo "DTS patched."
+          test -f "$DTS"
 
-      # ── 10. Build ─────────────────────────────────────────────────────────
-      - name: Build kernel
+          if grep -q 'size = <461373440>;' "$DTS"; then
+            sed -i 's/size = <461373440>;/size = <603979776>;/' "$DTS"
+          else
+            echo "WARN: Camera ION heap anchor not found" | tee "../$LOG_DIR/dts-warnings.log"
+          fi
+
+          if grep -q 'min-residency-us = <2000>' "$DTS"; then
+            sed -i 's/min-residency-us = <2000>/min-residency-us = <400>/' "$DTS"
+          else
+            echo "WARN: idle min-residency anchor not found" | tee -a "../$LOG_DIR/dts-warnings.log"
+          fi
+
+          git diff -- "$DTS" | tee "../$LOG_DIR/dts-diff.log"
+
+      - name: Patch summary
         working-directory: kernel
         run: |
+          set -Eeuo pipefail
+
+          git status --short | tee "../$LOG_DIR/patch-status.log"
+          git diff --stat | tee "../$LOG_DIR/patch-stat.log"
+          git diff --check | tee "../$LOG_DIR/diff-check.log"
+
+      - name: Stop after dry run
+        if: ${{ inputs.dry_run }}
+        run: |
+          set -Eeuo pipefail
+          echo "Dry run complete. Patch/config validation finished; build/package/release skipped."
+
+      - name: Build kernel
+        if: ${{ ! inputs.dry_run }}
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+
           MAKE=(
-            make -j"$(nproc)"
-            ARCH=arm64 SUBARCH=arm64
+            make
+            -j"$(nproc)"
+            O="$GITHUB_WORKSPACE/$OUT_DIR"
+            ARCH=arm64
+            SUBARCH=arm64
             CC=clang
             CLANG_TRIPLE=aarch64-linux-gnu-
             CROSS_COMPILE=aarch64-linux-gnu-
             CROSS_COMPILE_ARM32=arm-linux-gnueabi-
-            LD=$GITHUB_WORKSPACE/neutron-clang/bin/ld.lld
-            AR=llvm-ar NM=llvm-nm
-            OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip
-            KCFLAGS="-std=gnu11 -fcommon -Wno-implicit-function-declaration -Wno-implicit-int -Wno-return-type"
+            LD="$GITHUB_WORKSPACE/neutron-clang/bin/ld.lld"
+            AR=llvm-ar
+            NM=llvm-nm
+            OBJCOPY=llvm-objcopy
+            OBJDUMP=llvm-objdump
+            STRIP=llvm-strip
+            KCFLAGS="-fcommon -Wno-implicit-function-declaration -Wno-implicit-int -Wno-return-type"
           )
+
           "${MAKE[@]}" exynos9810-star2lte_defconfig
+          cp "$GITHUB_WORKSPACE/$OUT_DIR/.config" "../$LOG_DIR/final.config"
+
           "${MAKE[@]}" Image dtbs 2>&1 | tee build.log
 
-          test -f arch/arm64/boot/Image || \
-            { echo "ERROR: Image not produced — check build.log"; exit 1; }
-          echo "Build succeeded: $(du -h arch/arm64/boot/Image)"
+          test -f "$GITHUB_WORKSPACE/$OUT_DIR/arch/arm64/boot/Image"
+          du -h "$GITHUB_WORKSPACE/$OUT_DIR/arch/arm64/boot/Image" | tee "../$LOG_DIR/image-size.log"
 
-      # ── 11. Package ───────────────────────────────────────────────────────
       - name: Package flashable zip
+        if: ${{ ! inputs.dry_run }}
         run: |
-          git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AnyKernel3
-          python3 -c '
-          with open("AnyKernel3/anykernel.sh", "w") as f:
-              f.write("properties() { '"'"'\n")
-              f.write("kernel.string=Project Chimera MK6 — Lineage 23.2 / star2lte\n")
-              f.write("do.devicecheck=1\ndo.modules=0\ndo.cleanup=1\ndo.cleanuponabort=0\n")
-              f.write("device.name1=star2lte\ndevice.name2=SM-G965F\ndevice.name3=SM-G965U\n")
-              f.write("device.name4=SM-G965N\ndevice.name5=SM-G9650\n")
-              f.write("'"'"'; }\n")
-              f.write("block=boot;\nis_slot_device=0;\nramdisk_compression=auto;\n")
-              f.write("patch_vbmeta_flag=auto;\n. tools/ak3-core.sh;\ndump_boot;\nwrite_boot;\n")
-          '
-          cp kernel/arch/arm64/boot/Image AnyKernel3/
-          find kernel/arch/arm64/boot/dts/exynos/ -name "*.dtb" \
-            -exec cp {} AnyKernel3/ \; 2>/dev/null || true
-          cd AnyKernel3
-          zip -r9 "../chimera-mk6-lineage23.2-$(date +%Y%m%d-%H%M).zip" . -x "*.git*"
-          cd ..
-          ls -lh chimera-*.zip
+          set -Eeuo pipefail
 
-      # ── 12. Upload ────────────────────────────────────────────────────────
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AnyKernel3
+
+          cat > AnyKernel3/anykernel.sh <<'EOF'
+properties() { '
+kernel.string=Project Chimera MK6 — Lineage 23.2 / star2lte
+do.devicecheck=1
+do.modules=0
+do.cleanup=1
+do.cleanuponabort=0
+device.name1=star2lte
+device.name2=SM-G965F
+device.name3=SM-G965U
+device.name4=SM-G965N
+device.name5=SM-G9650
+'; }
+
+block=boot;
+is_slot_device=0;
+ramdisk_compression=auto;
+patch_vbmeta_flag=auto;
+
+. tools/ak3-core.sh;
+dump_boot;
+write_boot;
+EOF
+
+          cp "$OUT_DIR/arch/arm64/boot/Image" AnyKernel3/
+
+          find "$OUT_DIR/arch/arm64/boot/dts/exynos" -name '*star2lte*.dtb' -exec cp {} AnyKernel3/ \;
+
+          test -f AnyKernel3/Image
+          find AnyKernel3 -maxdepth 1 -name '*.dtb' -print -quit | grep -q .
+
+          ZIP="chimera-mk6-lineage23.2-$(date +%Y%m%d-%H%M).zip"
+          cd AnyKernel3
+          zip -r9 "../$ZIP" . -x '*.git*'
+          cd ..
+
+          ls -lh "$ZIP"
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chimera-logs-${{ github.run_number }}
+          path: |
+            logs
+            kernel/build.log
+            kernel/*.rej
+            kernel-out/.config
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Upload flashable zip
+        if: ${{ ! inputs.dry_run }}
         uses: actions/upload-artifact@v4
         with:
           name: chimera-mk6-${{ github.run_number }}
@@ -482,43 +382,19 @@ PYEOF
           if-no-files-found: error
           retention-days: 30
 
-      - name: Upload build log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-log-${{ github.run_number }}
-          path: kernel/build.log
-          retention-days: 7
-
       - name: Create GitHub Release
-        if: ${{ inputs.do_release }}
+        if: ${{ ! inputs.dry_run && inputs.do_release }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: chimera-mk6-${{ github.run_number }}
           name: "Project Chimera MK6 — Lineage 23.2 Build #${{ github.run_number }}"
           body: |
-            ## Project Chimera MK6 — Exynos 9810 / star2lte
-            Base: Project_Chimera @ chimera-mk6 (UV + BT hardening included)
+            Dry-run guardrails passed, kernel built, and package artifact was produced.
 
-            ### Integrated
-            - KernelSU Next (gavdoc38 fork, manual hooks for Samsung 4.9 BSP)
-            - SUSFS (safe config — no boot panic on LOS 23.2 Android 16 QPR2)
-            - BPF preserved (required for Android 16)
-            - SchedUtil: UP=500µs, DOWN=2000µs
-            - Camera ION heap: 576MB (face auth for banking)
-            - CMA: 768MB
-            - CPU idle tuned for deep sleep
-
-            ### SUSFS config note
-            SUS_MOUNT and SPOOF_UNAME are intentionally disabled.
-            These cause AVC boot panic on Android 16 QPR2 before
-            SELinux policy is fully loaded. All other SUSFS features
-            remain active for banking app compatibility.
-
-            ### Flash order
-            1. Flash Lineage 23.2 + its recovery
-            2. Sideload this zip via recovery
-            3. Install KernelSU Next manager APK
-            4. Install SUSFS module from KSU Manager
-            5. Reboot
+            Review uploaded logs before flashing:
+            - toolchain.log
+            - preflight.log
+            - patch-stat.log
+            - final.config
+            - build.log
           files: chimera-*.zip
