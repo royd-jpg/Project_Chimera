@@ -33,12 +33,11 @@ jobs:
       KERNEL_DIR:    "kernel"
       OUT_DIR:       "kernel-out"
       LOG_DIR:       "logs"
-      # Pinned asset — not "latest" to avoid mutable toolchain
       NEUTRON_URL:   "https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/10032024/neutron-clang-10032024.tar.zst"
       NEUTRON_KEY:   "neutron-clang-10032024-pinned-v1"
 
     steps:
-      # ── 0. Workspace ─────────────────────────────────────────────────────
+      # ── 0. Workspace ──────────────────────────────────────────────────────
       - name: Prepare workspace
         run: |
           set -Eeuo pipefail
@@ -56,7 +55,7 @@ jobs:
             gcc-aarch64-linux-gnu \
             gcc-arm-linux-gnueabi
 
-      # ── 2. Neutron Clang (pinned, not "latest") ───────────────────────────
+      # ── 2. Neutron Clang (pinned) ─────────────────────────────────────────
       - name: Cache Neutron Clang
         id: cache-neutron
         uses: actions/cache@v4
@@ -91,19 +90,17 @@ jobs:
         run: |
           set -Eeuo pipefail
           git clone --depth=1 -b "$SUSFS_BRANCH" "$SUSFS_REPO" susfs4ksu
-          # Verify required patch and source files exist
           test -f susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.9.patch
           test -f susfs4ksu/kernel_patches/fs/susfs.c
           test -f susfs4ksu/kernel_patches/include/linux/susfs.h
           test -f susfs4ksu/kernel_patches/include/linux/susfs_def.h
           git -C susfs4ksu rev-parse HEAD | tee "$LOG_DIR/susfs-revision.log"
 
-      # ── 4. Preflight — detect existing integration ─────────────────────────
+      # ── 4. Preflight — detect existing integration ────────────────────────
       - name: Preflight tree state
         working-directory: kernel
         run: |
           set -Eeuo pipefail
-
           echo "=== git status ===" | tee "../$LOG_DIR/preflight.log"
           git status --short | tee -a "../$LOG_DIR/preflight.log"
 
@@ -123,55 +120,34 @@ jobs:
           echo "ALREADY_PATCHED=$ALREADY_PATCHED" | tee -a "../$LOG_DIR/preflight.log"
 
           if [[ "$ALREADY_PATCHED" == "true" && "${{ inputs.force_repatch }}" != "true" ]]; then
-            echo ""
-            echo "INFO: KSU/SUSFS markers already present in chimera-mk6 tree."
-            echo "INFO: Skipping re-integration (force_repatch=false)."
-            echo "INFO: This is expected — the MK6 branch may already include these."
+            echo "INFO: KSU/SUSFS markers already present — skipping re-integration."
             echo "SKIP_INTEGRATION=true" >> "$GITHUB_ENV"
           else
             echo "SKIP_INTEGRATION=false" >> "$GITHUB_ENV"
           fi
 
       # ── 4b. Restore KernelSU driver symlink (unconditional) ──────────────
-      # The chimera-mk6 branch already contains the Kconfig reference
-      #   source "drivers/kernelsu/Kconfig"
-      # but KernelSU-Next itself is never committed to the kernel repo —
-      # it must always be cloned fresh and the symlink recreated.
-      # When SKIP_INTEGRATION=true the integration steps below are all
-      # skipped, so without this step kconfig blows up with
-      #   "can't open file drivers/kernelsu/Kconfig"
       - name: Restore KernelSU driver symlink
         working-directory: kernel
         run: |
           set -Eeuo pipefail
-
-          # Only act when the Kconfig reference actually exists in the tree
           if ! grep -q 'drivers/kernelsu/Kconfig' drivers/Kconfig; then
-            echo "No drivers/kernelsu/Kconfig reference found — nothing to restore."
+            echo "No drivers/kernelsu/Kconfig reference — nothing to restore."
             exit 0
           fi
-
-          # Use -f on the TARGET file, not -L/-d on the symlink itself.
-          # [ -L ] returns true for DANGLING symlinks (target missing), causing
-          # a false "already present" skip and then a kconfig open failure.
           if [ -f drivers/kernelsu/Kconfig ]; then
             echo "drivers/kernelsu symlink is valid — restore skipped."
             exit 0
           fi
-
-          # Remove dangling symlink or stale directory before re-creating
           rm -rf drivers/kernelsu
-
           echo "Kconfig reference found but target missing — cloning KernelSU-Next..."
           git clone --depth=1 "$KSU_REPO" KernelSU-Next
           test -f KernelSU-Next/kernel/Kconfig || {
-            echo "ERROR: KernelSU-Next/kernel/Kconfig missing after clone"
-            exit 1
+            echo "ERROR: KernelSU-Next/kernel/Kconfig missing after clone"; exit 1
           }
           ln -sf ../KernelSU-Next/kernel drivers/kernelsu
           test -f drivers/kernelsu/Kconfig || {
-            echo "ERROR: drivers/kernelsu/Kconfig still missing after symlink — check path"
-            exit 1
+            echo "ERROR: drivers/kernelsu/Kconfig still missing after symlink"; exit 1
           }
           echo "drivers/kernelsu symlink restored." | tee "../$LOG_DIR/ksu-symlink-restore.log"
 
@@ -181,42 +157,33 @@ jobs:
         working-directory: kernel
         run: |
           set -Eeuo pipefail
-
-          # Clean stale state
           rm -rf KernelSU-Next drivers/kernelsu
           git rm -r --cached KernelSU-Next 2>/dev/null || true
           rm -rf .git/modules/KernelSU-Next
-
-          # Remove stale Kconfig refs
           sed -i '/source "drivers\/kernelsu\/Kconfig"/d' drivers/Kconfig
           sed -i '/kernelsu\/Kconfig/d' drivers/Kconfig
           sed -i '/susfs\/Kconfig/d' fs/Kconfig
 
-          # Clone
           git clone --depth=1 "$KSU_REPO" KernelSU-Next
-          test -f KernelSU-Next/kernel/Kconfig || { echo "ERROR: KernelSU-Next/kernel/Kconfig missing"; exit 1; }
-
-          # Verify hook symbols exist in this fork
+          test -f KernelSU-Next/kernel/Kconfig || {
+            echo "ERROR: KernelSU-Next/kernel/Kconfig missing"; exit 1
+          }
           if ! grep -Rqs 'ksu_handle_faccessat\|ksu_handle_execveat' KernelSU-Next/kernel; then
-            echo "ERROR: ksu_handle_faccessat not found in gavdoc38/KernelSU-Next — wrong fork?"
-            exit 1
+            echo "ERROR: hook symbols not found in gavdoc38/KernelSU-Next"; exit 1
           fi
           grep -Rsn 'ksu_handle_faccessat\|ksu_handle_execveat' KernelSU-Next/kernel \
             | tee "../$LOG_DIR/ksu-hooks.log"
 
-          # Wire symlink
           ln -s ../KernelSU-Next/kernel drivers/kernelsu
 
-          # Add to Kconfig cleanly
           if ! grep -q '^endmenu' drivers/Kconfig; then
             printf '\nendmenu\n' >> drivers/Kconfig
           fi
           sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
-
-          # Verify — exactly one reference
           COUNT=$(grep -c 'drivers/kernelsu/Kconfig' drivers/Kconfig || true)
-          [[ "$COUNT" -eq 1 ]] || { echo "ERROR: Expected 1 KSU Kconfig entry, found $COUNT"; exit 1; }
-
+          [[ "$COUNT" -eq 1 ]] || {
+            echo "ERROR: Expected 1 KSU Kconfig entry, found $COUNT"; exit 1
+          }
           echo "KernelSU Next (gavdoc38) integrated." | tee "../$LOG_DIR/ksu-integrate.log"
 
       # ── 6. SUSFS patch ────────────────────────────────────────────────────
@@ -225,369 +192,362 @@ jobs:
         working-directory: kernel
         run: |
           set -Eeuo pipefail
-
           PATCH="$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.9.patch"
-
-          # Apply — rejects are expected for Samsung BSP divergence
           set +e
           git apply --reject --whitespace=fix "$PATCH" > "../$LOG_DIR/susfs-apply.log" 2>&1
           APPLY_RC=$?
           set -e
-
-          # Collect reject list
           find . -name '*.rej' -print | sort > "../$LOG_DIR/susfs-rejects.log" || true
-
           echo "Apply exit code: $APPLY_RC" | tee -a "../$LOG_DIR/susfs-apply.log"
-          echo "Reject count: $(wc -l < ../logs/susfs-rejects.log)" \
+          echo "Reject count: $(wc -l < ../$LOG_DIR/susfs-rejects.log)" \
             | tee -a "../$LOG_DIR/susfs-apply.log"
 
-          # Copy actual SUSFS source files (required regardless of patch success)
-          install -m 0644 "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/fs/susfs.c" fs/susfs.c
-          install -m 0644 "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/fs/sus_su.c" fs/sus_su.c
-          install -m 0644 "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/include/linux/susfs.h" \
-            include/linux/susfs.h
-          install -m 0644 "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/include/linux/susfs_def.h" \
-            include/linux/susfs_def.h
-          install -m 0644 "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/include/linux/sus_su.h" \
-            include/linux/sus_su.h
-
-          # Wire Makefile
+          install -m 0644 "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/fs/susfs.c"    fs/susfs.c
+          install -m 0644 "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/fs/sus_su.c"   fs/sus_su.c
+          install -m 0644 "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/include/linux/susfs.h"     include/linux/susfs.h
+          install -m 0644 "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/include/linux/susfs_def.h" include/linux/susfs_def.h
+          install -m 0644 "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/include/linux/sus_su.h"    include/linux/sus_su.h
           grep -q 'susfs.o' fs/Makefile || echo 'obj-$(CONFIG_KSU_SUSFS) += susfs.o' >> fs/Makefile
-
           echo "SUSFS source files installed."
 
       # ── 7. Fix SUSFS rejected hunks ───────────────────────────────────────
-      # Large Python written to a temp file to avoid YAML literal-block
-      # indentation conflicts with inline heredoc content at column 0.
       - name: Fix SUSFS rejected hunks
         if: env.SKIP_INTEGRATION == 'false'
         working-directory: kernel
+        env:
+          FIX_SUSFS_PY: |
+            import os, re, sys
+
+            def read(p):
+                with open(p, encoding='utf-8', errors='replace') as f:
+                    return f.read()
+
+            def write(p, c):
+                with open(p, 'w', encoding='utf-8') as f:
+                    f.write(c)
+                print(f"  Fixed: {p}")
+
+            def add_include_after(content, anchor, new_block):
+                first = new_block.strip().split('\n')[0].strip()
+                if first in content:
+                    return content
+                pos = content.rfind(anchor)
+                if pos == -1:
+                    print(f"  WARN: anchor not found: {anchor!r[:60]}")
+                    return content
+                end = content.index('\n', pos) + 1
+                return content[:end] + new_block + '\n' + content[end:]
+
+            def insert_before(content, anchor, text):
+                if text.strip().split('\n')[0].strip() in content:
+                    return content
+                pos = content.find(anchor)
+                if pos == -1:
+                    print(f"  WARN: anchor not found: {anchor!r[:60]}")
+                    return content
+                return content[:pos] + text + content[pos:]
+
+            susfs_def = read('include/linux/susfs_def.h') if os.path.exists('include/linux/susfs_def.h') else ''
+            USE_FUNCTION_API = 'susfs_is_inode_sus_path' in susfs_def
+            USE_FIELD_API    = 'INODE_STATE_SUS_PATH' in susfs_def
+            print(f"SUSFS API: function_style={USE_FUNCTION_API} field_style={USE_FIELD_API}")
+
+            print("fs/namei.c...")
+            c = read('fs/namei.c')
+            c = add_include_after(c,
+                '#include <asm/uaccess.h>',
+                '#if defined(CONFIG_KSU_SUSFS_SUS_PATH) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)\n'
+                '#include <linux/susfs_def.h>\n'
+                '#endif')
+            if USE_FUNCTION_API:
+                sus_hook = (
+                    '#ifdef CONFIG_KSU_SUSFS_SUS_PATH\n'
+                    '\tif (!IS_ERR(dentry) && dentry->d_inode &&\n'
+                    '\t\tsusfs_is_inode_sus_path(dentry->d_inode)) {\n'
+                    '\t\tdput(dentry);\n'
+                    '\t\treturn ERR_PTR(-ENOENT);\n'
+                    '\t}\n'
+                    '#endif\n'
+                )
+            elif USE_FIELD_API:
+                sus_hook = (
+                    '#ifdef CONFIG_KSU_SUSFS_SUS_PATH\n'
+                    '\tif (!IS_ERR(dentry) && dentry->d_inode &&\n'
+                    '\t\tunlikely(dentry->d_inode->i_state & INODE_STATE_SUS_PATH) &&\n'
+                    '\t\tlikely(current->susfs_task_state & TASK_STRUCT_NON_ROOT_USER_APP_PROC)) {\n'
+                    '\t\tdput(dentry);\n'
+                    '\t\treturn ERR_PTR(-ENOENT);\n'
+                    '\t}\n'
+                    '#endif\n'
+                )
+            else:
+                sus_hook = ''
+                print("  WARN: Could not determine SUSFS API style for namei.c hook")
+            if sus_hook:
+                c = insert_before(c, '\nout:\n\tinode_unlock_shared(inode);', sus_hook)
+            write('fs/namei.c', c)
+
+            print("fs/namespace.c...")
+            c = read('fs/namespace.c')
+            c = add_include_after(c,
+                '#include <linux/task_work.h>',
+                '#if defined(CONFIG_KSU_SUSFS_SUS_MOUNT) || defined(CONFIG_KSU_SUSFS_TRY_UMOUNT)\n'
+                '#include <linux/susfs_def.h>\n'
+                '#endif')
+            write('fs/namespace.c', c)
+
+            print("fs/stat.c...")
+            c = read('fs/stat.c')
+            c = add_include_after(c,
+                '#include <linux/pagemap.h>',
+                '#if defined(CONFIG_KSU_SUSFS_SUS_KSTAT) || defined(CONFIG_KSU_SUSFS_SUS_MOUNT)\n'
+                '#include <linux/susfs_def.h>\n'
+                '#endif\n'
+                '#ifdef CONFIG_KSU_SUSFS_SUS_KSTAT\n'
+                'extern void susfs_sus_ino_for_generic_fillattr(unsigned long ino, struct kstat *stat);\n'
+                '#endif')
+            if USE_FIELD_API:
+                c = insert_before(c,
+                    '\tstat->dev = inode->i_sb->s_dev;\n\tstat->ino = inode->i_ino;',
+                    '#ifdef CONFIG_KSU_SUSFS_SUS_KSTAT\n'
+                    '\tif (likely(current->susfs_task_state & TASK_STRUCT_NON_ROOT_USER_APP_PROC) &&\n'
+                    '\t\tunlikely(inode->i_state & INODE_STATE_SUS_KSTAT)) {\n'
+                    '\t\tsusfs_sus_ino_for_generic_fillattr(inode->i_ino, stat);\n'
+                    '\t\tstat->mode  = inode->i_mode;\n'
+                    '\t\tstat->rdev  = inode->i_rdev;\n'
+                    '\t\tstat->uid   = inode->i_uid;\n'
+                    '\t\tstat->gid   = inode->i_gid;\n'
+                    '\t\treturn;\n'
+                    '\t}\n'
+                    '#endif\n')
+            write('fs/stat.c', c)
+
+            print("include/linux/mount.h...")
+            c = read('include/linux/mount.h')
+            if 'susfs_mnt_id_backup' not in c:
+                c = c.replace(
+                    '\tint mnt_flags;\n\tvoid *data;\n};',
+                    '\tint mnt_flags;\n\tvoid *data;\n'
+                    '#ifdef CONFIG_KSU_SUSFS\n\tu64 susfs_mnt_id_backup;\n#endif\n};', 1)
+            write('include/linux/mount.h', c)
+
+            print("include/linux/sched.h...")
+            c = read('include/linux/sched.h')
+            if 'susfs_task_state' not in c:
+                c = c.replace(
+                    '\tstruct thread_struct thread;',
+                    '#ifdef CONFIG_KSU_SUSFS\n\tu32 susfs_task_state;\n#endif\n'
+                    '\tstruct thread_struct thread;', 1)
+            write('include/linux/sched.h', c)
+
+            print("fs/proc_namespace.c...")
+            c = read('fs/proc_namespace.c')
+            c = add_include_after(c, '#include "internal.h"',
+                '#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n'
+                '#include <linux/susfs_def.h>\n'
+                'extern int susfs_sus_mnt_for_show_mountinfo(struct mount *r);\n'
+                '#endif')
+            write('fs/proc_namespace.c', c)
+
+            print("fs/readdir.c...")
+            c = read('fs/readdir.c')
+            c = add_include_after(c, '#include <linux/unistd.h>',
+                '#ifdef CONFIG_KSU_SUSFS_SUS_PATH\n'
+                '#include <linux/susfs_def.h>\n'
+                'extern int susfs_sus_ino_for_filldir64(unsigned long ino);\n'
+                '#endif')
+            write('fs/readdir.c', c)
+
+            print("fs/proc/task_mmu.c...")
+            c = read('fs/proc/task_mmu.c')
+            c = add_include_after(c, '#include <linux/mm_inline.h>',
+                '#ifdef CONFIG_KSU_SUSFS_SUS_MAPS\n'
+                '#include <linux/susfs_def.h>\n'
+                'extern int susfs_sus_ino_for_show_map_vma(unsigned long ino);\n'
+                '#endif')
+            write('fs/proc/task_mmu.c', c)
+
+            print("fs/proc/cmdline.c...")
+            c = read('fs/proc/cmdline.c')
+            if 'susfs_spoof_cmdline' not in c and 'SPOOF_CMDLINE' not in c:
+                c = insert_before(c, 'static int cmdline_proc_show',
+                    '#ifdef CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG\n'
+                    'extern void susfs_spoof_cmdline(struct seq_file *m);\n'
+                    '#endif\n')
+            write('fs/proc/cmdline.c', c)
+
+            print("\nSUSFS rejected-hunk fixup complete.")
         run: |
           set -Eeuo pipefail
-          cat > /tmp/fix_susfs_hunks.py << 'PYEOF'
-          import os, re, sys
-
-          def read(p):
-              with open(p, encoding='utf-8', errors='replace') as f:
-                  return f.read()
-
-          def write(p, c):
-              with open(p, 'w', encoding='utf-8') as f:
-                  f.write(c)
-              print("  Fixed: " + p)
-
-          def add_include_after(content, anchor, new_block):
-              # Idempotent: check first line of new_block
-              first = new_block.strip().split('\n')[0].strip()
-              if first in content:
-                  return content
-              pos = content.rfind(anchor)
-              if pos == -1:
-                  print("  WARN: anchor not found: " + repr(anchor[:60]))
-                  return content
-              end = content.index('\n', pos) + 1
-              return content[:end] + new_block + '\n' + content[end:]
-
-          def insert_before(content, anchor, text):
-              if text.strip().split('\n')[0].strip() in content:
-                  return content
-              pos = content.find(anchor)
-              if pos == -1:
-                  print("  WARN: anchor not found: " + repr(anchor[:60]))
-                  return content
-              return content[:pos] + text + content[pos:]
-
-          def insert_after_str(content, anchor, text):
-              if text.strip().split('\n')[0].strip() in content:
-                  return content
-              pos = content.find(anchor)
-              if pos == -1:
-                  print("  WARN: anchor not found: " + repr(anchor[:60]))
-                  return content
-              end = pos + len(anchor)
-              return content[:end] + text + content[end:]
-
-          # Detect SUSFS API style from copied headers
-          susfs_def = read('include/linux/susfs_def.h') if os.path.exists('include/linux/susfs_def.h') else ''
-          USE_FUNCTION_API = 'susfs_is_inode_sus_path' in susfs_def
-          USE_FIELD_API    = 'INODE_STATE_SUS_PATH' in susfs_def
-
-          print("SUSFS API: function_style=" + str(USE_FUNCTION_API) + " field_style=" + str(USE_FIELD_API))
-
-          # ── fs/namei.c ─────────────────────────────────────────────────
-          print("fs/namei.c...")
-          c = read('fs/namei.c')
-          c = add_include_after(c,
-              '#include <asm/uaccess.h>',
-              '#if defined(CONFIG_KSU_SUSFS_SUS_PATH) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)\n'
-              '#include <linux/susfs_def.h>\n'
-              '#endif')
-          # Choose hook style based on detected API
-          if USE_FUNCTION_API:
-              sus_hook = (
-                  '#ifdef CONFIG_KSU_SUSFS_SUS_PATH\n'
-                  '\tif (!IS_ERR(dentry) && dentry->d_inode &&\n'
-                  '\t\tsusfs_is_inode_sus_path(dentry->d_inode)) {\n'
-                  '\t\tdput(dentry);\n'
-                  '\t\treturn ERR_PTR(-ENOENT);\n'
-                  '\t}\n'
-                  '#endif\n'
-              )
-          elif USE_FIELD_API:
-              sus_hook = (
-                  '#ifdef CONFIG_KSU_SUSFS_SUS_PATH\n'
-                  '\tif (!IS_ERR(dentry) && dentry->d_inode &&\n'
-                  '\t\tunlikely(dentry->d_inode->i_state & INODE_STATE_SUS_PATH) &&\n'
-                  '\t\tlikely(current->susfs_task_state & TASK_STRUCT_NON_ROOT_USER_APP_PROC)) {\n'
-                  '\t\tdput(dentry);\n'
-                  '\t\treturn ERR_PTR(-ENOENT);\n'
-                  '\t}\n'
-                  '#endif\n'
-              )
-          else:
-              sus_hook = ''
-              print("  WARN: Could not determine SUSFS API style for namei.c hook")
-          if sus_hook:
-              c = insert_before(c, '\nout:\n\tinode_unlock_shared(inode);', sus_hook)
-          write('fs/namei.c', c)
-
-          # ── fs/namespace.c ─────────────────────────────────────────────
-          print("fs/namespace.c...")
-          c = read('fs/namespace.c')
-          c = add_include_after(c,
-              '#include <linux/task_work.h>',
-              '#if defined(CONFIG_KSU_SUSFS_SUS_MOUNT) || defined(CONFIG_KSU_SUSFS_TRY_UMOUNT)\n'
-              '#include <linux/susfs_def.h>\n'
-              '#endif')
-          write('fs/namespace.c', c)
-
-          # ── fs/stat.c ──────────────────────────────────────────────────
-          print("fs/stat.c...")
-          c = read('fs/stat.c')
-          c = add_include_after(c,
-              '#include <linux/pagemap.h>',
-              '#if defined(CONFIG_KSU_SUSFS_SUS_KSTAT) || defined(CONFIG_KSU_SUSFS_SUS_MOUNT)\n'
-              '#include <linux/susfs_def.h>\n'
-              '#endif\n'
-              '#ifdef CONFIG_KSU_SUSFS_SUS_KSTAT\n'
-              'extern void susfs_sus_ino_for_generic_fillattr(unsigned long ino, struct kstat *stat);\n'
-              '#endif')
-          if USE_FIELD_API:
-              c = insert_before(c,
-                  '\tstat->dev = inode->i_sb->s_dev;\n\tstat->ino = inode->i_ino;',
-                  '#ifdef CONFIG_KSU_SUSFS_SUS_KSTAT\n'
-                  '\tif (likely(current->susfs_task_state & TASK_STRUCT_NON_ROOT_USER_APP_PROC) &&\n'
-                  '\t\tunlikely(inode->i_state & INODE_STATE_SUS_KSTAT)) {\n'
-                  '\t\tsusfs_sus_ino_for_generic_fillattr(inode->i_ino, stat);\n'
-                  '\t\tstat->mode  = inode->i_mode;\n'
-                  '\t\tstat->rdev  = inode->i_rdev;\n'
-                  '\t\tstat->uid   = inode->i_uid;\n'
-                  '\t\tstat->gid   = inode->i_gid;\n'
-                  '\t\treturn;\n'
-                  '\t}\n'
-                  '#endif\n')
-          write('fs/stat.c', c)
-
-          # ── include/linux/mount.h ──────────────────────────────────────
-          print("include/linux/mount.h...")
-          c = read('include/linux/mount.h')
-          if 'susfs_mnt_id_backup' not in c:
-              c = c.replace(
-                  '\tint mnt_flags;\n\tvoid *data;\n};',
-                  '\tint mnt_flags;\n\tvoid *data;\n'
-                  '#ifdef CONFIG_KSU_SUSFS\n\tu64 susfs_mnt_id_backup;\n#endif\n};',
-                  1)
-          write('include/linux/mount.h', c)
-
-          # ── include/linux/sched.h ──────────────────────────────────────
-          print("include/linux/sched.h...")
-          c = read('include/linux/sched.h')
-          if 'susfs_task_state' not in c:
-              c = c.replace(
-                  '\tstruct thread_struct thread;',
-                  '#ifdef CONFIG_KSU_SUSFS\n\tu64 susfs_task_state;\n#endif\n'
-                  '\tstruct thread_struct thread;',
-                  1)
-          write('include/linux/sched.h', c)
-
-          # ── fs/proc_namespace.c ────────────────────────────────────────
-          print("fs/proc_namespace.c...")
-          c = read('fs/proc_namespace.c')
-          c = add_include_after(c,
-              '#include "internal.h"',
-              '#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n'
-              '#include <linux/susfs_def.h>\n'
-              'extern int susfs_sus_mnt_for_show_mountinfo(struct mount *r);\n'
-              '#endif')
-          write('fs/proc_namespace.c', c)
-
-          # ── fs/readdir.c ───────────────────────────────────────────────
-          print("fs/readdir.c...")
-          c = read('fs/readdir.c')
-          c = add_include_after(c,
-              '#include <linux/unistd.h>',
-              '#ifdef CONFIG_KSU_SUSFS_SUS_PATH\n'
-              '#include <linux/susfs_def.h>\n'
-              'extern int susfs_sus_ino_for_filldir64(unsigned long ino);\n'
-              '#endif')
-          write('fs/readdir.c', c)
-
-          # ── fs/proc/task_mmu.c ─────────────────────────────────────────
-          print("fs/proc/task_mmu.c...")
-          c = read('fs/proc/task_mmu.c')
-          c = add_include_after(c,
-              '#include <linux/mm_inline.h>',
-              '#ifdef CONFIG_KSU_SUSFS_SUS_MAPS\n'
-              '#include <linux/susfs_def.h>\n'
-              'extern int susfs_sus_ino_for_show_map_vma(unsigned long ino);\n'
-              '#endif')
-          write('fs/proc/task_mmu.c', c)
-
-          # ── fs/proc/cmdline.c ──────────────────────────────────────────
-          print("fs/proc/cmdline.c...")
-          c = read('fs/proc/cmdline.c')
-          # Symbol renamed in SUSFS v2: SPOOF_CMDLINE → SPOOF_CMDLINE_OR_BOOTCONFIG
-          if 'susfs_spoof_cmdline' not in c and 'SPOOF_CMDLINE' not in c:
-              c = insert_before(c,
-                  'static int cmdline_proc_show',
-                  '#ifdef CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG\n'
-                  'extern void susfs_spoof_cmdline(struct seq_file *m);\n'
-                  '#endif\n')
-          write('fs/proc/cmdline.c', c)
-
-          print("\nSUSFS rejected-hunk fixup complete.")
-          PYEOF
-          python3 /tmp/fix_susfs_hunks.py
+          printenv FIX_SUSFS_PY > fix_susfs.py
+          python3 fix_susfs.py
+          rm fix_susfs.py
 
       # ── 8. Manual KSU hooks (Samsung 4.9 BSP) ────────────────────────────
-      # Python written to a temp file to avoid YAML literal-block indentation
-      # conflicts. Determines exec hook prototype from cloned KSU source.
       - name: Inject manual KSU hooks
         if: env.SKIP_INTEGRATION == 'false'
         working-directory: kernel
+        env:
+          KSU_HOOKS_PY: |
+            import re, os
+
+            def read(p):
+                with open(p, encoding='utf-8', errors='replace') as f:
+                    return f.read()
+
+            def write(p, c):
+                with open(p, 'w', encoding='utf-8') as f:
+                    f.write(c)
+                print(f"  Patched: {p}")
+
+            exec_c = read('fs/exec.c')
+            if 'ksu_handle_execveat_sucompat' in exec_c:
+                print("fs/exec.c already has KSU hook — skipping")
+            else:
+                include_end = 0
+                for m in re.finditer(r'^#include\s+[<"]', exec_c, re.MULTILINE):
+                    include_end = m.end()
+                nl = exec_c.index('\n', include_end)
+                if 'do_execveat_common' in exec_c:
+                    extern_decl = (
+                        '\nextern void ksu_handle_execveat_sucompat('
+                        'int *fd, struct filename **filename_ptr, '
+                        'void *argv, void *envp, int *flags);\n'
+                    )
+                    exec_c = exec_c[:nl+1] + extern_decl + exec_c[nl+1:]
+                    hook_call = (
+                        '\tksu_handle_execveat_sucompat(&fd, (struct filename **)&filename, '
+                        '(void *)argv, (void *)envp, &flags);\n\t'
+                    )
+                    exec_c = exec_c.replace(
+                        '\tret = search_binary_handler(bprm);',
+                        hook_call + 'ret = search_binary_handler(bprm);', 1)
+                    write('fs/exec.c', exec_c)
+                else:
+                    print("WARN: do_execveat_common not found in fs/exec.c — skipping exec hook")
+
+            open_c = read('fs/open.c')
+            if 'ksu_handle_faccessat' in open_c:
+                print("fs/open.c already has KSU hook — skipping")
+            else:
+                include_end = 0
+                for m in re.finditer(r'^#include\s+[<"]', open_c, re.MULTILINE):
+                    include_end = m.end()
+                nl = open_c.index('\n', include_end)
+                extern_decl = (
+                    '\nextern int ksu_handle_faccessat('
+                    'int *dfd, const char __user **filename_user, int *mode, int *flags);\n'
+                )
+                open_c = open_c[:nl+1] + extern_decl + open_c[nl+1:]
+                pattern = r'(SYSCALL_DEFINE3\(faccessat,\s*int,\s*dfd,.*?int,\s*mode\)\s*\{)'
+                open_c = re.sub(
+                    pattern,
+                    lambda m: m.group(1) + '\n\tksu_handle_faccessat(&dfd, &filename, &mode, NULL);',
+                    open_c, count=1, flags=re.DOTALL)
+                write('fs/open.c', open_c)
+
+            print("KSU manual hooks done.")
         run: |
           set -Eeuo pipefail
-          cat > /tmp/inject_ksu_hooks.py << 'PYEOF'
-          import re, os
+          printenv KSU_HOOKS_PY > inject_ksu.py
+          python3 inject_ksu.py
+          rm inject_ksu.py
 
-          def read(p):
-              with open(p, encoding='utf-8', errors='replace') as f:
-                  return f.read()
-
-          def write(p, c):
-              with open(p, 'w', encoding='utf-8') as f:
-                  f.write(c)
-              print("  Patched: " + p)
-
-          # ── Derive exec hook call site from do_execveat_common signature ─
-          # In Samsung 4.9 BSP the hook uses function params, not bprm members.
-          # do_execveat_common(int fd, struct filename *filename, ...)
-          exec_c = read('fs/exec.c')
-
-          if 'ksu_handle_execveat_sucompat' in exec_c:
-              print("fs/exec.c already has KSU hook — skipping")
-          else:
-              include_end = 0
-              for m in re.finditer(r'^#include\s+[<"]', exec_c, re.MULTILINE):
-                  include_end = m.end()
-              nl = exec_c.index('\n', include_end)
-
-              # Check for do_execveat_common to determine call style
-              if 'do_execveat_common' in exec_c:
-                  # Use function-parameter style (Samsung 4.9 BSP)
-                  extern_decl = (
-                      '\nextern void ksu_handle_execveat_sucompat('
-                      'int *fd, struct filename **filename_ptr, '
-                      'void *argv, void *envp, int *flags);\n'
-                  )
-                  exec_c = exec_c[:nl+1] + extern_decl + exec_c[nl+1:]
-
-                  # Insert before search_binary_handler using local scope vars
-                  # (fd and filename are params of do_execveat_common, not bprm)
-                  hook_call = (
-                      '\tksu_handle_execveat_sucompat(&fd, (struct filename **)&filename, '
-                      '(void *)argv, (void *)envp, &flags);\n\t'
-                  )
-                  exec_c = exec_c.replace(
-                      '\tret = search_binary_handler(bprm);',
-                      hook_call + 'ret = search_binary_handler(bprm);',
-                      1
-                  )
-                  write('fs/exec.c', exec_c)
-              else:
-                  print("WARN: do_execveat_common not found in fs/exec.c — skipping exec hook")
-
-          # ── faccessat hook ─────────────────────────────────────────────
-          open_c = read('fs/open.c')
-
-          if 'ksu_handle_faccessat' in open_c:
-              print("fs/open.c already has KSU hook — skipping")
-          else:
-              include_end = 0
-              for m in re.finditer(r'^#include\s+[<"]', open_c, re.MULTILINE):
-                  include_end = m.end()
-              nl = open_c.index('\n', include_end)
-
-              extern_decl = (
-                  '\nextern int ksu_handle_faccessat('
-                  'int *dfd, const char __user **filename_user, int *mode, int *flags);\n'
-              )
-              open_c = open_c[:nl+1] + extern_decl + open_c[nl+1:]
-
-              pattern = r'(SYSCALL_DEFINE3\(faccessat,\s*int,\s*dfd,.*?int,\s*mode\)\s*\{)'
-              open_c = re.sub(
-                  pattern,
-                  lambda m: m.group(1) + '\n\tksu_handle_faccessat(&dfd, &filename, &mode, NULL);',
-                  open_c, count=1, flags=re.DOTALL
-              )
-              write('fs/open.c', open_c)
-
-          print("KSU manual hooks done.")
-          PYEOF
-          python3 /tmp/inject_ksu_hooks.py
-
-      # ── 8b. KernelSU-Next Samsung 4.9 BSP compat ─────────────────────────
-      # syscall_fn_t was introduced in kernel 5.4 (linux/syscalls.h).
-      # Samsung 4.9 BSP does not define it, causing a compile error in
-      # drivers/kernelsu/core/init.c.
-      # We patch the actual cloned file directly — NOT through the
-      # drivers/kernelsu symlink, whose [ -f ] resolution was unreliable.
-      # KernelSU-Next is always cloned to kernel/KernelSU-Next/ regardless
-      # of whether SKIP_INTEGRATION is true or false.
-      - name: Patch KernelSU-Next for Samsung 4.9 BSP compat
+      # ── 8b. Inject syscall_fn_t typedef for Samsung 4.9 BSP ──────────────
+      - name: Patch syscall_fn_t for Samsung 4.9 BSP
         working-directory: kernel
+        env:
+          PATCH_SYSCALL_PY: |
+            import sys, os
+
+            CANDIDATES = [
+                "KernelSU-Next/kernel/hook/syscall_hook.h",
+                "drivers/kernelsu/hook/syscall_hook.h",
+            ]
+
+            target = None
+            for c in CANDIDATES:
+                if os.path.isfile(c):
+                    target = os.path.realpath(c)
+                    print(f"  Found: {c}  →  real: {target}")
+                    break
+
+            if target is None:
+                print("ERROR: syscall_hook.h not found at any candidate path.")
+                for c in CANDIDATES:
+                    print(f"  {c}: exists={os.path.exists(c)}, isfile={os.path.isfile(c)}, islink={os.path.islink(c)}")
+                sys.exit(1)
+
+            with open(target, encoding='utf-8', errors='replace') as f:
+                original = f.read()
+
+            SENTINEL = '__KSU_SYSCALL_FN_T_4_9_COMPAT'
+            if SENTINEL in original:
+                print(f"  Sentinel already present — patch already applied, skipping.")
+                sys.exit(0)
+
+            compat_block = """\
+            /*
+             * Samsung 4.9 BSP compat: syscall_fn_t is absent from kernel 4.9 headers.
+             * Introduced upstream in kernel 5.10 (include/linux/syscalls.h).
+             * KernelSU-Next hook/syscall_hook.h references it at lines 9 and 40.
+             *
+             * Sentinel: __KSU_SYSCALL_FN_T_4_9_COMPAT
+             * Applied by: .github/workflows/build.yml  step "Patch syscall_fn_t for Samsung 4.9 BSP"
+             */
+            #ifndef __KSU_SYSCALL_FN_T_4_9_COMPAT
+            #define __KSU_SYSCALL_FN_T_4_9_COMPAT
+            #ifndef syscall_fn_t
+            typedef asmlinkage long (*syscall_fn_t)(void);
+            #endif
+            #endif /* __KSU_SYSCALL_FN_T_4_9_COMPAT */
+
+            """
+
+            patched = compat_block + original
+            with open(target, 'w', encoding='utf-8') as f:
+                f.write(patched)
+
+            with open(target, encoding='utf-8') as f:
+                verify = f.read()
+
+            if SENTINEL not in verify:
+                print("ERROR: sentinel not in file after write — filesystem error?")
+                sys.exit(1)
+            if 'typedef asmlinkage long (*syscall_fn_t)(void)' not in verify:
+                print("ERROR: typedef not in file after write")
+                sys.exit(1)
+
+            print(f"  syscall_fn_t compat typedef injected: {target}")
+            print("  File head (first 18 lines):")
+            for i, line in enumerate(verify.splitlines()[:18], 1):
+                print(f"    {i:2}: {line}")
         run: |
           set -Eeuo pipefail
+          printenv PATCH_SYSCALL_PY > patch_syscall.py
+          python3 patch_syscall.py
+          rm patch_syscall.py
 
-          HOOK_DIRECT="KernelSU-Next/kernel/hook/syscall_hook.h"
+          HOOK_REAL=""
+          for c in "KernelSU-Next/kernel/hook/syscall_hook.h" "drivers/kernelsu/hook/syscall_hook.h"; do
+            if [ -f "$c" ]; then
+              HOOK_REAL=$(realpath "$c")
+              break
+            fi
+          done
 
-          if [ ! -f "$HOOK_DIRECT" ]; then
-            echo "WARN: $HOOK_DIRECT not found — KernelSU-Next not cloned yet?"
-            ls -la KernelSU-Next/kernel/ 2>/dev/null || echo "KernelSU-Next/kernel/ missing"
+          if [[ -n "$HOOK_REAL" ]]; then
+            grep -q '__KSU_SYSCALL_FN_T_4_9_COMPAT' "$HOOK_REAL" || {
+              echo "ERROR: sentinel NOT found in $HOOK_REAL after patch — aborting"
+              head -20 "$HOOK_REAL"
+              exit 1
+            }
+            echo "Belt-and-suspenders: sentinel confirmed in $HOOK_REAL"
+            grep 'syscall_fn_t' "$HOOK_REAL" | head -5
+          else
+            echo "ERROR: cannot locate syscall_hook.h for post-patch verification"
             exit 1
           fi
-
-          # Idempotent: skip only if THIS FILE already has the typedef
-          if grep -q 'typedef.*syscall_fn_t' "$HOOK_DIRECT"; then
-            echo "syscall_fn_t typedef already present — skipping"
-            exit 0
-          fi
-
-          # Prepend the missing typedef then the original file into a temp,
-          # then copy back to the actual clone (no symlink involved)
-          {
-            printf '/* Samsung 4.9 BSP compat: syscall_fn_t not in 4.9 headers */\n'
-            printf '#ifndef __KSU_SYSCALL_FN_T_COMPAT\n'
-            printf '#define __KSU_SYSCALL_FN_T_COMPAT\n'
-            printf 'typedef asmlinkage long (*syscall_fn_t)(const struct pt_regs *regs);\n'
-            printf '#endif\n\n'
-            cat "$HOOK_DIRECT"
-          } > /tmp/syscall_hook_patched.h
-
-          cp /tmp/syscall_hook_patched.h "$HOOK_DIRECT"
-
-          echo "syscall_fn_t compat typedef applied to $HOOK_DIRECT"
-          head -8 "$HOOK_DIRECT" | tee "../$LOG_DIR/ksu-compat-patch.log"
 
       # ── 9. Makefile + defconfig ───────────────────────────────────────────
       - name: Patch Makefile and defconfig
@@ -595,48 +555,38 @@ jobs:
         run: |
           set -Eeuo pipefail
 
-          # ── Clang 19 Makefile fixes ──────────────────────────────────────
+          # Clang 19 Makefile fixes
           sed -i 's/-std=gnu89/-std=gnu11 -fcommon/g' Makefile
           sed -i 's/^HOSTCFLAGS[[:space:]]*:=.*/HOSTCFLAGS   := -std=gnu11 -fcommon/' Makefile
-
-          # Warning suppressions — inserted after last -std= line
           END_LINE=$(grep -n '^\s*-std=gnu' Makefile | tail -1 | cut -d: -f1)
           if [[ -n "$END_LINE" ]]; then
             sed -i "${END_LINE}a KBUILD_CFLAGS += -Wno-address-of-packed-member -Wno-int-in-bool-context -Wno-asm-operand-widths" \
               Makefile
           fi
 
-          # ── SchedUtil constants (idempotent) ─────────────────────────────
+          cat << 'EOF' > sched_patch.h
+          /* Project Chimera: High-Response Scheduler Tunables */
+          #ifndef CHIMERA_DEFINED
+          #define CHIMERA_DEFINED
+          #define CHIMERA_UP_RATE_LIMIT   500
+          #define CHIMERA_DOWN_RATE_LIMIT 2000
+          #endif
+          EOF
+
           SCHED_FILE="kernel/sched/cpufreq_schedutil.c"
           if ! grep -q 'CHIMERA_DEFINED' "$SCHED_FILE"; then
-            cat > /tmp/sched_inject.py << 'PYEOF'
-          import sys
-          target = sys.argv[1]
-          with open(target, encoding='utf-8', errors='replace') as f:
-              content = f.read()
-          block = (
-              '/* Project Chimera: High-Response Scheduler Tunables */\n'
-              '#ifndef CHIMERA_DEFINED\n'
-              '#define CHIMERA_DEFINED\n'
-              '#define CHIMERA_UP_RATE_LIMIT   500\n'
-              '#define CHIMERA_DOWN_RATE_LIMIT 2000\n'
-              '#endif\n'
-          )
-          if 'CHIMERA_DEFINED' not in content:
-              with open(target, 'w', encoding='utf-8') as f:
-                  f.write(block + content)
-              print("SchedUtil constants injected")
-          else:
-              print("SchedUtil constants already present")
-          PYEOF
-            python3 /tmp/sched_inject.py "$SCHED_FILE"
+            cat "$SCHED_FILE" >> sched_patch.h
+            mv sched_patch.h "$SCHED_FILE"
+            echo "SchedUtil constants injected"
+          else
+            rm sched_patch.h
+            echo "SchedUtil constants already present"
           fi
 
-          # ── Defconfig normalization ───────────────────────────────────────
+          # Defconfig normalization
           F="arch/arm64/configs/exynos9810-star2lte_defconfig"
           test -f "$F"
 
-          # Remove-then-set: avoids contradictory duplicate symbols
           set_cfg() {
             local key="$1" val="$2"
             sed -i "/^${key}[=[:space:]].*/d" "$F"
@@ -657,34 +607,28 @@ jobs:
           done
           set_cfg CONFIG_HZ_300 y
           set_cfg CONFIG_HZ 300
-
-          # Preemption
           set_cfg CONFIG_PREEMPT y
-
-          # KSU
           set_cfg CONFIG_KSU y
           set_cfg CONFIG_KSU_ALLOWLIST_WORKAROUND y
           set_cfg CONFIG_KPROBES y
           set_cfg CONFIG_KPROBE_EVENTS y
 
-          # SUSFS — safe subset + v2 features already wired in chimera-mk6 tree
-          # SUS_MOUNT + SPOOF_UNAME cause AVC boot panic on Android 16 QPR2
+          # SUSFS safe subset
+          # SUS_MOUNT + SPOOF_UNAME cause AVC boot panic on LOS 23.2
           set_cfg CONFIG_KSU_SUSFS y
           set_cfg CONFIG_KSU_SUSFS_SUS_PATH y
           set_cfg CONFIG_KSU_SUSFS_SUS_KSTAT y
           set_cfg CONFIG_KSU_SUSFS_TRY_UMOUNT y
           set_cfg CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT y
           set_cfg CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT y
-          # SUSFS v2 features confirmed wired in tree (safe on LOS 23.2)
           set_cfg CONFIG_KSU_SUSFS_OPEN_REDIRECT y
           set_cfg CONFIG_KSU_SUSFS_ENABLE_LOG y
           set_cfg CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS y
-          # Keep off — SUS_MOUNT causes AVC panic; SUS_MAP needs per-app testing
           unset_cfg CONFIG_KSU_SUSFS_SUS_MOUNT
           unset_cfg CONFIG_KSU_SUSFS_SPOOF_UNAME
           unset_cfg CONFIG_KSU_SUSFS_SUS_MAP
 
-          # BPF — required for Android 16 / LOS 23.2
+          # BPF — required for LOS 23.2
           set_cfg CONFIG_BPF y
           set_cfg CONFIG_BPF_SYSCALL y
           set_cfg CONFIG_BPF_JIT y
@@ -714,12 +658,9 @@ jobs:
         working-directory: kernel
         run: |
           set -Eeuo pipefail
-
-          # Audit confirmed: only .dts files exist — no exynos9810.dtsi
           DTS="arch/arm64/boot/dts/exynos/exynos9810-star2lte_eur_open_26.dts"
           test -f "$DTS" || { echo "ERROR: DTS not found: $DTS"; exit 1; }
 
-          # Camera ION heap
           if grep -q 'size = <461373440>;' "$DTS"; then
             sed -i 's/size = <461373440>;/size = <603979776>;/' "$DTS"
             echo "Camera ION heap: 440MB -> 576MB"
@@ -727,7 +668,6 @@ jobs:
             echo "WARN: Camera ION heap anchor not found (may already be patched)"
           fi
 
-          # CPU idle — in the monolithic DTS, not a separate dtsi
           if grep -q 'min-residency-us = <2000>' "$DTS"; then
             sed -i 's/min-residency-us = <2000>/min-residency-us = <400>/' "$DTS"
             echo "CPU idle min-residency tuned"
@@ -737,45 +677,59 @@ jobs:
 
           git diff -- "$DTS" | tee "../$LOG_DIR/dts-diff.log"
 
-      # ── 11. Patch summary ─────────────────────────────────────────────────
+      # ── 11. Patch summary and validation ──────────────────────────────────
       - name: Patch summary and validation
         working-directory: kernel
         run: |
           set -Eeuo pipefail
-
           echo "=== git status ===" | tee "../$LOG_DIR/patch-summary.log"
           git status --short | tee -a "../$LOG_DIR/patch-summary.log"
-
           echo "=== diff stat ===" | tee -a "../$LOG_DIR/patch-summary.log"
           git diff --stat | tee -a "../$LOG_DIR/patch-summary.log"
 
-          # Verify BPF not accidentally disabled
           F="arch/arm64/configs/exynos9810-star2lte_defconfig"
+
+          # BPF must be enabled
           for sym in CONFIG_BPF CONFIG_BPF_SYSCALL CONFIG_BPF_JIT CONFIG_CGROUP_BPF; do
             grep -q "^${sym}=y" "$F" || { echo "ERROR: $sym missing from defconfig"; exit 1; }
           done
           echo "BPF symbols verified." | tee -a "../$LOG_DIR/patch-summary.log"
 
-          # Verify panic-causing options are disabled
+          # Panic-causing options must be off
           for sym in CONFIG_KSU_SUSFS_SUS_MOUNT CONFIG_KSU_SUSFS_SPOOF_UNAME; do
             if grep -q "^${sym}=y" "$F"; then
-              echo "ERROR: $sym is enabled — this causes AVC boot panic on LOS 23.2"
-              exit 1
+              echo "ERROR: $sym is enabled — causes AVC boot panic on LOS 23.2"; exit 1
             fi
           done
           echo "Boot-safe SUSFS config verified." | tee -a "../$LOG_DIR/patch-summary.log"
 
-          # Verify SUSFS v2 symbols are enabled
-          for sym in CONFIG_KSU_SUSFS_OPEN_REDIRECT CONFIG_KSU_SUSFS_ENABLE_LOG CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS; do
+          # SUSFS v2 symbols must be present
+          for sym in CONFIG_KSU_SUSFS_OPEN_REDIRECT CONFIG_KSU_SUSFS_ENABLE_LOG \
+                     CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS; do
             grep -q "^${sym}=y" "$F" || { echo "ERROR: $sym missing from defconfig"; exit 1; }
           done
           echo "SUSFS v2 symbols verified." | tee -a "../$LOG_DIR/patch-summary.log"
+
+          # syscall_fn_t patch must be present — catch any path edge cases early
+          HOOK_REAL=""
+          for c in "KernelSU-Next/kernel/hook/syscall_hook.h" "drivers/kernelsu/hook/syscall_hook.h"; do
+            if [ -f "$c" ]; then
+              HOOK_REAL=$(realpath "$c")
+              break
+            fi
+          done
+
+          if [[ -n "$HOOK_REAL" ]]; then
+            grep -q '__KSU_SYSCALL_FN_T_4_9_COMPAT' "$HOOK_REAL" \
+              && echo "syscall_fn_t compat patch: confirmed" \
+              || { echo "ERROR: syscall_fn_t compat NOT applied — build will fail"; exit 1; }
+          fi
 
       # ── 12. Stop for dry run ──────────────────────────────────────────────
       - name: Dry run complete
         if: ${{ inputs.dry_run }}
         run: |
-          echo "Dry run finished. Review artifacts in logs/ before running a real build."
+          echo "Dry run finished. Review logs/ before running a real build."
           echo "Re-run with dry_run=false when ready."
 
       # ── 13. Build ─────────────────────────────────────────────────────────
@@ -784,7 +738,6 @@ jobs:
         working-directory: kernel
         run: |
           set -Eeuo pipefail
-
           mkdir -p "$GITHUB_WORKSPACE/$OUT_DIR"
 
           MAKE=(
@@ -808,12 +761,10 @@ jobs:
 
           "${MAKE[@]}" exynos9810-star2lte_defconfig
           cp "$GITHUB_WORKSPACE/$OUT_DIR/.config" "$GITHUB_WORKSPACE/$LOG_DIR/final.config"
-
           "${MAKE[@]}" Image dtbs 2>&1 | tee build.log
 
           test -f "$GITHUB_WORKSPACE/$OUT_DIR/arch/arm64/boot/Image" || {
-            echo "ERROR: Image not produced — check build.log"
-            exit 1
+            echo "ERROR: Image not produced — check build.log"; exit 1
           }
           du -h "$GITHUB_WORKSPACE/$OUT_DIR/arch/arm64/boot/Image" \
             | tee "$GITHUB_WORKSPACE/$LOG_DIR/image-size.log"
@@ -823,11 +774,9 @@ jobs:
         if: ${{ !inputs.dry_run }}
         run: |
           set -Eeuo pipefail
-
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AnyKernel3
 
-          # Write anykernel.sh via bash heredoc (avoids Python/YAML quoting conflicts)
-          cat > AnyKernel3/anykernel.sh << 'AKEOF'
+          cat << 'EOF' > AnyKernel3/anykernel.sh
           properties() { '
           kernel.string=Project Chimera MK6 - Lineage 23.2 / star2lte
           do.devicecheck=1
@@ -847,23 +796,19 @@ jobs:
           . tools/ak3-core.sh;
           dump_boot;
           write_boot;
-          AKEOF
+          EOF
+
           echo "anykernel.sh written"
 
-          # Copy Image (Samsung uses raw Image, not Image.gz)
           cp "$OUT_DIR/arch/arm64/boot/Image" AnyKernel3/
           test -f AnyKernel3/Image || { echo "ERROR: Image missing from AnyKernel3"; exit 1; }
-
-          # Copy only star2lte DTBs (not all Exynos DTBs)
           find "$OUT_DIR/arch/arm64/boot/dts/exynos" \
-            -name '*star2lte*.dtb' \
-            -exec cp {} AnyKernel3/ \;
+            -name '*star2lte*.dtb' -exec cp {} AnyKernel3/ \;
 
           ZIP="chimera-mk6-lineage23.2-$(date +%Y%m%d-%H%M).zip"
           cd AnyKernel3
           zip -r9 "../$ZIP" . -x '*.git*'
           cd ..
-
           test -f "$ZIP" || { echo "ERROR: ZIP not produced"; exit 1; }
           ls -lh "$ZIP"
 
@@ -901,13 +846,14 @@ jobs:
 
             ### Integrated
             - KernelSU Next (gavdoc38 fork, manual hooks for Samsung 4.9 BSP)
-            - SUSFS v2 safe config (SUS_MOUNT + SPOOF_UNAME disabled — no boot panic)
-            - SUSFS v2 features enabled: OPEN_REDIRECT, ENABLE_LOG, HIDE_KSU_SUSFS_SYMBOLS
-            - BPF preserved (required for Android 16 / LOS 23.2)
-            - SchedUtil: UP=500us, DOWN=2000us
-            - Camera ION heap: 576MB (face auth for banking)
+            - SUSFS safe config (SUS_MOUNT + SPOOF_UNAME disabled — no boot panic)
+            - SUSFS v2: OPEN_REDIRECT, ENABLE_LOG, HIDE_KSU_SUSFS_SYMBOLS
+            - BPF preserved (required for LOS 23.2)
+            - SchedUtil: UP=500µs, DOWN=2000µs
+            - Camera ION heap: 576MB
             - CMA: 768MB
             - HZ_300, PREEMPT
+            - syscall_fn_t Samsung 4.9 BSP compat fix
 
             ### Flash order
             1. Flash Lineage 23.2 + its recovery
