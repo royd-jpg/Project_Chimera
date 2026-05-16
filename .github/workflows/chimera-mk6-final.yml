@@ -1,50 +1,42 @@
 name: Project Chimera MK6 — Lineage 23.2 Build
-
-on:
+'on':
   workflow_dispatch:
     inputs:
       dry_run:
-        description: "Validate only — skip build and package"
+        description: Validate only — skip build and package
         type: boolean
         default: true
       do_release:
-        description: "Create a GitHub Release after successful build"
+        description: Create a GitHub Release after successful build
         type: boolean
         default: false
       force_repatch:
-        description: "Allow patching even if KSU/SUSFS already present in tree"
+        description: Allow patching even if KSU/SUSFS already present in tree
         type: boolean
         default: false
-
 jobs:
   build:
     runs-on: ubuntu-24.04
-
     defaults:
       run:
         shell: bash
-
     env:
-      KERNEL_REPO:   "https://github.com/royd-jpg/Project_Chimera"
-      KERNEL_BRANCH: "chimera-mk6"
-      SUSFS_REPO:    "https://gitlab.com/simonpunk/susfs4ksu.git"
-      SUSFS_BRANCH:  "kernel-4.9"
-      KSU_REPO:      "https://github.com/gavdoc38/KernelSU-Next.git"
-      KERNEL_DIR:    "kernel"
-      OUT_DIR:       "kernel-out"
-      LOG_DIR:       "logs"
-      # Pinned asset — not "latest" to avoid mutable toolchain
-      NEUTRON_URL:   "https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/10032024/neutron-clang-10032024.tar.zst"
-      NEUTRON_KEY:   "neutron-clang-10032024-pinned-v1"
-
+      KERNEL_REPO: 'https://github.com/royd-jpg/Project_Chimera'
+      KERNEL_BRANCH: chimera-mk6
+      SUSFS_REPO: 'https://gitlab.com/simonpunk/susfs4ksu.git'
+      SUSFS_BRANCH: kernel-4.9
+      KSU_REPO: 'https://github.com/gavdoc38/KernelSU-Next.git'
+      KERNEL_DIR: kernel
+      OUT_DIR: kernel-out
+      LOG_DIR: logs
+      NEUTRON_URL: >-
+        https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/10032024/neutron-clang-10032024.tar.zst
+      NEUTRON_KEY: neutron-clang-10032024-pinned-v1
     steps:
-      # ── 0. Workspace ─────────────────────────────────────────────────────
       - name: Prepare workspace
         run: |
           set -Eeuo pipefail
           mkdir -p "$LOG_DIR" "$OUT_DIR"
-
-      # ── 1. Dependencies ───────────────────────────────────────────────────
       - name: Install dependencies
         run: |
           set -Eeuo pipefail
@@ -55,38 +47,42 @@ jobs:
             zip zstd lz4 \
             gcc-aarch64-linux-gnu \
             gcc-arm-linux-gnueabi
-
-      # ── 2. Neutron Clang (pinned, not "latest") ───────────────────────────
       - name: Cache Neutron Clang
         id: cache-neutron
         uses: actions/cache@v4
         with:
           path: neutron-clang
-          key: ${{ env.NEUTRON_KEY }}
-
+          key: '${{ env.NEUTRON_KEY }}'
       - name: Download Neutron Clang
         if: steps.cache-neutron.outputs.cache-hit != 'true'
-        run: |
+        run: >
           set -Eeuo pipefail
-          mkdir -p neutron-clang
-          echo "Downloading pinned Neutron Clang: $NEUTRON_URL" | tee "$LOG_DIR/toolchain.log"
-          wget -qO /tmp/neutron.tar.zst "$NEUTRON_URL"
-          tar -xf /tmp/neutron.tar.zst -C neutron-clang --strip-components=1
-          test -x neutron-clang/bin/clang || { echo "ERROR: clang binary missing after extract"; exit 1; }
-          neutron-clang/bin/clang --version | tee -a "$LOG_DIR/toolchain.log"
 
+          mkdir -p neutron-clang
+
+          echo "Downloading pinned Neutron Clang: $NEUTRON_URL" | tee
+          "$LOG_DIR/toolchain.log"
+
+          wget -qO /tmp/neutron.tar.zst "$NEUTRON_URL"
+
+          tar -xf /tmp/neutron.tar.zst -C neutron-clang --strip-components=1
+
+          test -x neutron-clang/bin/clang || { echo "ERROR: clang binary missing
+          after extract"; exit 1; }
+
+          neutron-clang/bin/clang --version | tee -a "$LOG_DIR/toolchain.log"
       - name: Export toolchain PATH
         run: |
           set -Eeuo pipefail
           echo "$GITHUB_WORKSPACE/neutron-clang/bin" >> "$GITHUB_PATH"
-
-      # ── 3. Clone repos ────────────────────────────────────────────────────
       - name: Clone kernel tree
-        run: |
+        run: >
           set -Eeuo pipefail
-          git clone --depth=1 -b "$KERNEL_BRANCH" "$KERNEL_REPO" "$KERNEL_DIR"
-          git -C "$KERNEL_DIR" log --oneline -3 | tee "$LOG_DIR/kernel-revision.log"
 
+          git clone --depth=1 -b "$KERNEL_BRANCH" "$KERNEL_REPO" "$KERNEL_DIR"
+
+          git -C "$KERNEL_DIR" log --oneline -3 | tee
+          "$LOG_DIR/kernel-revision.log"
       - name: Clone SUSFS
         run: |
           set -Eeuo pipefail
@@ -97,32 +93,39 @@ jobs:
           test -f susfs4ksu/kernel_patches/include/linux/susfs.h
           test -f susfs4ksu/kernel_patches/include/linux/susfs_def.h
           git -C susfs4ksu rev-parse HEAD | tee "$LOG_DIR/susfs-revision.log"
-
-      # ── 4. Preflight — detect existing integration ─────────────────────────
       - name: Preflight tree state
         working-directory: kernel
-        run: |
+        run: >
           set -Eeuo pipefail
 
+
           echo "=== git status ===" | tee "../$LOG_DIR/preflight.log"
+
           git status --short | tee -a "../$LOG_DIR/preflight.log"
 
+
           echo "=== KSU/SUSFS markers ===" | tee -a "../$LOG_DIR/preflight.log"
+
           grep -RsnE \
             'KernelSU|kernelsu|CONFIG_KSU|KSU_SUSFS|ksu_handle_faccessat|susfs_task_state|susfs_is_inode_sus_path' \
             drivers fs include kernel arch/arm64/configs 2>/dev/null \
             | tee -a "../$LOG_DIR/preflight.log" || true
 
           ALREADY_PATCHED=false
+
           if grep -RqsE \
             'source "drivers/kernelsu/Kconfig"|ksu_handle_faccessat|susfs_task_state' \
             drivers fs include kernel arch/arm64/configs 2>/dev/null; then
             ALREADY_PATCHED=true
           fi
 
-          echo "ALREADY_PATCHED=$ALREADY_PATCHED" | tee -a "../$LOG_DIR/preflight.log"
 
-          if [[ "$ALREADY_PATCHED" == "true" && "${{ inputs.force_repatch }}" != "true" ]]; then
+          echo "ALREADY_PATCHED=$ALREADY_PATCHED" | tee -a
+          "../$LOG_DIR/preflight.log"
+
+
+          if [[ "$ALREADY_PATCHED" == "true" && "${{ inputs.force_repatch }}" !=
+          "true" ]]; then
             echo ""
             echo "INFO: KSU/SUSFS markers already present in chimera-mk6 tree."
             echo "INFO: Skipping re-integration (force_repatch=false)."
@@ -131,96 +134,146 @@ jobs:
           else
             echo "SKIP_INTEGRATION=false" >> "$GITHUB_ENV"
           fi
-
-      # ── 5. KernelSU Next ──────────────────────────────────────────────────
       - name: Integrate KernelSU Next
         if: env.SKIP_INTEGRATION == 'false'
         working-directory: kernel
-        run: |
+        run: >
           set -Eeuo pipefail
 
+
           # Clean stale state
+
           rm -rf KernelSU-Next drivers/kernelsu
+
           git rm -r --cached KernelSU-Next 2>/dev/null || true
+
           rm -rf .git/modules/KernelSU-Next
 
+
           # Remove stale Kconfig refs
+
           sed -i '/source "drivers\/kernelsu\/Kconfig"/d' drivers/Kconfig
+
           sed -i '/kernelsu\/Kconfig/d' drivers/Kconfig
+
           sed -i '/susfs\/Kconfig/d' fs/Kconfig
 
+
           # Clone
+
           git clone --depth=1 "$KSU_REPO" KernelSU-Next
-          test -f KernelSU-Next/kernel/Kconfig || { echo "ERROR: KernelSU-Next/kernel/Kconfig missing"; exit 1; }
+
+          test -f KernelSU-Next/kernel/Kconfig || { echo "ERROR:
+          KernelSU-Next/kernel/Kconfig missing"; exit 1; }
+
 
           # Verify hook symbols exist in this fork
-          if ! grep -Rqs 'ksu_handle_faccessat\|ksu_handle_execveat' KernelSU-Next/kernel; then
+
+          if ! grep -Rqs 'ksu_handle_faccessat\|ksu_handle_execveat'
+          KernelSU-Next/kernel; then
             echo "ERROR: ksu_handle_faccessat not found in gavdoc38/KernelSU-Next — wrong fork?"
             exit 1
           fi
-          grep -Rsn 'ksu_handle_faccessat\|ksu_handle_execveat' KernelSU-Next/kernel \
+
+          grep -Rsn 'ksu_handle_faccessat\|ksu_handle_execveat'
+          KernelSU-Next/kernel \
             | tee "../$LOG_DIR/ksu-hooks.log"
 
           # Wire symlink
+
           ln -s ../KernelSU-Next/kernel drivers/kernelsu
 
+
           # Add to Kconfig cleanly
+
           if ! grep -q '^endmenu' drivers/Kconfig; then
             printf '\nendmenu\n' >> drivers/Kconfig
           fi
+
           sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
 
+
           # Verify — exactly one reference
+
           COUNT=$(grep -c 'drivers/kernelsu/Kconfig' drivers/Kconfig || true)
-          [[ "$COUNT" -eq 1 ]] || { echo "ERROR: Expected 1 KSU Kconfig entry, found $COUNT"; exit 1; }
 
-          echo "KernelSU Next (gavdoc38) integrated." | tee "../$LOG_DIR/ksu-integrate.log"
+          [[ "$COUNT" -eq 1 ]] || { echo "ERROR: Expected 1 KSU Kconfig entry,
+          found $COUNT"; exit 1; }
 
-      # ── 6. SUSFS patch ────────────────────────────────────────────────────
+
+          echo "KernelSU Next (gavdoc38) integrated." | tee
+          "../$LOG_DIR/ksu-integrate.log"
       - name: Apply SUSFS patch
         if: env.SKIP_INTEGRATION == 'false'
         working-directory: kernel
-        run: |
+        run: >
           set -Eeuo pipefail
+
 
           PATCH="$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.9.patch"
 
+
           # Apply — rejects are expected for Samsung BSP divergence
+
           set +e
-          git apply --reject --whitespace=fix "$PATCH" > "../$LOG_DIR/susfs-apply.log" 2>&1
+
+          git apply --reject --whitespace=fix "$PATCH" >
+          "../$LOG_DIR/susfs-apply.log" 2>&1
+
           APPLY_RC=$?
+
           set -e
 
-          # Collect reject list
-          find . -name '*.rej' -print | sort > "../$LOG_DIR/susfs-rejects.log" || true
 
-          echo "Apply exit code: $APPLY_RC" | tee -a "../$LOG_DIR/susfs-apply.log"
+          # Collect reject list
+
+          find . -name '*.rej' -print | sort > "../$LOG_DIR/susfs-rejects.log"
+          || true
+
+
+          echo "Apply exit code: $APPLY_RC" | tee -a
+          "../$LOG_DIR/susfs-apply.log"
+
           echo "Reject count: $(wc -l < ../logs/susfs-rejects.log)" \
             | tee -a "../$LOG_DIR/susfs-apply.log"
 
-          # Copy actual SUSFS source files (required regardless of patch success)
-          install -m 0644 "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/fs/susfs.c" fs/susfs.c
-          install -m 0644 "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/fs/sus_su.c" fs/sus_su.c
-          install -m 0644 "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/include/linux/susfs.h" \
+          # Copy actual SUSFS source files (required regardless of patch
+          success)
+
+          install -m 0644
+          "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/fs/susfs.c" fs/susfs.c
+
+          install -m 0644
+          "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/fs/sus_su.c" fs/sus_su.c
+
+          install -m 0644
+          "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/include/linux/susfs.h" \
             include/linux/susfs.h
-          install -m 0644 "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/include/linux/susfs_def.h" \
+          install -m 0644
+          "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/include/linux/susfs_def.h"
+          \
             include/linux/susfs_def.h
-          install -m 0644 "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/include/linux/sus_su.h" \
+          install -m 0644
+          "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/include/linux/sus_su.h" \
             include/linux/sus_su.h
 
           # Wire Makefile
-          grep -q 'susfs.o' fs/Makefile || echo 'obj-$(CONFIG_KSU_SUSFS) += susfs.o' >> fs/Makefile
+
+          grep -q 'susfs.o' fs/Makefile || echo 'obj-$(CONFIG_KSU_SUSFS) +=
+          susfs.o' >> fs/Makefile
+
 
           echo "SUSFS source files installed."
-
-      # ── 7. Fix SUSFS rejected hunks ───────────────────────────────────────
       - name: Fix SUSFS rejected hunks
         if: env.SKIP_INTEGRATION == 'false'
         working-directory: kernel
-        run: |
+        run: >
           set -Eeuo pipefail
+
           python3 << 'PYEOF'
+
           import os, re, sys
+
 
           def read(p):
               with open(p, encoding='utf-8', errors='replace') as f:
@@ -263,21 +316,33 @@ jobs:
               return content[:end] + text + content[end:]
 
           # Detect SUSFS API style from copied headers
-          susfs_def = read('include/linux/susfs_def.h') if os.path.exists('include/linux/susfs_def.h') else ''
+
+          susfs_def = read('include/linux/susfs_def.h') if
+          os.path.exists('include/linux/susfs_def.h') else ''
+
           USE_FUNCTION_API = 'susfs_is_inode_sus_path' in susfs_def
+
           USE_FIELD_API    = 'INODE_STATE_SUS_PATH' in susfs_def
 
-          print(f"SUSFS API: function_style={USE_FUNCTION_API} field_style={USE_FIELD_API}")
 
-          # ── fs/namei.c ──────────────────────────────────────────────────────────
+          print(f"SUSFS API: function_style={USE_FUNCTION_API}
+          field_style={USE_FIELD_API}")
+
+
+          # ── fs/namei.c
+          ──────────────────────────────────────────────────────────
+
           print("fs/namei.c...")
+
           c = read('fs/namei.c')
+
           c = add_include_after(c,
               '#include <asm/uaccess.h>',
               '#if defined(CONFIG_KSU_SUSFS_SUS_PATH) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)\n'
               '#include <linux/susfs_def.h>\n'
               '#endif')
           # Choose hook style based on detected API
+
           if USE_FUNCTION_API:
               sus_hook = (
                   '#ifdef CONFIG_KSU_SUSFS_SUS_PATH\n'
@@ -307,9 +372,14 @@ jobs:
               c = insert_before(c, '\nout:\n\tinode_unlock_shared(inode);', sus_hook)
           write('fs/namei.c', c)
 
-          # ── fs/namespace.c ──────────────────────────────────────────────────────
+
+          # ── fs/namespace.c
+          ──────────────────────────────────────────────────────
+
           print("fs/namespace.c...")
+
           c = read('fs/namespace.c')
+
           c = add_include_after(c,
               '#include <linux/task_work.h>',
               '#if defined(CONFIG_KSU_SUSFS_SUS_MOUNT) || defined(CONFIG_KSU_SUSFS_TRY_UMOUNT)\n'
@@ -317,9 +387,14 @@ jobs:
               '#endif')
           write('fs/namespace.c', c)
 
-          # ── fs/stat.c ──────────────────────────────────────────────────────────
+
+          # ── fs/stat.c
+          ──────────────────────────────────────────────────────────
+
           print("fs/stat.c...")
+
           c = read('fs/stat.c')
+
           c = add_include_after(c,
               '#include <linux/pagemap.h>',
               '#if defined(CONFIG_KSU_SUSFS_SUS_KSTAT) || defined(CONFIG_KSU_SUSFS_SUS_MOUNT)\n'
@@ -344,9 +419,14 @@ jobs:
                   '#endif\n')
           write('fs/stat.c', c)
 
-          # ── include/linux/mount.h ───────────────────────────────────────────────
+
+          # ── include/linux/mount.h
+          ───────────────────────────────────────────────
+
           print("include/linux/mount.h...")
+
           c = read('include/linux/mount.h')
+
           if 'susfs_mnt_id_backup' not in c:
               c = c.replace(
                   '\tint mnt_flags;\n\tvoid *data;\n};',
@@ -355,9 +435,14 @@ jobs:
                   1)
           write('include/linux/mount.h', c)
 
-          # ── include/linux/sched.h ──────────────────────────────────────────────
+
+          # ── include/linux/sched.h
+          ──────────────────────────────────────────────
+
           print("include/linux/sched.h...")
+
           c = read('include/linux/sched.h')
+
           if 'susfs_task_state' not in c:
               c = c.replace(
                   '\tstruct thread_struct thread;',
@@ -366,9 +451,14 @@ jobs:
                   1)
           write('include/linux/sched.h', c)
 
-          # ── fs/proc_namespace.c ─────────────────────────────────────────────────
+
+          # ── fs/proc_namespace.c
+          ─────────────────────────────────────────────────
+
           print("fs/proc_namespace.c...")
+
           c = read('fs/proc_namespace.c')
+
           c = add_include_after(c,
               '#include "internal.h"',
               '#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n'
@@ -377,9 +467,14 @@ jobs:
               '#endif')
           write('fs/proc_namespace.c', c)
 
-          # ── fs/readdir.c ────────────────────────────────────────────────────────
+
+          # ── fs/readdir.c
+          ────────────────────────────────────────────────────────
+
           print("fs/readdir.c...")
+
           c = read('fs/readdir.c')
+
           c = add_include_after(c,
               '#include <linux/unistd.h>',
               '#ifdef CONFIG_KSU_SUSFS_SUS_PATH\n'
@@ -388,9 +483,14 @@ jobs:
               '#endif')
           write('fs/readdir.c', c)
 
-          # ── fs/proc/task_mmu.c ──────────────────────────────────────────────────
+
+          # ── fs/proc/task_mmu.c
+          ──────────────────────────────────────────────────
+
           print("fs/proc/task_mmu.c...")
+
           c = read('fs/proc/task_mmu.c')
+
           c = add_include_after(c,
               '#include <linux/mm_inline.h>',
               '#ifdef CONFIG_KSU_SUSFS_SUS_MAPS\n'
@@ -399,9 +499,14 @@ jobs:
               '#endif')
           write('fs/proc/task_mmu.c', c)
 
-          # ── fs/proc/cmdline.c ───────────────────────────────────────────────────
+
+          # ── fs/proc/cmdline.c
+          ───────────────────────────────────────────────────
+
           print("fs/proc/cmdline.c...")
+
           c = read('fs/proc/cmdline.c')
+
           if 'susfs_spoof_cmdline' not in c:
               c = insert_before(c,
                   'static int cmdline_proc_show',
@@ -410,20 +515,25 @@ jobs:
                   '#endif\n')
           write('fs/proc/cmdline.c', c)
 
-          print("\nSUSFS rejected-hunk fixup complete.")
-          PYEOF
 
-      # ── 8. Manual KSU hooks (Samsung 4.9 BSP) ────────────────────────────
+          print("\nSUSFS rejected-hunk fixup complete.")
+
+          PYEOF
       - name: Inject manual KSU hooks
         if: env.SKIP_INTEGRATION == 'false'
         working-directory: kernel
-        run: |
+        run: >
           set -Eeuo pipefail
 
+
           # Determine actual hook prototype from cloned KernelSU-Next source
+
           # This avoids assuming bprm->fd which may not exist in Samsung BSP
+
           python3 << 'PYEOF'
+
           import re, os
+
 
           def read(p):
               with open(p, encoding='utf-8', errors='replace') as f:
@@ -434,10 +544,15 @@ jobs:
                   f.write(c)
               print(f"  Patched: {p}")
 
-          # ── Derive exec hook call site from do_execveat_common signature ──────────
+          # ── Derive exec hook call site from do_execveat_common signature
+          ──────────
+
           # In Samsung 4.9 BSP, the hook uses function params, not bprm members
+
           # do_execveat_common(int fd, struct filename *filename, ...)
+
           exec_c = read('fs/exec.c')
+
 
           if 'ksu_handle_execveat_sucompat' in exec_c:
               print("fs/exec.c already has KSU hook — skipping")
@@ -472,8 +587,11 @@ jobs:
               else:
                   print("WARN: do_execveat_common not found in fs/exec.c — skipping exec hook")
 
-          # ── faccessat hook ────────────────────────────────────────────────────────
+          # ── faccessat hook
+          ────────────────────────────────────────────────────────
+
           open_c = read('fs/open.c')
+
 
           if 'ksu_handle_faccessat' in open_c:
               print("fs/open.c already has KSU hook — skipping")
@@ -498,40 +616,58 @@ jobs:
               write('fs/open.c', open_c)
 
           print("KSU manual hooks done.")
-          PYEOF
 
-      # ── 9. Makefile + defconfig ───────────────────────────────────────────
+          PYEOF
       - name: Patch Makefile and defconfig
         working-directory: kernel
-        run: |
+        run: >
           set -Eeuo pipefail
 
+
           # ── Clang 19 Makefile fixes ──────────────────────────────────────
+
           sed -i 's/-std=gnu89/-std=gnu11 -fcommon/g' Makefile
-          sed -i 's/^HOSTCFLAGS[[:space:]]*:=.*/HOSTCFLAGS   := -std=gnu11 -fcommon/' Makefile
+
+          sed -i 's/^HOSTCFLAGS[[:space:]]*:=.*/HOSTCFLAGS   := -std=gnu11
+          -fcommon/' Makefile
+
 
           # Warning suppressions — inserted after last -std= line
+
           END_LINE=$(grep -n '^\s*-std=gnu' Makefile | tail -1 | cut -d: -f1)
+
           if [[ -n "$END_LINE" ]]; then
             sed -i "${END_LINE}a KBUILD_CFLAGS += -Wno-address-of-packed-member -Wno-int-in-bool-context -Wno-asm-operand-widths" \
               Makefile
           fi
 
+
           # ── SchedUtil constants (idempotent) ─────────────────────────────
+
           SCHED_FILE="kernel/sched/cpufreq_schedutil.c"
+
           if ! grep -q 'CHIMERA_DEFINED' "$SCHED_FILE"; then
             python3 - "$SCHED_FILE" << 'PYEOF'
           import sys
+
           with open(sys.argv[1]) as f:
               content = f.read()
           block = """\
+
           /* Project Chimera: High-Response Scheduler Tunables */
+
           #ifndef CHIMERA_DEFINED
+
           #define CHIMERA_DEFINED
+
           #define CHIMERA_UP_RATE_LIMIT   500
+
           #define CHIMERA_DOWN_RATE_LIMIT 2000
+
           #endif
+
           """
+
           if 'CHIMERA_DEFINED' not in content:
               with open(sys.argv[1], 'w') as f:
                   f.write(block + content)
@@ -539,19 +675,26 @@ jobs:
           else:
               print("SchedUtil constants already present")
           PYEOF
+
           fi
 
+
           # ── Defconfig normalization ───────────────────────────────────────
+
           F="arch/arm64/configs/exynos9810-star2lte_defconfig"
+
           test -f "$F"
 
+
           # Remove-then-set: avoids contradictory duplicate symbols
+
           set_cfg() {
             local key="$1" val="$2"
             sed -i "/^${key}[=[:space:]].*/d" "$F"
             sed -i "/^# ${key} is not set/d" "$F"
             echo "${key}=${val}" >> "$F"
           }
+
           unset_cfg() {
             local key="$1"
             sed -i "/^${key}[=[:space:]].*/d" "$F"
@@ -559,60 +702,99 @@ jobs:
             echo "# ${key} is not set" >> "$F"
           }
 
+
           # Timer — remove ALL HZ variants first to avoid contradictions
-          for hz in CONFIG_HZ_100 CONFIG_HZ_250 CONFIG_HZ_300 CONFIG_HZ_1000 CONFIG_HZ; do
+
+          for hz in CONFIG_HZ_100 CONFIG_HZ_250 CONFIG_HZ_300 CONFIG_HZ_1000
+          CONFIG_HZ; do
             sed -i "/^${hz}[=[:space:]].*/d" "$F"
             sed -i "/^# ${hz} is not set/d" "$F"
           done
+
           set_cfg CONFIG_HZ_300 y
+
           set_cfg CONFIG_HZ 300
 
+
           # Preemption
+
           set_cfg CONFIG_PREEMPT y
 
+
           # KSU
+
           set_cfg CONFIG_KSU y
+
           set_cfg CONFIG_KSU_ALLOWLIST_WORKAROUND y
+
           set_cfg CONFIG_KPROBES y
+
           set_cfg CONFIG_KPROBE_EVENTS y
 
+
           # SUSFS — safe subset only
+
           # SUS_MOUNT + SPOOF_UNAME cause AVC boot panic on Android 16 QPR2
+
           set_cfg CONFIG_KSU_SUSFS y
+
           set_cfg CONFIG_KSU_SUSFS_SUS_PATH y
+
           set_cfg CONFIG_KSU_SUSFS_SUS_KSTAT y
+
           set_cfg CONFIG_KSU_SUSFS_TRY_UMOUNT y
+
           set_cfg CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT y
+
           set_cfg CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT y
+
           unset_cfg CONFIG_KSU_SUSFS_SUS_MOUNT
+
           unset_cfg CONFIG_KSU_SUSFS_SPOOF_UNAME
 
+
           # BPF — required for Android 16 / LOS 23.2
+
           set_cfg CONFIG_BPF y
+
           set_cfg CONFIG_BPF_SYSCALL y
+
           set_cfg CONFIG_BPF_JIT y
+
           set_cfg CONFIG_BPF_EVENTS y
+
           set_cfg CONFIG_CGROUP_BPF y
 
+
           # CMA
+
           set_cfg CONFIG_DMA_CMA y
+
           set_cfg CONFIG_CMA y
+
           set_cfg CONFIG_CMA_SIZE_MBYTES 768
 
+
           # Scheduler
+
           set_cfg CONFIG_SCHED_LATENCY_NS 500000
+
           set_cfg CONFIG_SCHED_WAKEUP_GRANULARITY_NS 2000000
 
+
           # ZRAM
+
           set_cfg CONFIG_ZRAM_SIZE_PERCENT 50
 
+
           # Crypto — avoid duplicate init_module linker errors
+
           sed -i 's/^CONFIG_CRYPTO_\(.*\)=m$/CONFIG_CRYPTO_\1=y/' "$F"
 
-          git diff -- "$F" | tee "../$LOG_DIR/defconfig-diff.log"
-          echo "Defconfig normalized."
 
-      # ── 10. DTS patches ───────────────────────────────────────────────────
+          git diff -- "$F" | tee "../$LOG_DIR/defconfig-diff.log"
+
+          echo "Defconfig normalized."
       - name: Patch DTS
         working-directory: kernel
         run: |
@@ -639,49 +821,60 @@ jobs:
           fi
 
           git diff -- "$DTS" | tee "../$LOG_DIR/dts-diff.log"
-
-      # ── 11. Patch summary ─────────────────────────────────────────────────
       - name: Patch summary and validation
         working-directory: kernel
-        run: |
+        run: >
           set -Eeuo pipefail
 
+
           echo "=== git status ===" | tee "../$LOG_DIR/patch-summary.log"
+
           git status --short | tee -a "../$LOG_DIR/patch-summary.log"
 
+
           echo "=== diff stat ===" | tee -a "../$LOG_DIR/patch-summary.log"
+
           git diff --stat | tee -a "../$LOG_DIR/patch-summary.log"
 
+
           # Verify BPF not accidentally disabled
+
           F="arch/arm64/configs/exynos9810-star2lte_defconfig"
-          for sym in CONFIG_BPF CONFIG_BPF_SYSCALL CONFIG_BPF_JIT CONFIG_CGROUP_BPF; do
+
+          for sym in CONFIG_BPF CONFIG_BPF_SYSCALL CONFIG_BPF_JIT
+          CONFIG_CGROUP_BPF; do
             grep -q "^${sym}=y" "$F" || { echo "ERROR: $sym missing from defconfig"; exit 1; }
           done
+
           echo "BPF symbols verified." | tee -a "../$LOG_DIR/patch-summary.log"
 
+
           # Verify panic-causing options are disabled
+
           for sym in CONFIG_KSU_SUSFS_SUS_MOUNT CONFIG_KSU_SUSFS_SPOOF_UNAME; do
             if grep -q "^${sym}=y" "$F"; then
               echo "ERROR: $sym is enabled — this causes AVC boot panic on LOS 23.2"; exit 1
             fi
           done
-          echo "Boot-safe SUSFS config verified." | tee -a "../$LOG_DIR/patch-summary.log"
 
-      # ── 12. Stop for dry run ──────────────────────────────────────────────
+          echo "Boot-safe SUSFS config verified." | tee -a
+          "../$LOG_DIR/patch-summary.log"
       - name: Dry run complete
-        if: ${{ inputs.dry_run }}
-        run: |
-          echo "Dry run finished. Review artifacts in logs/ before running a real build."
-          echo "Re-run with dry_run=false when ready."
+        if: '${{ inputs.dry_run }}'
+        run: >
+          echo "Dry run finished. Review artifacts in logs/ before running a
+          real build."
 
-      # ── 13. Build ─────────────────────────────────────────────────────────
+          echo "Re-run with dry_run=false when ready."
       - name: Build kernel
-        if: ${{ ! inputs.dry_run }}
+        if: '${{ ! inputs.dry_run }}'
         working-directory: kernel
-        run: |
+        run: >
           set -Eeuo pipefail
 
+
           mkdir -p "$GITHUB_WORKSPACE/$OUT_DIR"
+
 
           MAKE=(
             make
@@ -702,114 +895,167 @@ jobs:
             KCFLAGS="-fcommon -Wno-implicit-function-declaration -Wno-implicit-int -Wno-return-type"
           )
 
+
           "${MAKE[@]}" exynos9810-star2lte_defconfig
-          cp "$GITHUB_WORKSPACE/$OUT_DIR/.config" "$GITHUB_WORKSPACE/$LOG_DIR/final.config"
+
+          cp "$GITHUB_WORKSPACE/$OUT_DIR/.config"
+          "$GITHUB_WORKSPACE/$LOG_DIR/final.config"
+
 
           "${MAKE[@]}" Image dtbs 2>&1 | tee build.log
+
 
           test -f "$GITHUB_WORKSPACE/$OUT_DIR/arch/arm64/boot/Image" || {
             echo "ERROR: Image not produced — check build.log"; exit 1
           }
+
           du -h "$GITHUB_WORKSPACE/$OUT_DIR/arch/arm64/boot/Image" \
             | tee "$GITHUB_WORKSPACE/$LOG_DIR/image-size.log"
-
-      # ── 14. Package ───────────────────────────────────────────────────────
       - name: Package flashable zip
-        if: ${{ ! inputs.dry_run }}
-        run: |
+        if: '${{ ! inputs.dry_run }}'
+        run: >
           set -Eeuo pipefail
+
 
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AnyKernel3
 
-          # Write anykernel.sh via Python to avoid heredoc/YAML quoting conflicts
+
+          # Write anykernel.sh via Python to avoid heredoc/YAML quoting
+          conflicts
+
           python3 << 'PYEOF'
+
           content = """properties() { '
+
           kernel.string=Project Chimera MK6 — Lineage 23.2 / star2lte
+
           do.devicecheck=1
+
           do.modules=0
+
           do.cleanup=1
+
           do.cleanuponabort=0
+
           device.name1=star2lte
+
           device.name2=SM-G965F
+
           device.name3=SM-G965U
+
           device.name4=SM-G965N
+
           device.name5=SM-G9650
+
           '; }
+
           block=boot;
+
           is_slot_device=0;
+
           ramdisk_compression=auto;
+
           patch_vbmeta_flag=auto;
+
           . tools/ak3-core.sh;
+
           dump_boot;
+
           write_boot;
+
           """
+
           with open("AnyKernel3/anykernel.sh", "w") as f:
               f.write(content)
           print("anykernel.sh written")
+
           PYEOF
 
+
           # Copy Image (Samsung uses raw Image, not Image.gz)
+
           cp "$OUT_DIR/arch/arm64/boot/Image" AnyKernel3/
-          test -f AnyKernel3/Image || { echo "ERROR: Image missing from AnyKernel3"; exit 1; }
+
+          test -f AnyKernel3/Image || { echo "ERROR: Image missing from
+          AnyKernel3"; exit 1; }
+
 
           # Copy only star2lte DTBs (not all Exynos DTBs)
+
           find "$OUT_DIR/arch/arm64/boot/dts/exynos" \
             -name '*star2lte*.dtb' \
             -exec cp {} AnyKernel3/ \;
 
           ZIP="chimera-mk6-lineage23.2-$(date +%Y%m%d-%H%M).zip"
+
           cd AnyKernel3
+
           zip -r9 "../$ZIP" . -x '*.git*'
+
           cd ..
 
-          test -f "$ZIP" || { echo "ERROR: ZIP not produced"; exit 1; }
-          ls -lh "$ZIP"
 
-      # ── 15. Upload artifacts (always) ─────────────────────────────────────
+          test -f "$ZIP" || { echo "ERROR: ZIP not produced"; exit 1; }
+
+          ls -lh "$ZIP"
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: chimera-logs-${{ github.run_number }}
+          name: 'chimera-logs-${{ github.run_number }}'
           path: |
             logs/
             kernel/build.log
             kernel-out/.config
           if-no-files-found: ignore
           retention-days: 14
-
       - name: Upload flashable zip
-        if: ${{ ! inputs.dry_run }}
+        if: '${{ ! inputs.dry_run }}'
         uses: actions/upload-artifact@v4
         with:
-          name: chimera-mk6-${{ github.run_number }}
+          name: 'chimera-mk6-${{ github.run_number }}'
           path: chimera-*.zip
           if-no-files-found: error
           retention-days: 30
-
       - name: Create GitHub Release
-        if: ${{ ! inputs.dry_run && inputs.do_release }}
+        if: '${{ ! inputs.dry_run && inputs.do_release }}'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: chimera-mk6-${{ github.run_number }}
-          name: "Project Chimera MK6 — Lineage 23.2 Build #${{ github.run_number }}"
-          body: |
+          tag_name: 'chimera-mk6-${{ github.run_number }}'
+          name: 'Project Chimera MK6 — Lineage 23.2 Build #${{ github.run_number }}'
+          body: >
             ## Project Chimera MK6 — Exynos 9810 / star2lte
+
             Base: Project_Chimera @ chimera-mk6 (UV + BT hardening included)
 
+
             ### Integrated
+
             - KernelSU Next (gavdoc38 fork, manual hooks for Samsung 4.9 BSP)
-            - SUSFS safe config (SUS_MOUNT + SPOOF_UNAME disabled — no boot panic)
+
+            - SUSFS safe config (SUS_MOUNT + SPOOF_UNAME disabled — no boot
+            panic)
+
             - BPF preserved (required for Android 16 / LOS 23.2)
+
             - SchedUtil: UP=500µs, DOWN=2000µs
+
             - Camera ION heap: 576MB (face auth for banking)
+
             - CMA: 768MB
+
             - HZ_300, PREEMPT
 
+
             ### Flash order
+
             1. Flash Lineage 23.2 + its recovery
+
             2. Sideload this zip via Lineage recovery
+
             3. Install KernelSU Next manager APK
+
             4. Install SUSFS module from KSU Manager
+
             5. Reboot
           files: chimera-*.zip
