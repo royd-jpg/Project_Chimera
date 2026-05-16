@@ -91,19 +91,15 @@ jobs:
                     neutron-clang/bin/clang --version | tee -a "$LOG_DIR/toolchain.log"
           
                 - name: Export toolchain PATH
-                  run: |
-                    set -Eeuo pipefail
-                    echo "$GITHUB_WORKSPACE/neutron-clang/bin" >> "$GITHUB_PATH"
+                  run: echo "$GITHUB_WORKSPACE/neutron-clang/bin" >> "$GITHUB_PATH"
           
                 - name: Clone kernel tree
                   run: |
-                    set -Eeuo pipefail
                     git clone --depth=1 -b "$KERNEL_BRANCH" "$KERNEL_REPO" "$KERNEL_DIR"
                     git -C "$KERNEL_DIR" rev-parse HEAD | tee "$LOG_DIR/kernel-revision.log"
           
                 - name: Clone SUSFS
                   run: |
-                    set -Eeuo pipefail
                     git clone --depth=1 -b "$SUSFS_BRANCH" "$SUSFS_REPO" susfs4ksu
                     git -C susfs4ksu rev-parse HEAD | tee "$LOG_DIR/susfs-revision.log"
           
@@ -111,7 +107,6 @@ jobs:
                   working-directory: kernel
                   run: |
                     set -Eeuo pipefail
-          
                     {
                       echo "== git status =="
                       git status --short
@@ -133,23 +128,19 @@ jobs:
                   working-directory: kernel
                   run: |
                     set -Eeuo pipefail
-          
                     rm -rf KernelSU-Next drivers/kernelsu
                     git clone --depth=1 "$KSU_REPO" KernelSU-Next
                     test -f KernelSU-Next/kernel/Kconfig
                     ln -s ../KernelSU-Next/kernel drivers/kernelsu
           
                     sed -i '/source "drivers\/kernelsu\/Kconfig"/d' drivers/Kconfig
-                    grep -q '^endmenu' drivers/Kconfig
                     sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
-          
                     grep -n 'drivers/kernelsu/Kconfig' drivers/Kconfig | tee "../$LOG_DIR/ksu-integrate.log"
           
                 - name: Apply SUSFS patch
                   working-directory: kernel
                   run: |
                     set -Eeuo pipefail
-          
                     PATCH="$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.9.patch"
                     test -f "$PATCH"
           
@@ -177,7 +168,6 @@ jobs:
                   working-directory: kernel
                   run: |
                     set -Eeuo pipefail
-          
                     grep -Rsn 'ksu_handle_faccessat' KernelSU-Next/kernel | tee "../$LOG_DIR/ksu-hook-api.log"
                     grep -Rsn 'ksu_handle_execveat_sucompat' KernelSU-Next/kernel | tee -a "../$LOG_DIR/ksu-hook-api.log"
           
@@ -190,211 +180,10 @@ jobs:
                   working-directory: kernel
                   run: |
                     set -Eeuo pipefail
-          
                     F="arch/arm64/configs/exynos9810-star2lte_defconfig"
                     test -f "$F"
           
-                    set_config() {
-                      local key="$1"
-                      local val="$2"
-                      sed -i "/^${key}=.*/d" "$F"
-                      sed -i "/^# ${key} is not set/d" "$F"
-                      echo "${key}=${val}" >> "$F"
-                    }
+                    set_config() { sed -i "/^$1=/d;/^# $1 is not set/d" "$F"; echo "$1=$2" >> "$F"; }
+                    unset_config() { sed -i "/^$1=/d;/^# $1 is not set/d" "$F"; echo "# $1 is not set" >> "$F"; }
           
-                    unset_config() {
-                      local key="$1"
-                      sed -i "/^${key}=.*/d" "$F"
-                      sed -i "/^# ${key} is not set/d" "$F"
-                      echo "# ${key} is not set" >> "$F"
-                    }
-          
-                    for hz in CONFIG_HZ_100 CONFIG_HZ_250 CONFIG_HZ_300 CONFIG_HZ_1000 CONFIG_HZ; do
-                      sed -i "/^${hz}=.*/d" "$F"
-                      sed -i "/^# ${hz} is not set/d" "$F"
-                    done
-          
-                    set_config CONFIG_HZ_300 y
-                    set_config CONFIG_HZ 300
-                    set_config CONFIG_PREEMPT y
-          
-                    set_config CONFIG_KSU y
-                    set_config CONFIG_KSU_ALLOWLIST_WORKAROUND y
-          
-                    set_config CONFIG_KSU_SUSFS y
-                    set_config CONFIG_KSU_SUSFS_SUS_PATH y
-                    set_config CONFIG_KSU_SUSFS_SUS_KSTAT y
-                    set_config CONFIG_KSU_SUSFS_TRY_UMOUNT y
-                    set_config CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT y
-                    set_config CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT y
-          
-                    unset_config CONFIG_KSU_SUSFS_SUS_MOUNT
-                    unset_config CONFIG_KSU_SUSFS_SPOOF_UNAME
-          
-                    set_config CONFIG_BPF y
-                    set_config CONFIG_BPF_SYSCALL y
-                    set_config CONFIG_BPF_JIT y
-                    set_config CONFIG_BPF_EVENTS y
-                    set_config CONFIG_CGROUP_BPF y
-          
-                    set_config CONFIG_DMA_CMA y
-                    set_config CONFIG_CMA y
-                    set_config CONFIG_CMA_SIZE_MBYTES 768
-          
-                    sed -i 's/^CONFIG_CRYPTO_\(.*\)=m$/CONFIG_CRYPTO_\1=y/' "$F"
-          
-                    git diff -- "$F" Makefile | tee "../$LOG_DIR/config-diff.log"
-          
-                - name: Patch DTS safely
-                  working-directory: kernel
-                  run: |
-                    set -Eeuo pipefail
-          
-                    DTS="arch/arm64/boot/dts/exynos/exynos9810-star2lte_eur_open_26.dts"
-                    test -f "$DTS"
-          
-                    if grep -q 'size = <461373440>;' "$DTS"; then
-                      sed -i 's/size = <461373440>;/size = <603979776>;/' "$DTS"
-                    else
-                      echo "WARN: Camera ION heap anchor not found" | tee "../$LOG_DIR/dts-warnings.log"
-                    fi
-          
-                    if grep -q 'min-residency-us = <2000>' "$DTS"; then
-                      sed -i 's/min-residency-us = <2000>/min-residency-us = <400>/' "$DTS"
-                    else
-                      echo "WARN: idle min-residency anchor not found" | tee -a "../$LOG_DIR/dts-warnings.log"
-                    fi
-          
-                    git diff -- "$DTS" | tee "../$LOG_DIR/dts-diff.log"
-          
-                - name: Patch summary
-                  working-directory: kernel
-                  run: |
-                    set -Eeuo pipefail
-          
-                    git status --short | tee "../$LOG_DIR/patch-status.log"
-                    git diff --stat | tee "../$LOG_DIR/patch-stat.log"
-                    git diff --check | tee "../$LOG_DIR/diff-check.log"
-          
-                - name: Stop after dry run
-                  if: ${{ inputs.dry_run }}
-                  run: |
-                    set -Eeuo pipefail
-                    echo "Dry run complete. Patch/config validation finished; build/package/release skipped."
-          
-                - name: Build kernel
-                  if: ${{ ! inputs.dry_run }}
-                  working-directory: kernel
-                  run: |
-                    set -Eeuo pipefail
-          
-                    MAKE=(
-                      make
-                      -j"$(nproc)"
-                      O="$GITHUB_WORKSPACE/$OUT_DIR"
-                      ARCH=arm64
-                      SUBARCH=arm64
-                      CC=clang
-                      CLANG_TRIPLE=aarch64-linux-gnu-
-                      CROSS_COMPILE=aarch64-linux-gnu-
-                      CROSS_COMPILE_ARM32=arm-linux-gnueabi-
-                      LD="$GITHUB_WORKSPACE/neutron-clang/bin/ld.lld"
-                      AR=llvm-ar
-                      NM=llvm-nm
-                      OBJCOPY=llvm-objcopy
-                      OBJDUMP=llvm-objdump
-                      STRIP=llvm-strip
-                      KCFLAGS="-fcommon -Wno-implicit-function-declaration -Wno-implicit-int -Wno-return-type"
-                    )
-          
-                    "${MAKE[@]}" exynos9810-star2lte_defconfig
-                    cp "$GITHUB_WORKSPACE/$OUT_DIR/.config" "../$LOG_DIR/final.config"
-          
-                    "${MAKE[@]}" Image dtbs 2>&1 | tee build.log
-          
-                    test -f "$GITHUB_WORKSPACE/$OUT_DIR/arch/arm64/boot/Image"
-                    du -h "$GITHUB_WORKSPACE/$OUT_DIR/arch/arm64/boot/Image" | tee "../$LOG_DIR/image-size.log"
-          
-                - name: Package flashable zip
-                  if: ${{ ! inputs.dry_run }}
-                  run: |
-                    set -Eeuo pipefail
-          
-                    git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AnyKernel3
-          
-                    cat > AnyKernel3/anykernel.sh <<'EOF'
-          properties() { '
-          kernel.string=Project Chimera MK6 — Lineage 23.2 / star2lte
-          do.devicecheck=1
-          do.modules=0
-          do.cleanup=1
-          do.cleanuponabort=0
-          device.name1=star2lte
-          device.name2=SM-G965F
-          device.name3=SM-G965U
-          device.name4=SM-G965N
-          device.name5=SM-G9650
-          '; }
-          
-          block=boot;
-          is_slot_device=0;
-          ramdisk_compression=auto;
-          patch_vbmeta_flag=auto;
-          
-          . tools/ak3-core.sh;
-          dump_boot;
-          write_boot;
-          EOF
-          
-                    cp "$OUT_DIR/arch/arm64/boot/Image" AnyKernel3/
-          
-                    find "$OUT_DIR/arch/arm64/boot/dts/exynos" -name '*star2lte*.dtb' -exec cp {} AnyKernel3/ \;
-          
-                    test -f AnyKernel3/Image
-                    find AnyKernel3 -maxdepth 1 -name '*.dtb' -print -quit | grep -q .
-          
-                    ZIP="chimera-mk6-lineage23.2-$(date +%Y%m%d-%H%M).zip"
-                    cd AnyKernel3
-                    zip -r9 "../$ZIP" . -x '*.git*'
-                    cd ..
-          
-                    ls -lh "$ZIP"
-          
-                - name: Upload logs
-                  if: always()
-                  uses: actions/upload-artifact@v4
-                  with:
-          name: chimera-logs-${{ github.run_number }}
-          path: |
-            logs
-            kernel/build.log
-            kernel/*.rej
-            kernel-out/.config
-          if-no-files-found: ignore
-          retention-days: 14
-
-      - name: Upload flashable zip
-        if: ${{ ! inputs.dry_run }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: chimera-mk6-${{ github.run_number }}
-          path: chimera-*.zip
-          if-no-files-found: error
-          retention-days: 30
-
-      - name: Create GitHub Release
-        if: ${{ ! inputs.dry_run && inputs.do_release }}
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: chimera-mk6-${{ github.run_number }}
-          name: "Project Chimera MK6 — Lineage 23.2 Build #${{ github.run_number }}"
-          body: |
-            Dry-run guardrails passed, kernel built, and package artifact was produced.
-
-            Review uploaded logs before flashing:
-            - toolchain.log
-            - preflight.log
-            - patch-stat.log
-            - final.config
-            - build.log
-          files: chimera-*.zip
+                    for hz in CONFIG_HZ_100 CONFIG_HZ_250 CONFIG_HZ_300 CONFIG_HZ_100
