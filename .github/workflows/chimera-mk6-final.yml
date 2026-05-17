@@ -128,7 +128,9 @@ jobs:
         run: |
           set -Eeuo pipefail
           HOOK_H="KernelSU-Next/kernel/hook/syscall_hook.h"
-          if [[ ! -f "$HOOK_H" || ! grep -q 'syscall_fn_t' "$HOOK_H" ]]; then
+          
+          # Separated the file check from the grep command execution
+          if [[ ! -f "$HOOK_H" ]] || ! grep -q 'syscall_fn_t' "$HOOK_H"; then
             echo "Nothing to fix"
             exit 0
           fi
