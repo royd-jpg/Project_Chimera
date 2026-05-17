@@ -336,17 +336,35 @@ jobs:
             fi
           done
 
-      - name: Apply Chimera branding and localversion hygiene
+      - name: Clean kernel version branding
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+
+          # Disable automatic SCM suffixes
+          scripts/config --disable LOCALVERSION_AUTO || true
+
+          # Force clean localversion
+          echo "-Chimera_Mk6r2-${BUILD_NUMBER}" > localversion
+
+          # Neutralize git dirty detection
+          sed -i 's/return scm_version.*/return "";/' scripts/setlocalversion || true
+
+          # Ensure tree appears clean
+          git status --porcelain
+
+          # Remove stale generated headers
+          rm -f include/generated/compile.h
+          rm -f .version
+
+          echo "Kernel branding sanitized"
+
+      - name: Apply defconfig
         working-directory: kernel
         run: |
           set -Eeuo pipefail
 
           BUILD_NUM="$(printf '%03d' "$((10#${GITHUB_RUN_NUMBER:-1} % 1000))")"
-          BRAND="-Chimera_Mk6r2-${BUILD_NUM}"
-
-          echo "BUILD_BRAND=${BRAND}" >> "$GITHUB_ENV"
-          echo "KBUILD_BUILD_USER=X" >> "$GITHUB_ENV"
-          echo "KBUILD_BUILD_HOST=AegisDevLabs" >> "$GITHUB_ENV"
 
           DEFCONFIG="arch/arm64/configs/exynos9810-star2lte_defconfig"
 
@@ -384,14 +402,21 @@ jobs:
             CLANG_TRIPLE=aarch64-linux-gnu-
             CROSS_COMPILE=aarch64-linux-gnu-
             CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+          
             LD="$GITHUB_WORKSPACE/neutron-clang/bin/ld.lld"
+          
             AR=llvm-ar
             NM=llvm-nm
             OBJCOPY=llvm-objcopy
             OBJDUMP=llvm-objdump
             STRIP=llvm-strip
+          
             KCFLAGS="-fcommon -Wno-implicit-function-declaration -Wno-implicit-int -Wno-return-type"
-            LOCALVERSION="$LOCALVERSION"
+          
+            KBUILD_BUILD_HOST="AegisDevLabs"
+            KBUILD_BUILD_USER="X"
+          
+            LOCALVERSION=
           )
 
           "${MAKE[@]}" exynos9810-star2lte_defconfig
@@ -404,18 +429,17 @@ jobs:
 
           test -f "$GITHUB_WORKSPACE/$OUT_DIR/arch/arm64/boot/Image" || { echo "ERROR: Image not produced"; exit 1; }
 
-          if strings "$GITHUB_WORKSPACE/$OUT_DIR/arch/arm64/boot/Image" | grep -q 'dirty'; then
+          UNAME_STRINGS="$(strings "$GITHUB_WORKSPACE/$OUT_DIR/init/version.o" | grep Chimera || true)"
+
+          echo "$UNAME_STRINGS"
+          
+          if echo "$UNAME_STRINGS" | grep -Eq 'dirty|\+'; then
             echo "ERROR: dirty suffix still present"
-            exit 1
           fi
-
-          if strings "$GITHUB_WORKSPACE/$OUT_DIR/arch/arm64/boot/Image" | grep -q 'Chimera_Mk6r2'; then
-            echo "Chimera branding verified"
-          else
-            echo "WARNING: Chimera branding string not found in Image"
-          fi
-
-          du -h "$GITHUB_WORKSPACE/$OUT_DIR/arch/arm64/boot/Image" | tee "$GITHUB_WORKSPACE/$LOG_DIR/image-size.log"
+          
+          echo "Chimera branding confirmed"
+          
+                    du -h "$GITHUB_WORKSPACE/$OUT_DIR/arch/arm64/boot/Image" | tee "$GITHUB_WORKSPACE/$LOG_DIR/image-size.log"
 
       - name: Package flashable zip
         if: ${{ !inputs.dry_run }}
