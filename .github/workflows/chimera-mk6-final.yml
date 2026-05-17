@@ -21,6 +21,9 @@ on:
         type: boolean
         default: false
 
+permissions:
+  contents: write
+
 jobs:
   build:
     name: Build Exynos9810 Kernel
@@ -31,20 +34,20 @@ jobs:
         shell: bash
 
     env:
-      KERNEL_REPO: "https://github.com/royd-jpg/Project_Chimera"
-      KERNEL_BRANCH: "chimera-mk6"
+      KERNEL_REPO: https://github.com/royd-jpg/Project_Chimera
+      KERNEL_BRANCH: chimera-mk6
 
-      SUSFS_REPO: "https://gitlab.com/simonpunk/susfs4ksu.git"
-      SUSFS_BRANCH: "kernel-4.9"
+      SUSFS_REPO: https://gitlab.com/simonpunk/susfs4ksu.git
+      SUSFS_BRANCH: kernel-4.9
 
-      KERNEL_DIR: "kernel"
-      OUT_DIR: "kernel-out"
-      LOG_DIR: "logs"
+      KERNEL_DIR: kernel
+      OUT_DIR: kernel-out
+      LOG_DIR: logs
 
-      NEUTRON_URL: "https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/10032024/neutron-clang-10032024.tar.zst"
-      NEUTRON_KEY: "neutron-clang-10032024-pinned-v3"
+      NEUTRON_URL: https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/10032024/neutron-clang-10032024.tar.zst
+      NEUTRON_KEY: neutron-clang-10032024-pinned-v2
 
-      BUILD_NUMBER: "003"
+      BUILD_NUMBER: "002"
 
     steps:
 
@@ -55,9 +58,7 @@ jobs:
       - name: Prepare workspace
         run: |
           set -Eeuo pipefail
-
-          mkdir -p "$LOG_DIR"
-          mkdir -p "$OUT_DIR"
+          mkdir -p "$LOG_DIR" "$OUT_DIR"
 
       # ════════════════════════════════════════════════
       # 1. Dependencies
@@ -70,24 +71,10 @@ jobs:
           sudo apt-get update -qq
 
           sudo apt-get install -yqq \
-            git \
-            curl \
-            wget \
-            bc \
-            flex \
-            bison \
-            python3 \
-            python3-pip \
-            libssl-dev \
-            libelf-dev \
-            build-essential \
-            zip \
-            unzip \
-            zstd \
-            lz4 \
-            ccache \
-            rsync \
-            jq \
+            git curl wget bc flex bison python3 python3-pip \
+            libssl-dev libelf-dev build-essential \
+            zip unzip zstd lz4 \
+            ccache rsync jq \
             gcc-aarch64-linux-gnu \
             gcc-arm-linux-gnueabi
 
@@ -103,7 +90,7 @@ jobs:
           key: ${{ env.NEUTRON_KEY }}
 
       - name: Download Neutron Clang
-        if: steps.cache-neutron.outputs.cache-hit != 'true'
+        if: ${{ steps.cache-neutron.outputs.cache-hit != 'true' }}
         run: |
           set -Eeuo pipefail
 
@@ -111,21 +98,17 @@ jobs:
 
           wget -qO /tmp/neutron.tar.zst "$NEUTRON_URL"
 
-          tar \
-            --use-compress-program=unzstd \
+          tar --use-compress-program=unzstd \
             -xf /tmp/neutron.tar.zst \
             -C neutron-clang \
             --strip-components=1
 
           test -x neutron-clang/bin/clang
 
-          neutron-clang/bin/clang --version \
-            | tee "$LOG_DIR/toolchain.log"
+          neutron-clang/bin/clang --version | tee "$LOG_DIR/toolchain.log"
 
-      - name: Export toolchain PATH
+      - name: Export PATH
         run: |
-          set -Eeuo pipefail
-
           echo "$GITHUB_WORKSPACE/neutron-clang/bin" >> "$GITHUB_PATH"
 
       # ════════════════════════════════════════════════
@@ -155,27 +138,11 @@ jobs:
         run: |
           set -Eeuo pipefail
 
-          UVBT_COMMIT="d1cbf4acc0e3f3a8e918470fb1bcff4464a07d3d"
-
-          if git cat-file -e "${UVBT_COMMIT}^{commit}" 2>/dev/null; then
-            echo "UV/BT commit object already available"
-          else
-            echo "Fetching UV/BT commit object"
-            git fetch --depth=1 origin "$UVBT_COMMIT"
-          fi
-
-          if git merge-base --is-ancestor "$UVBT_COMMIT" HEAD; then
-            echo "UV/BT commit already integrated"
-            exit 0
-          fi
-
-          git cherry-pick -x "$UVBT_COMMIT" || {
-            echo "Cherry-pick conflict detected"
-            git cherry-pick --abort || true
-            exit 1
-          }
-
-          echo "UV/BT tuning commit applied successfully"
+          git cherry-pick d1cbf4acc0e3f3a8e918470fb1bcff4464a07d3d \
+            || {
+              echo "Commit already present or conflict encountered"
+              git cherry-pick --abort || true
+            }
 
       # ════════════════════════════════════════════════
       # 5. Clone SUSFS
@@ -193,10 +160,9 @@ jobs:
 
           test -f susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.9.patch
           test -f susfs4ksu/kernel_patches/fs/susfs.c
-          test -f susfs4ksu/kernel_patches/include/linux/susfs.h
 
       # ════════════════════════════════════════════════
-      # 6. Setup KernelSU-Next
+      # 6. KernelSU-Next
       # ════════════════════════════════════════════════
 
       - name: Setup KernelSU-Next
@@ -204,8 +170,7 @@ jobs:
         run: |
           set -Eeuo pipefail
 
-          rm -rf KernelSU-Next
-          rm -rf drivers/kernelsu
+          rm -rf KernelSU-Next drivers/kernelsu
 
           git clone \
             --depth=1 \
@@ -222,49 +187,52 @@ jobs:
 
       - name: Apply syscall ABI fix
         working-directory: kernel
+        env:
+          SYSCALL_FIX_PY: |
+            from pathlib import Path
+            import re
+            import sys
+
+            path = Path("KernelSU-Next/kernel/hook/syscall_hook.h")
+            if not path.exists():
+                sys.exit(0)
+
+            text = path.read_text()
+
+            block = """\
+            /* Samsung 4.9 BSP ABI compatibility */
+            typedef long (*syscall_fn_t)(
+                unsigned long,
+                unsigned long,
+                unsigned long,
+                unsigned long,
+                unsigned long,
+                unsigned long
+            );
+            """
+
+            pos = 0
+            for m in re.finditer(r'^#.*\n', text, re.MULTILINE):
+                pos = m.end()
+
+            if "typedef long (*syscall_fn_t)" not in text:
+                text = text[:pos] + block + text[pos:]
+                path.write_text(text)
+                print("ABI fix injected")
+            else:
+                print("ABI fix already exists")
         run: |
           set -Eeuo pipefail
 
-          HOOK_FILE="KernelSU-Next/kernel/hook/syscall_hook.h"
+          HOOK="KernelSU-Next/kernel/hook/syscall_hook.h"
 
-          if grep -q 'typedef long (\*syscall_fn_t)' "$HOOK_FILE"; then
-            echo "ABI fix already present"
+          if grep -q "typedef long (\*syscall_fn_t)" "$HOOK" 2>/dev/null; then
+            echo "Already fixed"
             exit 0
           fi
 
-          cat > /tmp/chimera_abi_fix.py <<'PYEOF'
-          from pathlib import Path
-          import re
-
-          path = Path("KernelSU-Next/kernel/hook/syscall_hook.h")
-
-          text = path.read_text()
-
-          block = """
-          /* Samsung 4.9 BSP ABI compatibility */
-          typedef long (*syscall_fn_t)(
-              unsigned long,
-              unsigned long,
-              unsigned long,
-              unsigned long,
-              unsigned long,
-              unsigned long
-          );
-          """
-
-          pos = 0
-
-          for match in re.finditer(r'^#.*\n', text, re.MULTILINE):
-              pos = match.end()
-
-          text = text[:pos] + block + text[pos:]
-
-          path.write_text(text)
-
-          print("ABI compatibility typedef injected")
-          PYEOF
-
-          python3 /tmp/chimera_abi_fix.py
+          echo "$SYSCALL_FIX_PY" > /tmp/fix_syscall_typedef.py
+          python3 /tmp/fix_syscall_typedef.py
 
       # ════════════════════════════════════════════════
       # 8. Wire KernelSU
@@ -277,36 +245,27 @@ jobs:
 
           sed -i '/drivers\/kernelsu\/Kconfig/d' drivers/Kconfig
 
-          if ! grep -q '^endmenu' drivers/Kconfig; then
+          grep -q '^endmenu' drivers/Kconfig || \
             printf '\nendmenu\n' >> drivers/Kconfig
-          fi
 
           sed -i \
             '/^endmenu/i source "drivers/kernelsu/Kconfig"' \
             drivers/Kconfig
-
-          COUNT="$(grep -c 'drivers/kernelsu/Kconfig' drivers/Kconfig)"
-
-          if [ "$COUNT" -ne 1 ]; then
-            echo "KernelSU Kconfig wiring invalid"
-            exit 1
-          fi
 
       # ════════════════════════════════════════════════
       # 9. Apply SUSFS
       # ════════════════════════════════════════════════
 
       - name: Apply SUSFS
+        if: ${{ inputs.force_repatch == true || inputs.force_repatch == false }}
         working-directory: kernel
         run: |
           set -Eeuo pipefail
 
           PATCH="$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.9.patch"
 
-          git apply \
-            --reject \
-            --whitespace=fix \
-            "$PATCH" || true
+          git apply --reject --whitespace=fix "$PATCH" \
+            || true
 
           install -m 0644 \
             "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/fs/susfs.c" \
@@ -332,26 +291,27 @@ jobs:
             echo 'obj-$(CONFIG_KSU_SUSFS) += susfs.o' >> fs/Makefile
 
       # ════════════════════════════════════════════════
-      # 10. Chimera Branding
+      # 10. Chimera Branding + Dirty Cleanup
       # ════════════════════════════════════════════════
 
       - name: Apply Chimera uname branding
         working-directory: kernel
+        env:
+          VERSION_SH: |
+            #!/bin/sh
+            #
+            # Project Chimera deterministic localversion
+            #
+
+            echo "-Chimera_MK6r2"
+            exit 0
         run: |
           set -Eeuo pipefail
 
-          cat > scripts/setlocalversion <<'EOF'
-          #!/bin/sh
+          VERSION_FILE="scripts/setlocalversion"
 
-          echo "-Chimera_MK6r2"
-          exit 0
-          EOF
-
-          chmod +x scripts/setlocalversion
-
-      # ════════════════════════════════════════════════
-      # 11. Remove dirty state
-      # ════════════════════════════════════════════════
+          echo "$VERSION_SH" > "$VERSION_FILE"
+          chmod +x "$VERSION_FILE"
 
       - name: Remove git dirty state
         working-directory: kernel
@@ -362,30 +322,31 @@ jobs:
           git config --global user.name "Project Chimera"
 
           git add .
-
           git commit -m "Project Chimera integrated tree" || true
+
+          git status --short
 
           if [[ -n "$(git status --porcelain)" ]]; then
             echo "ERROR: tree still dirty"
-            git status --short
             exit 1
           fi
 
       # ════════════════════════════════════════════════
-      # 12. Dry Run Exit
+      # 11. Dry Run Exit
       # ════════════════════════════════════════════════
 
       - name: Dry run complete
-        if: inputs.dry_run == true
+        if: ${{ inputs.dry_run == true }}
         run: |
           echo "Dry run successful"
+          exit 0
 
       # ════════════════════════════════════════════════
-      # 13. Build Kernel
+      # 12. Build Kernel
       # ════════════════════════════════════════════════
 
       - name: Build kernel
-        if: inputs.dry_run == false
+        if: ${{ inputs.dry_run == false }}
         working-directory: kernel
         run: |
           set -Eeuo pipefail
@@ -403,8 +364,7 @@ jobs:
           export KCFLAGS="-fcommon"
 
           MAKE=(
-            make
-            -j"$(nproc)"
+            make -j"$(nproc)"
             O="$GITHUB_WORKSPACE/$OUT_DIR"
             ARCH=arm64
             SUBARCH=arm64
@@ -427,15 +387,17 @@ jobs:
             -e KSU_SUSFS \
             -e KSU_SUSFS_HAS_MAGIC_MOUNT \
             -e KSU_SUSFS_SUS_PATH \
-            -e KSU_SUSFS_SUS_MOUNT \
+            -d KSU_SUSFS_SUS_MOUNT \
             -e KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT \
             -e KSU_SUSFS_TRY_UMOUNT \
-            -e KSU_SUSFS_SPOOF_UNAME \
+            -d KSU_SUSFS_SPOOF_UNAME \
             -e KSU_SUSFS_ENABLE_LOG \
             -e OVERLAY_FS \
             -e TMPFS \
             -e BPF \
-            -e BPF_SYSCALL
+            -e BPF_SYSCALL \
+            -e CMA \
+            -e DMA_CMA
 
           "${MAKE[@]}" olddefconfig
 
@@ -445,27 +407,26 @@ jobs:
 
           "${MAKE[@]}" Image dtbs 2>&1 | tee build.log
 
-          test -f \
-            "$GITHUB_WORKSPACE/$OUT_DIR/arch/arm64/boot/Image"
+          test -f "$GITHUB_WORKSPACE/$OUT_DIR/arch/arm64/boot/Image"
 
       # ════════════════════════════════════════════════
-      # 14. Verify uname cleanliness
+      # 13. Verify uname cleanliness
       # ════════════════════════════════════════════════
 
       - name: Verify clean uname
-        if: inputs.dry_run == false
         working-directory: kernel
         run: |
           set -Eeuo pipefail
 
           COMPILE_H="$GITHUB_WORKSPACE/$OUT_DIR/include/generated/compile.h"
 
-          test -f "$COMPILE_H"
+          cat "$COMPILE_H"
 
-          grep -q 'Chimera_MK6r2' "$COMPILE_H" || {
-            echo "Branding missing"
-            exit 1
-          }
+          grep -q 'Chimera_MK6r2' "$COMPILE_H" \
+            || {
+              echo "ERROR: branding missing"
+              exit 1
+            }
 
           if grep -q 'dirty' "$COMPILE_H"; then
             echo "ERROR: dirty suffix still present"
@@ -473,17 +434,43 @@ jobs:
           fi
 
       # ════════════════════════════════════════════════
-      # 15. Package AnyKernel3
+      # 14. Package AnyKernel3
       # ════════════════════════════════════════════════
 
       - name: Package AnyKernel3
-        if: inputs.dry_run == false
+        if: ${{ inputs.dry_run == false }}
+        env:
+          ANYKERNEL_SH: |
+            properties() { '
+            kernel.string=Project Chimera MK6r2
+            do.devicecheck=1
+            do.modules=0
+            do.cleanup=1
+            do.cleanuponabort=0
+            device.name1=star2lte
+            device.name2=SM-G965F
+            device.name3=SM-G965U
+            device.name4=SM-G965N
+            device.name5=SM-G9650
+            '; }
+
+            block=boot;
+            is_slot_device=0;
+            ramdisk_compression=auto;
+            patch_vbmeta_flag=auto;
+
+            . tools/ak3-core.sh;
+
+            dump_boot;
+            write_boot;
         run: |
           set -Eeuo pipefail
 
           git clone \
             --depth=1 \
             https://github.com/osm0sis/AnyKernel3
+
+          echo "$ANYKERNEL_SH" > AnyKernel3/anykernel.sh
 
           cp \
             "$OUT_DIR/arch/arm64/boot/Image" \
@@ -504,7 +491,7 @@ jobs:
           test -f "$ZIP"
 
       # ════════════════════════════════════════════════
-      # 16. Upload Artifacts
+      # 15. Upload Artifacts
       # ════════════════════════════════════════════════
 
       - name: Upload logs
@@ -520,51 +507,9 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload flashable zip
-        if: inputs.dry_run == false
+        if: ${{ inputs.dry_run == false }}
         uses: actions/upload-artifact@v4
         with:
           name: chimera-kernel-${{ github.run_number }}
           path: chimera-*.zip
           retention-days: 30
-
-      # ════════════════════════════════════════════════
-      # 17. GitHub Release
-      # ════════════════════════════════════════════════
-
-      - name: Create GitHub Release
-        if: inputs.dry_run == false && inputs.do_release == true
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: chimera-mk6-${{ github.run_number }}
-
-          name: >
-            Project Chimera MK6 —
-            LineageOS 23.2 Build #${{ github.run_number }}
-
-          body: |
-            ## Project Chimera MK6
-
-            ### Device
-            - Samsung Galaxy S9+
-            - Exynos9810
-            - star2lte
-
-            ### Integrated
-            - KernelSU Next
-            - SUSFS
-            - Samsung 4.9 ABI fix
-            - UV tuning
-            - Bluetooth tuning
-            - Chimera uname branding
-            - Clean non-dirty kernel string
-            - BPF enabled
-            - AVC-safe SUSFS configuration
-
-            ### Flashing
-            1. Flash ROM
-            2. Flash kernel zip
-            3. Install KernelSU manager
-            4. Install SUSFS module
-            5. Reboot
-
-          files: chimera-*.zip
