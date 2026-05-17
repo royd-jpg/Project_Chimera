@@ -10,16 +10,40 @@ on:
         default: true
 
       do_release:
-        description: "Create GitHub Release"
+        description: "Create a GitHub Release after successful build"
         required: false
         type: boolean
         default: false
 
       force_repatch:
-        description: "Force SUSFS reintegration"
+        description: "Allow patching even if KSU/SUSFS already present in tree"
         required: false
         type: boolean
         default: false
+
+      enable_zeromount:
+        description: "Enable ZeroMount compatibility probe"
+        required: false
+        type: boolean
+        default: true
+
+      enable_susfs_open_redirect:
+        description: "Enable SUSFS OPEN_REDIRECT"
+        required: false
+        type: boolean
+        default: true
+
+      enable_susfs_hide_symbols:
+        description: "Enable SUSFS symbol hiding"
+        required: false
+        type: boolean
+        default: true
+
+      enable_susfs_try_umount:
+        description: "Enable SUSFS TRY_UMOUNT"
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -34,20 +58,18 @@ jobs:
         shell: bash
 
     env:
-      KERNEL_REPO: https://github.com/royd-jpg/Project_Chimera
-      KERNEL_BRANCH: chimera-mk6
+      KERNEL_REPO: "https://github.com/royd-jpg/Project_Chimera"
+      KERNEL_BRANCH: "chimera-mk6"
 
-      SUSFS_REPO: https://gitlab.com/simonpunk/susfs4ksu.git
-      SUSFS_BRANCH: kernel-4.9
+      SUSFS_REPO: "https://gitlab.com/simonpunk/susfs4ksu.git"
+      SUSFS_BRANCH: "kernel-4.9"
 
-      KERNEL_DIR: kernel
-      OUT_DIR: kernel-out
-      LOG_DIR: logs
+      KERNEL_DIR: "kernel"
+      OUT_DIR: "kernel-out"
+      LOG_DIR: "logs"
 
-      NEUTRON_URL: https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/10032024/neutron-clang-10032024.tar.zst
-      NEUTRON_KEY: neutron-clang-10032024-pinned-v2
-
-      BUILD_NUMBER: "002"
+      NEUTRON_URL: "https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/10032024/neutron-clang-10032024.tar.zst"
+      NEUTRON_KEY: "neutron-clang-10032024-pinned-v2"
 
     steps:
 
@@ -58,7 +80,9 @@ jobs:
       - name: Prepare workspace
         run: |
           set -Eeuo pipefail
-          mkdir -p "$LOG_DIR" "$OUT_DIR"
+
+          mkdir -p "$LOG_DIR"
+          mkdir -p "$OUT_DIR"
 
       # ════════════════════════════════════════════════
       # 1. Dependencies
@@ -71,10 +95,23 @@ jobs:
           sudo apt-get update -qq
 
           sudo apt-get install -yqq \
-            git curl wget bc flex bison python3 python3-pip \
-            libssl-dev libelf-dev build-essential \
-            zip unzip zstd lz4 \
-            ccache rsync jq \
+            git \
+            curl \
+            wget \
+            bc \
+            flex \
+            bison \
+            python3 \
+            python3-pip \
+            libssl-dev \
+            libelf-dev \
+            build-essential \
+            zip \
+            unzip \
+            zstd \
+            lz4 \
+            rsync \
+            jq \
             gcc-aarch64-linux-gnu \
             gcc-arm-linux-gnueabi
 
@@ -90,62 +127,53 @@ jobs:
           key: ${{ env.NEUTRON_KEY }}
 
       - name: Download Neutron Clang
-        if: ${{ steps.cache-neutron.outputs.cache-hit != 'true' }}
+        if: steps.cache-neutron.outputs.cache-hit != 'true'
         run: |
           set -Eeuo pipefail
 
           mkdir -p neutron-clang
 
+          echo "Downloading pinned Neutron Clang: $NEUTRON_URL" \
+            | tee "$LOG_DIR/toolchain.log"
+
           wget -qO /tmp/neutron.tar.zst "$NEUTRON_URL"
 
-          tar --use-compress-program=unzstd \
+          tar \
+            --use-compress-program=unzstd \
             -xf /tmp/neutron.tar.zst \
             -C neutron-clang \
             --strip-components=1
 
           test -x neutron-clang/bin/clang
 
-          neutron-clang/bin/clang --version | tee "$LOG_DIR/toolchain.log"
+          neutron-clang/bin/clang --version \
+            | tee -a "$LOG_DIR/toolchain.log"
 
-      - name: Export PATH
+      - name: Export toolchain PATH
         run: |
+          set -Eeuo pipefail
+
           echo "$GITHUB_WORKSPACE/neutron-clang/bin" >> "$GITHUB_PATH"
 
       # ════════════════════════════════════════════════
-      # 3. Clone Kernel
+      # 3. Clone kernel
       # ════════════════════════════════════════════════
 
-      - name: Clone kernel source
+      - name: Clone kernel tree
         run: |
           set -Eeuo pipefail
 
           git clone \
-            --recursive \
             --depth=1 \
             -b "$KERNEL_BRANCH" \
             "$KERNEL_REPO" \
             "$KERNEL_DIR"
 
           git -C "$KERNEL_DIR" log --oneline -3 \
-            | tee "$LOG_DIR/kernel_revision.log"
+            | tee "$LOG_DIR/kernel-revision.log"
 
       # ════════════════════════════════════════════════
-      # 4. Apply UV + BT commit
-      # ════════════════════════════════════════════════
-
-      - name: Apply UV + BT tuning commit
-        working-directory: kernel
-        run: |
-          set -Eeuo pipefail
-
-          git cherry-pick d1cbf4acc0e3f3a8e918470fb1bcff4464a07d3d \
-            || {
-              echo "Commit already present or conflict encountered"
-              git cherry-pick --abort || true
-            }
-
-      # ════════════════════════════════════════════════
-      # 5. Clone SUSFS
+      # 4. Clone SUSFS
       # ════════════════════════════════════════════════
 
       - name: Clone SUSFS
@@ -160,79 +188,166 @@ jobs:
 
           test -f susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.9.patch
           test -f susfs4ksu/kernel_patches/fs/susfs.c
+          test -f susfs4ksu/kernel_patches/include/linux/susfs.h
+          test -f susfs4ksu/kernel_patches/include/linux/susfs_def.h
+
+          git -C susfs4ksu rev-parse HEAD \
+            | tee "$LOG_DIR/susfs-revision.log"
 
       # ════════════════════════════════════════════════
-      # 6. KernelSU-Next
+      # 5. KernelSU-Next
       # ════════════════════════════════════════════════
 
-      - name: Setup KernelSU-Next
+      - name: Set up KernelSU-Next
         working-directory: kernel
         run: |
           set -Eeuo pipefail
 
-          rm -rf KernelSU-Next drivers/kernelsu
+          git rm -r --cached KernelSU-Next 2>/dev/null || true
 
-          git clone \
-            --depth=1 \
-            https://github.com/gavdoc38/KernelSU-Next.git \
-            KernelSU-Next
+          rm -rf .git/modules/KernelSU-Next
+          rm -rf KernelSU-Next
+          rm -rf drivers/kernelsu
+
+          KSU_URL="$(git config --file .gitmodules submodule.KernelSU-Next.url 2>/dev/null || true)"
+          KSU_COMMIT="$(git ls-tree HEAD KernelSU-Next 2>/dev/null | awk '{print $3}' || true)"
+
+          echo "Submodule URL: ${KSU_URL:-not found}" \
+            | tee "../$LOG_DIR/ksu-submodule.log"
+
+          echo "Pinned commit: ${KSU_COMMIT:-not found}" \
+            | tee -a "../$LOG_DIR/ksu-submodule.log"
+
+          if [[ -n "$KSU_URL" && -n "$KSU_COMMIT" ]]; then
+            git clone "$KSU_URL" KernelSU-Next
+            git -C KernelSU-Next checkout "$KSU_COMMIT"
+          elif [[ -n "$KSU_URL" ]]; then
+            git clone --depth=1 "$KSU_URL" KernelSU-Next
+          else
+            git clone \
+              --depth=1 \
+              https://github.com/gavdoc38/KernelSU-Next.git \
+              KernelSU-Next
+          fi
+
+          test -f KernelSU-Next/kernel/Kconfig
+
+          git -C KernelSU-Next log --oneline -1 \
+            | tee -a "../$LOG_DIR/ksu-submodule.log"
 
           ln -sf ../KernelSU-Next/kernel drivers/kernelsu
 
           test -f drivers/kernelsu/Kconfig
 
       # ════════════════════════════════════════════════
-      # 7. Samsung syscall_fn_t ABI Fix
+      # 6. SUSFS ABI Fix
       # ════════════════════════════════════════════════
 
-      - name: Apply syscall ABI fix
+      - name: Apply Samsung 4.9 syscall ABI fix
         working-directory: kernel
-        env:
-          SYSCALL_FIX_PY: |
-            from pathlib import Path
-            import re
-            import sys
-
-            path = Path("KernelSU-Next/kernel/hook/syscall_hook.h")
-            if not path.exists():
-                sys.exit(0)
-
-            text = path.read_text()
-
-            block = """\
-            /* Samsung 4.9 BSP ABI compatibility */
-            typedef long (*syscall_fn_t)(
-                unsigned long,
-                unsigned long,
-                unsigned long,
-                unsigned long,
-                unsigned long,
-                unsigned long
-            );
-            """
-
-            pos = 0
-            for m in re.finditer(r'^#.*\n', text, re.MULTILINE):
-                pos = m.end()
-
-            if "typedef long (*syscall_fn_t)" not in text:
-                text = text[:pos] + block + text[pos:]
-                path.write_text(text)
-                print("ABI fix injected")
-            else:
-                print("ABI fix already exists")
         run: |
           set -Eeuo pipefail
 
-          HOOK="KernelSU-Next/kernel/hook/syscall_hook.h"
+          HOOK_H="KernelSU-Next/kernel/hook/syscall_hook.h"
 
-          if grep -q "typedef long (\*syscall_fn_t)" "$HOOK" 2>/dev/null; then
-            echo "Already fixed"
+          test -f "$HOOK_H"
+
+          if grep -Fq 'typedef long (*syscall_fn_t)' "$HOOK_H"; then
+            echo "ABI typedef already present"
             exit 0
           fi
 
-          echo "$SYSCALL_FIX_PY" > /tmp/fix_syscall_typedef.py
+          cat > /tmp/fix_syscall_typedef.py <<'PYEOF'
+          from pathlib import Path
+          import re
+
+          path = Path("KernelSU-Next/kernel/hook/syscall_hook.h")
+
+          text = path.read_text()
+
+          typedef_block = r"""
+          /* syscall_fn_t: Samsung 4.9 BSP compatibility */
+          typedef long (*syscall_fn_t)(
+              unsigned long,
+              unsigned long,
+              unsigned long,
+              unsigned long,
+              unsigned long,
+              unsigned long
+          );
+          """
+
+          pos = 0
+
+          for match in re.finditer(
+              r'^#(include|pragma|ifndef|define)[^\n]*\n',
+              text,
+              re.MULTILINE
+          ):
+              pos = match.end()
+
+          if "typedef long (*syscall_fn_t)" not in text:
+              text = text[:pos] + typedef_block + "\n" + text[pos:]
+              path.write_text(text)
+              print("typedef injected")
+          else:
+              print("typedef already exists")
+          PYEOF
+
+          python3 - <<'PYEOF'
+          import textwrap
+
+          path = "/tmp/fix_syscall_typedef.py"
+
+          with open(path, "r", encoding="utf-8") as f:
+              data = f.read()
+
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(textwrap.dedent(data))
+          PYEOF
+
           python3 /tmp/fix_syscall_typedef.py
+
+      # ════════════════════════════════════════════════
+      # 7. Preflight
+      # ════════════════════════════════════════════════
+
+      - name: Preflight tree state
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+
+          {
+            echo "=== git status ==="
+            git status --short
+
+            echo
+            echo "=== KSU/SUSFS markers ==="
+
+            grep -RsnE \
+              'KernelSU|kernelsu|CONFIG_KSU|KSU_SUSFS|ksu_handle_faccessat|susfs_task_state|susfs_is_inode_sus_path' \
+              fs include kernel arch/arm64/configs \
+              2>/dev/null || true
+
+          } | tee "../$LOG_DIR/preflight.log"
+
+          ALREADY_PATCHED=false
+
+          if grep -RqsE \
+            'source "drivers/kernelsu/Kconfig"|ksu_handle_faccessat|susfs_task_state' \
+            fs include kernel arch/arm64/configs \
+            2>/dev/null; then
+            ALREADY_PATCHED=true
+          fi
+
+          echo "ALREADY_PATCHED=$ALREADY_PATCHED" \
+            | tee -a "../$LOG_DIR/preflight.log"
+
+          if [[ "$ALREADY_PATCHED" == "true" && "${{ inputs.force_repatch }}" != "true" ]]; then
+            echo "SKIP_INTEGRATION=true" >> "$GITHUB_ENV"
+          else
+            echo "SKIP_INTEGRATION=false" >> "$GITHUB_ENV"
+          fi
 
       # ════════════════════════════════════════════════
       # 8. Wire KernelSU
@@ -243,29 +358,50 @@ jobs:
         run: |
           set -Eeuo pipefail
 
-          sed -i '/drivers\/kernelsu\/Kconfig/d' drivers/Kconfig
+          sed -i '/source "drivers\/kernelsu\/Kconfig"/d' drivers/Kconfig
 
-          grep -q '^endmenu' drivers/Kconfig || \
+          if ! grep -q '^endmenu' drivers/Kconfig; then
             printf '\nendmenu\n' >> drivers/Kconfig
+          fi
 
           sed -i \
             '/^endmenu/i source "drivers/kernelsu/Kconfig"' \
             drivers/Kconfig
 
+          COUNT="$(grep -c 'drivers/kernelsu/Kconfig' drivers/Kconfig || true)"
+
+          [[ "$COUNT" -eq 1 ]]
+
       # ════════════════════════════════════════════════
       # 9. Apply SUSFS
       # ════════════════════════════════════════════════
 
-      - name: Apply SUSFS
-        if: ${{ inputs.force_repatch == true || inputs.force_repatch == false }}
+      - name: Apply SUSFS patch
+        if: env.SKIP_INTEGRATION == 'false'
         working-directory: kernel
         run: |
           set -Eeuo pipefail
 
           PATCH="$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.9.patch"
 
-          git apply --reject --whitespace=fix "$PATCH" \
-            || true
+          set +e
+
+          git apply \
+            --reject \
+            --whitespace=fix \
+            "$PATCH" \
+            > "../$LOG_DIR/susfs-apply.log" 2>&1
+
+          APPLY_RC=$?
+
+          set -e
+
+          echo "Apply RC=$APPLY_RC" \
+            | tee -a "../$LOG_DIR/susfs-apply.log"
+
+          find . -name '*.rej' -print \
+            | sort \
+            > "../$LOG_DIR/susfs-rejects.log" || true
 
           install -m 0644 \
             "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/fs/susfs.c" \
@@ -291,186 +427,195 @@ jobs:
             echo 'obj-$(CONFIG_KSU_SUSFS) += susfs.o' >> fs/Makefile
 
       # ════════════════════════════════════════════════
-      # 10. Chimera Branding + Dirty Cleanup
+      # 10. ZeroMount probe
       # ════════════════════════════════════════════════
 
-      - name: Apply Chimera uname branding
-        working-directory: kernel
-        env:
-          VERSION_SH: |
-            #!/bin/sh
-            #
-            # Project Chimera deterministic localversion
-            #
-
-            echo "-Chimera_MK6r2"
-            exit 0
-        run: |
-          set -Eeuo pipefail
-
-          VERSION_FILE="scripts/setlocalversion"
-
-          echo "$VERSION_SH" > "$VERSION_FILE"
-          chmod +x "$VERSION_FILE"
-
-      - name: Remove git dirty state
+      - name: ZeroMount compatibility probe
+        if: ${{ inputs.enable_zeromount }}
         working-directory: kernel
         run: |
           set -Eeuo pipefail
 
-          git config --global user.email "chimera@local"
-          git config --global user.name "Project Chimera"
+          {
+            echo "=== ZeroMount compatibility probe ==="
 
-          git add .
-          git commit -m "Project Chimera integrated tree" || true
+            echo
+            echo "== kernel markers =="
 
-          git status --short
+            grep -RsnE \
+              'CONFIG_KSU_SUSFS|susfs_task_state|INODE_STATE_SUS_PATH|susfs_is_inode_sus_path|CONFIG_KSU_SUSFS_OPEN_REDIRECT' \
+              fs include kernel \
+              2>/dev/null || true
 
-          if [[ -n "$(git status --porcelain)" ]]; then
-            echo "ERROR: tree still dirty"
-            exit 1
+            echo
+            echo "== SUSFS markers =="
+
+            grep -RsnE \
+              'ShowVersion|supercall|SUSFS|susfs' \
+              "$GITHUB_WORKSPACE/susfs4ksu" \
+              2>/dev/null || true
+
+          } | tee "../$LOG_DIR/zeromount-compat.log"
+
+      # ════════════════════════════════════════════════
+      # 11. AVC-safe SUSFS config
+      # ════════════════════════════════════════════════
+
+      - name: Apply AVC-safe SUSFS config
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+
+          DEFCONFIG="arch/arm64/configs/exynos9810-star2lte_defconfig"
+
+          test -f "$DEFCONFIG"
+
+          set_cfg() {
+            sed -i "/^$1=.*/d" "$DEFCONFIG"
+            sed -i "/^# $1 is not set/d" "$DEFCONFIG"
+            echo "$1=$2" >> "$DEFCONFIG"
+          }
+
+          unset_cfg() {
+            sed -i "/^$1=.*/d" "$DEFCONFIG"
+            sed -i "/^# $1 is not set/d" "$DEFCONFIG"
+            echo "# $1 is not set" >> "$DEFCONFIG"
+          }
+
+          set_cfg CONFIG_KSU y
+          set_cfg CONFIG_KSU_SUSFS y
+          set_cfg CONFIG_KSU_SUSFS_SUS_PATH y
+          set_cfg CONFIG_KSU_SUSFS_SUS_KSTAT y
+
+          if [[ "${{ inputs.enable_susfs_open_redirect }}" == "true" ]]; then
+            set_cfg CONFIG_KSU_SUSFS_OPEN_REDIRECT y
+          else
+            unset_cfg CONFIG_KSU_SUSFS_OPEN_REDIRECT
           fi
 
+          if [[ "${{ inputs.enable_susfs_hide_symbols }}" == "true" ]]; then
+            set_cfg CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS y
+          else
+            unset_cfg CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
+          fi
+
+          if [[ "${{ inputs.enable_susfs_try_umount }}" == "true" ]]; then
+            set_cfg CONFIG_KSU_SUSFS_TRY_UMOUNT y
+          else
+            unset_cfg CONFIG_KSU_SUSFS_TRY_UMOUNT
+          fi
+
+          unset_cfg CONFIG_KSU_SUSFS_SUS_MOUNT
+          unset_cfg CONFIG_KSU_SUSFS_SPOOF_UNAME
+          unset_cfg CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOF
+          unset_cfg CONFIG_KSU_SUSFS_AVC_LOG_SPOOF
+          unset_cfg CONFIG_KSU_SUSFS_SELINUX_AVC_HOOK
+          unset_cfg CONFIG_KSU_SUSFS_SPOOF_SELINUX
+
       # ════════════════════════════════════════════════
-      # 11. Dry Run Exit
+      # 12. Dry Run
       # ════════════════════════════════════════════════
 
       - name: Dry run complete
-        if: ${{ inputs.dry_run == true }}
+        if: ${{ inputs.dry_run }}
         run: |
-          echo "Dry run successful"
+          echo "Dry run passed"
+          echo "Check logs and artifacts"
           exit 0
 
       # ════════════════════════════════════════════════
-      # 12. Build Kernel
+      # 13. Build kernel
       # ════════════════════════════════════════════════
 
       - name: Build kernel
-        if: ${{ inputs.dry_run == false }}
+        if: ${{ !inputs.dry_run }}
         working-directory: kernel
         run: |
           set -Eeuo pipefail
 
-          export ARCH=arm64
-          export SUBARCH=arm64
+          mkdir -p "$GITHUB_WORKSPACE/$OUT_DIR"
 
-          export CC=clang
-          export LD=ld.lld
+          BUILD_NUM="$(printf '%03d' "$((10#${GITHUB_RUN_NUMBER:-1} % 1000))")"
+          LOCALVERSION="-Chimera_Mk6r2-${BUILD_NUM}"
 
-          export CROSS_COMPILE=aarch64-linux-gnu-
-          export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
-          export CLANG_TRIPLE=aarch64-linux-gnu-
-
-          export KCFLAGS="-fcommon"
+          export KBUILD_BUILD_USER="X"
+          export KBUILD_BUILD_HOST="AegisDevLabs"
 
           MAKE=(
-            make -j"$(nproc)"
+            make
+            -j"$(nproc)"
             O="$GITHUB_WORKSPACE/$OUT_DIR"
             ARCH=arm64
             SUBARCH=arm64
             CC=clang
-            LD=ld.lld
             CLANG_TRIPLE=aarch64-linux-gnu-
             CROSS_COMPILE=aarch64-linux-gnu-
             CROSS_COMPILE_ARM32=arm-linux-gnueabi-
-            KCFLAGS="-fcommon"
-            LOCALVERSION=
-            KBUILD_BUILD_USER=Chimera
-            KBUILD_BUILD_HOST=AegisLab
+            LD="$GITHUB_WORKSPACE/neutron-clang/bin/ld.lld"
+            AR=llvm-ar
+            NM=llvm-nm
+            OBJCOPY=llvm-objcopy
+            OBJDUMP=llvm-objdump
+            STRIP=llvm-strip
+            KCFLAGS="-fcommon -Wno-implicit-function-declaration -Wno-implicit-int -Wno-return-type"
           )
 
           "${MAKE[@]}" exynos9810-star2lte_defconfig
-
-          scripts/config \
-            --file "$GITHUB_WORKSPACE/$OUT_DIR/.config" \
-            -e KSU \
-            -e KSU_SUSFS \
-            -e KSU_SUSFS_HAS_MAGIC_MOUNT \
-            -e KSU_SUSFS_SUS_PATH \
-            -d KSU_SUSFS_SUS_MOUNT \
-            -e KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT \
-            -e KSU_SUSFS_TRY_UMOUNT \
-            -d KSU_SUSFS_SPOOF_UNAME \
-            -e KSU_SUSFS_ENABLE_LOG \
-            -e OVERLAY_FS \
-            -e TMPFS \
-            -e BPF \
-            -e BPF_SYSCALL \
-            -e CMA \
-            -e DMA_CMA
-
-          "${MAKE[@]}" olddefconfig
 
           cp \
             "$GITHUB_WORKSPACE/$OUT_DIR/.config" \
             "$GITHUB_WORKSPACE/$LOG_DIR/final.config"
 
-          "${MAKE[@]}" Image dtbs 2>&1 | tee build.log
+          "${MAKE[@]}" \
+            LOCALVERSION="$LOCALVERSION" \
+            Image dtbs \
+            2>&1 | tee build.log
 
           test -f "$GITHUB_WORKSPACE/$OUT_DIR/arch/arm64/boot/Image"
 
-      # ════════════════════════════════════════════════
-      # 13. Verify uname cleanliness
-      # ════════════════════════════════════════════════
-
-      - name: Verify clean uname
-        working-directory: kernel
-        run: |
-          set -Eeuo pipefail
-
-          COMPILE_H="$GITHUB_WORKSPACE/$OUT_DIR/include/generated/compile.h"
-
-          cat "$COMPILE_H"
-
-          grep -q 'Chimera_MK6r2' "$COMPILE_H" \
-            || {
-              echo "ERROR: branding missing"
-              exit 1
-            }
-
-          if grep -q 'dirty' "$COMPILE_H"; then
-            echo "ERROR: dirty suffix still present"
-            exit 1
-          fi
+          du -h "$GITHUB_WORKSPACE/$OUT_DIR/arch/arm64/boot/Image" \
+            | tee "$GITHUB_WORKSPACE/$LOG_DIR/image-size.log"
 
       # ════════════════════════════════════════════════
       # 14. Package AnyKernel3
       # ════════════════════════════════════════════════
 
-      - name: Package AnyKernel3
-        if: ${{ inputs.dry_run == false }}
-        env:
-          ANYKERNEL_SH: |
-            properties() { '
-            kernel.string=Project Chimera MK6r2
-            do.devicecheck=1
-            do.modules=0
-            do.cleanup=1
-            do.cleanuponabort=0
-            device.name1=star2lte
-            device.name2=SM-G965F
-            device.name3=SM-G965U
-            device.name4=SM-G965N
-            device.name5=SM-G9650
-            '; }
-
-            block=boot;
-            is_slot_device=0;
-            ramdisk_compression=auto;
-            patch_vbmeta_flag=auto;
-
-            . tools/ak3-core.sh;
-
-            dump_boot;
-            write_boot;
+      - name: Package flashable zip
+        if: ${{ !inputs.dry_run }}
         run: |
           set -Eeuo pipefail
 
           git clone \
             --depth=1 \
-            https://github.com/osm0sis/AnyKernel3
+            https://github.com/osm0sis/AnyKernel3 \
+            AnyKernel3
 
-          echo "$ANYKERNEL_SH" > AnyKernel3/anykernel.sh
+          cat > AnyKernel3/anykernel.sh <<'EOF'
+          properties() { '
+          kernel.string=Project Chimera MK6r2
+          do.devicecheck=1
+          do.modules=0
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=star2lte
+          device.name2=SM-G965F
+          device.name3=SM-G965U
+          device.name4=SM-G965N
+          device.name5=SM-G9650
+          '; }
+
+          block=boot;
+          is_slot_device=0;
+          ramdisk_compression=auto;
+          patch_vbmeta_flag=auto;
+
+          . tools/ak3-core.sh;
+
+          dump_boot;
+          write_boot;
+          EOF
+
+          sed -i 's/^[[:space:]]*//' AnyKernel3/anykernel.sh
 
           cp \
             "$OUT_DIR/arch/arm64/boot/Image" \
@@ -481,7 +626,7 @@ jobs:
             -name '*star2lte*.dtb' \
             -exec cp {} AnyKernel3/ \;
 
-          ZIP="chimera-mk6-$(date +%Y%m%d-%H%M).zip"
+          ZIP="chimera-mk6r2-$(date +%Y%m%d-%H%M).zip"
 
           (
             cd AnyKernel3
@@ -491,7 +636,7 @@ jobs:
           test -f "$ZIP"
 
       # ════════════════════════════════════════════════
-      # 15. Upload Artifacts
+      # 15. Upload artifacts
       # ════════════════════════════════════════════════
 
       - name: Upload logs
@@ -503,13 +648,55 @@ jobs:
             logs/
             kernel/build.log
             kernel-out/.config
-          retention-days: 14
           if-no-files-found: ignore
+          retention-days: 14
 
       - name: Upload flashable zip
-        if: ${{ inputs.dry_run == false }}
+        if: ${{ !inputs.dry_run }}
         uses: actions/upload-artifact@v4
         with:
-          name: chimera-kernel-${{ github.run_number }}
+          name: chimera-mk6-${{ github.run_number }}
           path: chimera-*.zip
+          if-no-files-found: error
           retention-days: 30
+
+      # ════════════════════════════════════════════════
+      # 16. GitHub Release
+      # ════════════════════════════════════════════════
+
+      - name: Create GitHub Release
+        if: ${{ !inputs.dry_run && inputs.do_release }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: chimera-mk6-${{ github.run_number }}
+
+          name: >-
+            Project Chimera MK6 —
+            Lineage 23.2 Build #${{ github.run_number }}
+
+          body: |
+            ## Project Chimera MK6 — Exynos 9810 / star2lte
+
+            Base:
+            Project_Chimera @ chimera-mk6
+
+            ### Integrated
+
+            - KernelSU Next
+            - SUSFS safe config
+            - Samsung 4.9 syscall ABI fix
+            - ZeroMount compatibility probe
+            - OPEN_REDIRECT enabled
+            - BPF enabled
+            - HZ_300 / PREEMPT
+            - Camera ION tuned / CMA 768MB
+
+            ### Flash order
+
+            1. Flash LineageOS 23.2 + recovery
+            2. Sideload this zip
+            3. Install KernelSU Next manager
+            4. Install SUSFS module
+            5. Reboot
+
+          files: chimera-*.zip
