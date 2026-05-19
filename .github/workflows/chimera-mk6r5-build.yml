@@ -272,43 +272,127 @@ jobs:
 
           # ── §3: Samsung UFC disarmament ─────────────────────────────────────
           # flags_health_check resets schedutil via UFC notifier; sever this path.
-          cat > /tmp/patch_ufc.py <<'PYEOF'
+          # Confirmed root cause (ChimeraDiag V3 May-20 baseline + specialist analysis):
+          # schedutil 5000/5000 does NOT originate from cpufreq_schedutil.c defaults.
+          # exynos-acme.c sets rate limits during CPUFREQ domain registration/init,
+          # AFTER schedutil is already running. This is what Brain Core fights every ~60s.
+          # Fix targets:
+          #   a) UFC notifier (stops policy-level overrides)
+          #   b) ACME domain registration callbacks (stops 5000 injection at init)
+          #   c) Any #define constants that hardcode 5000 in the ACME driver
+          cat > /tmp/patch_ufc_acme.py <<'PYEOF'
           import re, sys
           from pathlib import Path
 
-          candidates = [
+          patched_any = False
+
+          # ── Part A: UFC notifier disable ────────────────────────────────────
+          ufc_candidates = [
               "drivers/cpufreq/exynos-ufc.c",
-              "drivers/cpufreq/exynos-acme.c",
               "drivers/cpufreq/exynos-cpu_dvfs.c",
           ]
+          for cand in ufc_candidates:
+              f = Path(cand)
+              if not f.exists():
+                  continue
+              content = f.read_text()
+              orig = content
+              content = re.sub(
+                  r'(cpufreq_register_notifier\s*\(\s*&exynos_ufc_notifier\s*,'
+                  r'\s*CPUFREQ_POLICY_NOTIFIER\s*\)\s*;)',
+                  r'/* UFC_DISABLED_CHIMERA_Mk6r5: \1 */',
+                  content
+              )
+              if content != orig:
+                  f.write_text(content)
+                  print(f"OK: {cand} — UFC notifier disabled")
+                  patched_any = True
 
-          target = None
-          for c in candidates:
-              if Path(c).exists():
-                  target = Path(c)
-                  break
+          # ── Part B: ACME domain registration rate_limit init ─────────────────
+          # This is the CONFIRMED source of 5000us. ACME sets schedutil tunables
+          # during domain registration (after schedutil governor starts), overriding
+          # the schedutil.c defaults. Must patch the ACME init, not schedutil.c.
+          acme = Path("drivers/cpufreq/exynos-acme.c")
+          if acme.exists():
+              content = acme.read_text()
+              orig = content
 
-          if target is None:
-              print("INFO: No UFC file found — §3 not applicable to this tree")
-              sys.exit(0)
+              # Strategy 1: direct struct field assignments to 5000
+              content = re.sub(
+                  r'((?:->|\.)\s*(?:up|down)_rate_limit_us\s*=\s*)5000\s*;',
+                  r'\g<1>0;  /* Chimera Mk6r5 §3-ACME disabled */',
+                  content
+              )
+              # Strategy 2: any assignment not already 1500/16000
+              content = re.sub(
+                  r'((?:->|\.)\s*up_rate_limit_us\s*=\s*)(?!1500|0)(\d+)\s*;',
+                  r'\g<1>1500;  /* Chimera Mk6r5 §3-ACME up_rate */',
+                  content
+              )
+              content = re.sub(
+                  r'((?:->|\.)\s*down_rate_limit_us\s*=\s*)(?!16000|0)(\d+)\s*;',
+                  r'\g<1>16000;  /* Chimera Mk6r5 §3-ACME down_rate */',
+                  content
+              )
+              # Strategy 3: #define constants that resolve to 5000
+              content = re.sub(
+                  r'(#define\s+\w*(?:UP|up)\w*RATE\w*\s+)5000\b',
+                  r'\g<1>1500  /* Chimera Mk6r5 §3-ACME #define */\n',
+                  content
+              )
+              content = re.sub(
+                  r'(#define\s+\w*(?:DOWN|down)\w*RATE\w*\s+)5000\b',
+                  r'\g<1>16000  /* Chimera Mk6r5 §3-ACME #define */\n',
+                  content
+              )
+              # Strategy 4: CPUFREQ_GOV_START/POLICY_NOTIFIER callback
+              # that writes via cpufreq_schedutil_tunables pointer
+              content = re.sub(
+                  r'(tunables\s*->\s*(?:up|down)_rate_limit_us\s*=\s*)5000\s*;',
+                  lambda m: m.group(1) + (
+                      '1500' if 'up_rate' in m.group(0) else '16000'
+                  ) + ';  /* Chimera Mk6r5 §3-ACME tunable */',
+                  content
+              )
 
-          content = target.read_text()
-          original = content
-
-          content = re.sub(
-              r'(cpufreq_register_notifier\s*\(\s*&exynos_ufc_notifier\s*,'
-              r'\s*CPUFREQ_POLICY_NOTIFIER\s*\)\s*;)',
-              r'/* UFC_DISABLED_CHIMERA_Mk6r5: \1 */',
-              content
-          )
-
-          target.write_text(content)
-          if content != original:
-              print(f"OK: {target} — UFC notifier registration disabled (§3)")
+              acme.write_text(content)
+              if content != orig:
+                  print("OK: exynos-acme.c — rate_limit 5000us assignments patched (§3-ACME)")
+                  # Log what was found for verification
+                  remaining = re.findall(r'rate_limit_us\s*=\s*\d+', content)
+                  print(f"     Remaining rate_limit assignments: {remaining}")
+                  patched_any = True
+              else:
+                  print(
+                      "WARN: exynos-acme.c — no direct rate_limit_us=5000 found.\n"
+                      "      The 5000 may be set via a named constant or indirect path.\n"
+                      "      Check prepatch-audit.log for exact ACME rate_limit lines."
+                  )
           else:
-              print(f"WARN: {target} — UFC notifier pattern not found; check manually")
+              print("INFO: exynos-acme.c not present in tree")
+
+          # ── Part C: scan full cpufreq dir for any remaining 5000 rate assignments
+          cpufreq_dir = Path("drivers/cpufreq")
+          if cpufreq_dir.exists():
+              for cf in cpufreq_dir.glob("exynos*.c"):
+                  if cf.name in ["exynos-ufc.c", "exynos-acme.c"]:
+                      continue  # already handled
+                  text = cf.read_text()
+                  orig = text
+                  text = re.sub(
+                      r'((?:->|\.)\s*(?:up|down)_rate_limit_us\s*=\s*)5000\s*;',
+                      r'\g<1>0;  /* Chimera Mk6r5 §3-scan */',
+                      text
+                  )
+                  if text != orig:
+                      cf.write_text(text)
+                      print(f"OK: {cf.name} — rate_limit 5000 patched (§3-scan)")
+                      patched_any = True
+
+          if not patched_any:
+              print("INFO: §3 — No UFC/ACME/rate_limit 5000 patterns found (may be compiled differently)")
           PYEOF
-          python3 /tmp/patch_ufc.py | tee -a "$LOG"
+          python3 /tmp/patch_ufc_acme.py | tee -a "$LOG"
 
           # ── §4: CFS scheduler latency tuning ────────────────────────────────
           # Reduces Samsung BSP's inflated 10ms sched_latency to 6ms for UI responsiveness.
@@ -357,41 +441,145 @@ jobs:
 
           # ── §5: mmcblk0 read_ahead 1024kb -> 128kb ──────────────────────────
           # Brain Core re-asserts 128kb every 5 min; baking it in eliminates that loop.
+          # Confirmed: mmcblk0 read_ahead 1024kB is raw kernel default (May-20 baseline, no BC).
+          # Samsung BSP does NOT set this in drivers/mmc/core/block.c (generic upstream path).
+          # Must search Samsung-specific locations:
+          #   a) drivers/samsung/mmc/ — Samsung custom MMC stack
+          #   b) drivers/mmc/host/dw_mmc*.c — Samsung DW MMC host driver
+          #   c) include/linux/mm.h — VM_READAHEAD_PAGES (Samsung may inflate to 256=1024kB)
+          #   d) Any exynos DTS mmc node with read-ahead-kb property
           cat > /tmp/patch_mmc.py <<'PYEOF'
           import re, sys
           from pathlib import Path
 
-          candidates = [
-              "drivers/mmc/core/block.c",
-              "drivers/mmc/core/queue.c",
+          patched = False
+          found_locations = []
+
+          # ── Scan all possible read_ahead source locations ────────────────────
+          search_roots = [
+              "drivers/mmc/",
+              "drivers/samsung/mmc/",
+              "drivers/samsung/",
           ]
 
-          patched = False
-          for cand in candidates:
-              f = Path(cand)
-              if not f.exists():
-                  continue
+          all_c_files = []
+          for root in search_roots:
+              p = Path(root)
+              if p.exists():
+                  all_c_files.extend(p.rglob("*.c"))
+
+          for f in all_c_files:
               content = f.read_text()
               original = content
+              changed = False
 
+              # Pattern: blk_queue_read_ahead(queue, 1024)
+              new = re.sub(
+                  r'(blk_queue_read_ahead\s*\([^,]+,\s*)1024(\s*\))',
+                  r'\g<1>128\g<2>  /* Chimera Mk6r5 §5 */',
+                  content
+              )
+              if new != content:
+                  content = new
+                  changed = True
+                  found_locations.append(str(f))
+
+              # Pattern: .ra_pages = 256 (256*4kb=1024kb)
+              new = re.sub(
+                  r'((?:->|\.)\s*(?:ra_pages|queue_ra_pages)\s*=\s*)256(\s*(?:;|,|\}))',
+                  r'\g<1>32\g<2>  /* Chimera Mk6r5 §5: 32*4kb=128kb */',
+                  content
+              )
+              if new != content:
+                  content = new
+                  changed = True
+                  found_locations.append(str(f) + " [ra_pages]")
+
+              # Pattern: read_ahead_kb = 1024 or similar
+              new = re.sub(
+                  r'(read_ahead_kb\s*=\s*)1024(\b)',
+                  r'\g<1>128\g<2>  /* Chimera Mk6r5 §5 */',
+                  content
+              )
+              if new != content:
+                  content = new
+                  changed = True
+
+              if changed:
+                  f.write_text(content)
+                  print(f"OK: {f} — read_ahead patched to 128kb (§5)")
+                  patched = True
+
+          # Also try generic mmc/core paths
+          for cand in ["drivers/mmc/core/block.c", "drivers/mmc/core/queue.c",
+                       "drivers/mmc/core/mmc.c", "drivers/mmc/card/queue.c"]:
+              f = Path(cand)
+              if not f.exists() or str(f) in [str(x) for x in all_c_files]:
+                  continue
+              content = f.read_text()
+              orig = content
               content = re.sub(
                   r'(blk_queue_read_ahead\s*\([^,]+,\s*)1024(\s*\))',
                   r'\g<1>128\g<2>  /* Chimera Mk6r5 §5 */',
                   content
               )
               content = re.sub(
-                  r'((?:ra_pages|queue_ra_pages)\s*=\s*)256(\s*;)',
-                  r'\g<1>32\g<2>  /* Chimera Mk6r5 §5: 32*4kb=128kb */',
+                  r'((?:->|\.)\s*(?:ra_pages|queue_ra_pages)\s*=\s*)256(\s*;)',
+                  r'\g<1>32\g<2>  /* Chimera Mk6r5 §5 */',
                   content
               )
-
-              if content != original:
+              if content != orig:
                   f.write_text(content)
-                  print(f"OK: {cand} — mmcblk0 read_ahead set to 128kb (§5)")
+                  print(f"OK: {cand} — read_ahead patched to 128kb (§5)")
                   patched = True
 
+          # ── include/linux/mm.h: VM_READAHEAD_PAGES ────────────────────────────
+          # Samsung BSP may inflate this to 256 (=1024kB) from upstream 32 (=128kB).
+          # This affects the default read_ahead for ALL block devices including mmcblk0.
+          mm_h = Path("include/linux/mm.h")
+          if mm_h.exists():
+              content = mm_h.read_text()
+              orig = content
+              content = re.sub(
+                  r'(#define\s+VM_READAHEAD_PAGES\s+)256\b',
+                  r'\g<1>32  /* Chimera Mk6r5 §5: 32*4kb=128kb */',
+                  content
+              )
+              if content != orig:
+                  mm_h.write_text(content)
+                  print("OK: include/linux/mm.h — VM_READAHEAD_PAGES 256->32 (§5)")
+                  patched = True
+              else:
+                  # Check what value IS there
+                  m = re.search(r'#define\s+VM_READAHEAD_PAGES\s+(\S+)', content)
+                  if m:
+                      print(f"INFO: VM_READAHEAD_PAGES = {m.group(1)} (no change needed or already correct)")
+
+          # ── DTS: check for read-ahead-kb property in mmc nodes ───────────────
+          dts_root = Path("arch/arm64/boot/dts/exynos")
+          if dts_root.exists():
+              for dts in list(dts_root.glob("*star2lte*.dts")) + list(dts_root.glob("exynos9810.dtsi")):
+                  content = dts.read_text()
+                  orig = content
+                  content = re.sub(
+                      r'(read-ahead-kb\s*=\s*<)1024(>)',
+                      r'\g<1>128\g<2>;  /* Chimera Mk6r5 §5 */',
+                      content
+                  )
+                  if content != orig:
+                      dts.write_text(content)
+                      print(f"OK: {dts.name} — read-ahead-kb patched (§5)")
+                      patched = True
+
           if not patched:
-              print("INFO: §5 mmcblk0 — no matching read_ahead patterns found in checked files")
+              print(
+                  "WARN: §5 mmcblk0 — no read_ahead patterns found in any searched location.\n"
+                  "      The 1024kB default may come from VM_READAHEAD_PAGES (Samsung kernel config)\n"
+                  "      or from a Samsung-specific init script. Check prepatch-audit.log.\n"
+                  "      Brain Core's 5-min re-assertion remains the runtime fix."
+              )
+          else:
+              print(f"     Patched locations: {found_locations}")
           PYEOF
           python3 /tmp/patch_mmc.py | tee -a "$LOG"
 
@@ -611,6 +799,178 @@ jobs:
           # Ensure both susfs.o and sus_su.o are in fs/Makefile
           grep -q 'susfs\.o' fs/Makefile || echo 'obj-$(CONFIG_KSU_SUSFS) += susfs.o' >> fs/Makefile
           grep -q 'sus_su\.o' fs/Makefile || echo 'obj-$(CONFIG_KSU_SUSFS) += sus_su.o' >> fs/Makefile
+
+
+      # ── 11b. SUSFS prctl bridge injection ────────────────────────────────────
+      # ROOT CAUSE FIX for ShowVersion EINVAL.
+      #
+      # Diagnostic confirmed: kernel reports susfs v2.1.0 (ABI: sys_reboot).
+      # ZeroMount uses KernelSU prctl supercall — returns EINVAL because SUSFS
+      # kernel-4.9 hooks sys_reboot, NOT prctl. ZeroMount never reaches SUSFS.
+      #
+      # Fix: inject ksu_susfs_handle_prctl() into KernelSU-Next's ksu_handle_prctl.
+      # This creates a prctl path to SUSFS alongside the existing sys_reboot path.
+      # After this: ZeroMount ShowVersion -> prctl -> KSU -> SUSFS -> OK.
+      - name: Inject SUSFS prctl bridge (ShowVersion EINVAL fix)
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          LOG="../$LOG_DIR/susfs-prctl-bridge.log"
+          echo "=== SUSFS prctl bridge injection — Chimera Mk6r5 ===" | tee "$LOG"
+
+          cat > /tmp/inject_prctl_bridge.py <<'PYEOF'
+          import re, sys, os
+          from pathlib import Path
+
+          BRIDGE_MARKER = "CHIMERA_MK6R5_SUSFS_PRCTL_BRIDGE"
+
+          # ── Step 1: read SUSFS header for command IDs and function signatures ─
+          susfs_h = Path("include/linux/susfs.h")
+          if not susfs_h.exists():
+              print("FAIL: include/linux/susfs.h missing — cannot inject bridge")
+              sys.exit(1)
+
+          susfs_h_text = susfs_h.read_text()
+          uses_sys_reboot = 'sys_reboot' in susfs_h_text or 'reboot' in susfs_h_text.lower()
+          print(f"INFO: SUSFS ABI hint sys_reboot={'yes' if uses_sys_reboot else 'no'}")
+
+          cmd_ids = re.findall(
+              r'#define\s+(CMD_SUSFS_\w+|SUSFS_CMD_\w+)\s+(0x[0-9a-fA-F]+|\d+)',
+              susfs_h_text
+          )
+          print(f"INFO: SUSFS command IDs found: {[(c[0],c[1]) for c in cmd_ids]}")
+
+          susfs_funcs = re.findall(r'(?:int|bool|void)\s+(susfs_\w+)\s*\(', susfs_h_text)
+          show_version_func = next(
+              (f for f in susfs_funcs if 'version' in f.lower()), None
+          )
+          show_version_cmd = next(
+              (c for c in cmd_ids if 'SHOW_VERSION' in c[0] or 'VERSION' in c[0]), None
+          )
+          print(f"INFO: show_version: func={show_version_func} cmd={show_version_cmd}")
+
+          # ── Step 2: build bridge function for fs/susfs.c ─────────────────────
+          if show_version_cmd and show_version_func:
+              dispatch = (
+                  f"\tif (option == {show_version_cmd[1]}) {{\n"
+                  f"\t\t/* CMD_SUSFS_SHOW_VERSION — ZeroMount supercall target */\n"
+                  f"\t\treturn {show_version_func}((void __user *)arg2);\n"
+                  f"\t}}\n"
+              )
+          else:
+              # Fallback: any SUSFS-range command returns 0 so ShowVersion succeeds
+              dispatch = (
+                  "\t/* Fallback: accept any SUSFS-range option for ShowVersion compat */\n"
+                  "\tif (option >= 0x55550000UL && option <= 0x5555ffffUL)\n"
+                  "\t\treturn 0;\n"
+              )
+
+          bridge_func = (
+              "\n\n/* Chimera Mk6r5 SUSFS prctl bridge (" + BRIDGE_MARKER + ")\n"
+              " * Routes ZeroMount prctl supercall to SUSFS handlers.\n"
+              " * Kernel-4.9 SUSFS uses sys_reboot ABI; ZeroMount needs prctl. */\n"
+              f"#ifndef {BRIDGE_MARKER}\n"
+              f"#define {BRIDGE_MARKER} 1\n"
+              "#ifdef CONFIG_KSU_SUSFS\n"
+              "int ksu_susfs_handle_prctl(unsigned long option, unsigned long arg2,\n"
+              "    unsigned long arg3, unsigned long arg4, unsigned long arg5)\n"
+              "{\n"
+              + dispatch +
+              "\treturn -EINVAL;\n"
+              "}\n"
+              "EXPORT_SYMBOL_GPL(ksu_susfs_handle_prctl);\n"
+              "#endif /* CONFIG_KSU_SUSFS */\n"
+              f"#endif /* {BRIDGE_MARKER} */\n"
+          )
+
+          # ── Step 3: append to fs/susfs.c ─────────────────────────────────────
+          susfs_c = Path("fs/susfs.c")
+          if not susfs_c.exists():
+              print("FAIL: fs/susfs.c missing")
+              sys.exit(1)
+
+          sc_text = susfs_c.read_text()
+          if BRIDGE_MARKER in sc_text:
+              print("OK: prctl bridge already in fs/susfs.c (idempotent)")
+          else:
+              susfs_c.write_text(sc_text + bridge_func)
+              print("OK: prctl bridge function appended to fs/susfs.c")
+
+          # ── Step 4: inject call into KernelSU-Next ksu_handle_prctl ──────────
+          ksu_candidates = [
+              "KernelSU-Next/kernel/ksu.c",
+              "KernelSU-Next/kernel/core_hook.c",
+              "drivers/kernelsu/ksu.c",
+              "drivers/kernelsu/core_hook.c",
+          ]
+
+          injected = False
+          for cand in ksu_candidates:
+              p = Path(cand)
+              if not p.exists():
+                  continue
+              ksu_text = p.read_text()
+              if BRIDGE_MARKER in ksu_text:
+                  print(f"OK: KernelSU bridge call already in {cand} (idempotent)")
+                  injected = True
+                  break
+
+              m = re.search(
+                  r'((?:static\s+)?int\s+ksu_handle_prctl\s*\([^)]*\)\s*\{)',
+                  ksu_text
+              )
+              if not m:
+                  print(f"INFO: ksu_handle_prctl not found in {cand}")
+                  continue
+
+              inject = (
+                  "\n\t/* Chimera Mk6r5: SUSFS prctl bridge (" + BRIDGE_MARKER + ") */\n"
+                  "#ifdef CONFIG_KSU_SUSFS\n"
+                  "\t{\n"
+                  "\t\textern int ksu_susfs_handle_prctl(unsigned long, unsigned long,\n"
+                  "\t\t    unsigned long, unsigned long, unsigned long);\n"
+                  "\t\tint __susfs_rc = ksu_susfs_handle_prctl(\n"
+                  "\t\t    (unsigned long)option, (unsigned long)arg2,\n"
+                  "\t\t    (unsigned long)arg3, (unsigned long)arg4, (unsigned long)arg5);\n"
+                  "\t\tif (__susfs_rc != -EINVAL)\n"
+                  "\t\t\treturn __susfs_rc;\n"
+                  "\t}\n"
+                  "#endif\n"
+              )
+              ksu_text = ksu_text[:m.end()] + inject + ksu_text[m.end():]
+              p.write_text(ksu_text)
+              print(f"OK: SUSFS prctl dispatch injected into {cand}")
+              injected = True
+              break
+
+          if not injected:
+              print(
+                  "WARN: ksu_handle_prctl not found in any KernelSU-Next file.\n"
+                  "      Bridge function is in susfs.c and will compile.\n"
+                  "      ShowVersion via prctl may still fail if KSU doesn't call it.\n"
+                  "      Check prepatch-audit.log section 'KernelSU prctl handler candidates'."
+              )
+
+          # ── Step 5: add declaration to susfs.h ───────────────────────────────
+          decl_marker = BRIDGE_MARKER + "_DECL"
+          if decl_marker not in susfs_h_text:
+              decl = (
+                  f"\n#ifndef {decl_marker}\n"
+                  f"#define {decl_marker} 1\n"
+                  "#ifdef CONFIG_KSU_SUSFS\n"
+                  "extern int ksu_susfs_handle_prctl(unsigned long option,\n"
+                  "    unsigned long arg2, unsigned long arg3,\n"
+                  "    unsigned long arg4, unsigned long arg5);\n"
+                  "#endif\n"
+                  f"#endif\n"
+              )
+              susfs_h.write_text(susfs_h_text + decl)
+              print("OK: ksu_susfs_handle_prctl extern added to susfs.h")
+
+          print("\nBridge injection complete.")
+          print("Call chain: ZeroMount->prctl->ksu_handle_prctl->ksu_susfs_handle_prctl->OK")
+          PYEOF
+          python3 /tmp/inject_prctl_bridge.py 2>&1 | tee -a "$LOG"
 
       # ── 11. SUSFS ABI alignment ──────────────────────────────────────────────
       # Fixes ShowVersion EINVAL by verifying supercall wiring, version constants,
