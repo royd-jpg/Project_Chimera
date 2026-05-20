@@ -637,9 +637,7 @@ jobs:
           set -Eeuo pipefail
           LOG="../$LOG_DIR/susfs-files-guarantee.log"
           echo "=== SUSFS file guarantee — install-only-if-missing ===" | tee "$LOG"
-
           SUSFS_PATCHES="$GITHUB_WORKSPACE/susfs4ksu/kernel_patches"
-
           for src_dst in "fs/susfs.c:fs/susfs.c" "fs/sus_su.c:fs/sus_su.c"; do
             SRC="${src_dst%%:*}"
             DST="${src_dst##*:}"
@@ -650,7 +648,6 @@ jobs:
               echo "INFO: $DST already present — preserving existing version" | tee -a "$LOG"
             fi
           done
-
           for hdr in "include/linux/susfs.h" "include/linux/susfs_def.h" "include/linux/sus_su.h"; do
             if [[ ! -f "$hdr" ]] && [[ -f "$SUSFS_PATCHES/$hdr" ]]; then
               install -m 0644 "$SUSFS_PATCHES/$hdr" "$hdr"
@@ -659,10 +656,14 @@ jobs:
               echo "INFO: $hdr already present — preserving existing version" | tee -a "$LOG"
             fi
           done
-
+          
+          # Standard Makefile object wiring
           grep -q 'susfs\.o'  fs/Makefile || echo 'obj-$(CONFIG_KSU_SUSFS) += susfs.o'  >> fs/Makefile
           grep -q 'sus_su\.o' fs/Makefile || echo 'obj-$(CONFIG_KSU_SUSFS) += sus_su.o' >> fs/Makefile
-
+          
+          # FIX: Provide directions to SELinux headers for sus_su.c compilation
+          grep -q 'Isecurity/selinux' fs/Makefile || echo 'ccflags-$(CONFIG_KSU_SUSFS) += -Isecurity/selinux' >> fs/Makefile
+          
           echo "=== File presence check ===" | tee -a "$LOG"
           for f in fs/susfs.c fs/sus_su.c include/linux/susfs.h \
                    include/linux/susfs_def.h include/linux/sus_su.h; do
