@@ -215,7 +215,8 @@ jobs:
           import re, sys
           from pathlib import Path
 
-          f = Path("drivers/cpufreq/cpufreq_schedutil.c")
+          # FIXED: Exynos 4.9 path
+          f = Path("kernel/sched/cpufreq_schedutil.c") 
           if not f.exists():
               print("WARN: cpufreq_schedutil.c not found — skipping §1+§2")
               sys.exit(0)
@@ -662,6 +663,7 @@ jobs:
               sys.exit(0)
 
           thermal_files = (
+              list(dts_root.glob("*star2lte*.dts")) + # FIXED: Added monolithic DTS
               list(dts_root.glob("*thermal*.dtsi")) +
               list(dts_root.glob("*tmu*.dtsi")) +
               list(dts_root.glob("*thermal*.dts"))
