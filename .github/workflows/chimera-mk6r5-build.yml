@@ -1007,7 +1007,7 @@ jobs:
           find . -name '*.rej' -exec printf -- '--- %s ---\n' {} \; -exec cat {} \; \
             2>/dev/null | tee -a "$LOG" || echo "(no rejects)" | tee -a "$LOG"
 
-      # ── 11d. Fix KernelSU-Next header paths in SUSFS ─────────────────────────
+# ── 11d. Fix KernelSU-Next header paths in SUSFS ─────────────────────────
       - name: Fix KernelSU-Next header paths in SUSFS
         if: ${{ inputs.susfs_mode != 'none' }}
         working-directory: kernel
@@ -1025,26 +1025,28 @@ jobs:
               print("FAIL: KernelSU-Next/kernel not found."); exit(1)
 
           ksu_headers = {hdr.name: hdr.relative_to(ksu_kernel) for hdr in ksu_kernel.rglob("*.h")}
-          ksu_linked  = Path("drivers/kernelsu")
-          if ksu_linked.exists():
-              for hdr in ksu_linked.rglob("*.h"):
-                  ksu_headers.setdefault(hdr.name, hdr.relative_to(ksu_linked))
 
-          for target_file in ["include/linux/sus_su.h","include/linux/susfs.h",
-                              "fs/susfs.c","fs/sus_su.c"]:
+          for target_file in ["include/linux/sus_su.h","include/linux/susfs.h","fs/susfs.c","fs/sus_su.c"]:
               p = Path(target_file)
               if not p.exists(): continue
               content = p.read_text()
               changed = False
-              for m in re.finditer(r'#include\s+["<]((?:\.\./)+)drivers/kernelsu/([^>"]+)[">]', content):
+              
+              matches = list(re.finditer(r'#include\s+["<]((?:\.\./)+)drivers/kernelsu/([^>"]+)[">]', content))
+              for m in matches:
                   full_match, prefix, header_name = m.group(0), m.group(1), m.group(2)
                   if header_name in ksu_headers:
-                      content = content.replace(full_match,
-                          f'#include "{prefix}drivers/kernelsu/{ksu_headers[header_name]}"')
-                      print(f"OK: {target_file} -> {header_name} rewired")
+                      rel_path = ksu_headers[header_name]
+                      content = content.replace(full_match, f'#include "{prefix}drivers/kernelsu/{rel_path}"')
+                      print(f"OK: {target_file} -> {header_name} rewired to {rel_path}")
                       changed = True
                   else:
-                      print(f"WARN: {target_file}: {header_name} not in KernelSU-Next — preserving")
+                      # FIX: If the header is totally gone (like core_hook.h), comment it out!
+                      # Our weak symbols in Step 11e cover the missing implementations.
+                      print(f"INFO: {target_file}: {header_name} not found — commenting out")
+                      content = content.replace(full_match, f"/* missing: {full_match} */")
+                      changed = True
+
               if changed: p.write_text(content)
 
           print("Header rewire complete.")
