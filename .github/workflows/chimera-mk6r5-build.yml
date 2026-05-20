@@ -1204,7 +1204,7 @@ jobs:
           PYEOF
           python3 /tmp/fix_headers.py | tee -a "$LOG"
 
-       # ── 11c. Resolve SUSFS and KernelSU-Next Linker Symbols ──────────────────
+      # ── 11c. Resolve SUSFS and KernelSU-Next Linker Symbols ──────────────────
       # This script injects weak symbol fallbacks for susfs_is_allow_su and 
       # ksu_escape_to_root. If the main source trees lack these definitions, 
       # these fallbacks satisfy the linker and prevent a vmlinux compile crash.
@@ -1261,7 +1261,7 @@ jobs:
           print("OK: Weak linker fallbacks successfully stitched into fs/sus_su.c")
           PYEOF
           python3 /tmp/patch_symbols.py | tee -a "$LOG"
-
+          
       # ── 12. ZeroMount compatibility probe ────────────────────────────────────
       - name: ZeroMount compatibility probe
         if: ${{ inputs.enable_zeromount }}
