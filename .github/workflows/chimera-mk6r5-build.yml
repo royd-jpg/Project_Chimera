@@ -1145,6 +1145,65 @@ jobs:
           find . -name '*.rej' -exec printf -- '--- %s ---\n' {} \; -exec cat {} \; \
             2>/dev/null | tee -a "$LOG" || echo "(no rejects)" | tee -a "$LOG"
 
+      # ── 11b. Fix KernelSU-Next Header Paths ─────────────────────────────────
+      # KernelSU-Next refactored its directory layout. SUSFS expects headers at 
+      # the root of drivers/kernelsu/, but they were moved. This script dynamically 
+      # hunts down the headers and rewires the SUSFS includes to match.
+      - name: Fix KernelSU-Next header paths in SUSFS
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          LOG="../$LOG_DIR/susfs-header-fix.log"
+          echo "=== Fixing SUSFS header includes for KernelSU-Next ===" | tee "$LOG"
+
+          cat > /tmp/fix_headers.py <<'PYEOF'
+          import re
+          from pathlib import Path
+
+          ksu_kernel = Path("KernelSU-Next/kernel")
+          if not ksu_kernel.exists():
+              print("FAIL: KernelSU-Next/kernel not found.")
+              exit(1)
+
+          # 1. Map out where all the headers actually live right now
+          ksu_headers = {hdr.name: hdr.relative_to(ksu_kernel) for hdr in ksu_kernel.rglob("*.h")}
+
+          # 2. Patch all SUSFS files that try to cross-include KernelSU headers
+          for target_file in ["include/linux/sus_su.h", "include/linux/susfs.h", "fs/susfs.c", "fs/sus_su.c"]:
+              p = Path(target_file)
+              if not p.exists(): 
+                  continue
+              
+              content = p.read_text()
+              changed = False
+              
+              # Find all instances of: #include "...drivers/kernelsu/<header>.h"
+              matches = re.finditer(r'#include\s+["<]((?:\.\./)+)drivers/kernelsu/([^>"]+)[">]', content)
+              
+              for m in matches:
+                  full_match = m.group(0)
+                  prefix = m.group(1)      # e.g., "../../" or "../"
+                  header_name = m.group(2) # e.g., "core_hook.h"
+                  
+                  if header_name in ksu_headers:
+                      # We found where it actually lives
+                      rel_path = ksu_headers[header_name]
+                      new_include = f'#include "{prefix}drivers/kernelsu/{rel_path}"'
+                      content = content.replace(full_match, new_include)
+                      print(f"OK: {target_file} -> {header_name} rewired to {rel_path}")
+                      changed = True
+                  else:
+                      print(f"WARN: {header_name} missing from KernelSU-Next. Commenting out.")
+                      content = content.replace(full_match, f"/* missing {header_name} */")
+                      changed = True
+                      
+              if changed:
+                  p.write_text(content)
+                  
+          print("Header rewire complete.")
+          PYEOF
+          python3 /tmp/fix_headers.py | tee -a "$LOG"
+
       # ── 12. ZeroMount compatibility probe ────────────────────────────────────
       - name: ZeroMount compatibility probe
         if: ${{ inputs.enable_zeromount }}
