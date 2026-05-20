@@ -986,14 +986,20 @@ jobs:
           if not injected and sys_c.exists():
               txt = sys_c.read_text(errors='replace')
               if BRIDGE_MARKER not in txt:
-                  m = re.search(r'(SYSCALL_DEFINE5\s*\(\s*prctl\b[^{]+\{)', txt, re.DOTALL)
-                  if m:
+                  m_start = re.search(r'(SYSCALL_DEFINE5\s*\(\s*prctl\b[^{]+\{)', txt, re.DOTALL)
+                  if m_start:
+                      # Skip C89 variable declarations before injecting logic
+                      start_pos = m_start.end()
+                      m_exec = re.search(r'\n\s*(error\s*=|switch\s*\()', txt[start_pos:])
+                      
+                      insert_pos = start_pos + m_exec.start() if m_exec else start_pos
+                      
                       snippet = get_inject_snippet('int', '')
-                      new_txt = txt[:m.end()] + snippet + txt[m.end():]
+                      new_txt = txt[:insert_pos] + snippet + txt[insert_pos:]
                       sys_c.write_text(new_txt)
-                      print("OK: SUSFS dispatch injected directly into kernel/sys.c SYSCALL_DEFINE5(prctl)")
+                      print("OK: SUSFS dispatch injected into kernel/sys.c (C89 compliant)")
                       injected = True
-
+                      
           # ── Step 4: add declaration to susfs.h ───────────────────────────────
           decl_marker = BRIDGE_MARKER + "_DECL"
           if decl_marker not in susfs_h_text:
