@@ -958,111 +958,179 @@ jobs:
               susfs_c.write_text(sc_text + bridge_func)
               print("OK: prctl bridge function appended to fs/susfs.c")
 
-          # ── Step 4: inject call into KernelSU-Next prctl handler ─────────────
-          # Previous attempt searched 4 hardcoded files — gavdoc38 fork puts the
-          # handler elsewhere or names it differently. New approach: scan the
-          # ENTIRE KernelSU-Next/kernel/ tree for any prctl-handling function,
-          # then inject at the correct location.
+          # ── Step 4: inject into KernelSU-Next PR_SET_VMA supercall handler ───
+          #
+          # Root cause confirmed via include/uapi/linux/prctl.h line 133:
+          #   PR_SET_VMA = 0x53564d41
+          #
+          # KernelSU-Next implements its supercall by hooking prctl() calls
+          # where option == PR_SET_VMA. ZeroMount's `supercall ShowVersion`
+          # uses this path. Previous scan searched for function named
+          # "ksu_handle_prctl" but the gavdoc38 fork may key on PR_SET_VMA
+          # value directly in its dispatcher.
+          #
+          # New strategy (three passes):
+          #   Pass A: find PR_SET_VMA / 0x53564d41 in KernelSU-Next — this IS
+          #           the hook. Inject SUSFS dispatch inside the case branch.
+          #   Pass B: search kernel/sys.c for KernelSU's hook call site —
+          #           KernelSU patches sys_prctl() to call its handler.
+          #   Pass C: search all KernelSU-Next .c files for any function
+          #           that returns early or dispatches based on `option`.
 
-          # Gather all .c files from both possible KSU locations
-          ksu_roots = [Path("KernelSU-Next/kernel"), Path("drivers/kernelsu")]
-          all_ksu_files = []
-          for root in ksu_roots:
-              if root.exists():
-                  all_ksu_files.extend(sorted(root.rglob("*.c")))
+          PR_SET_VMA_HEX = "0x53564d41"
+          PR_SET_VMA_NAME = "PR_SET_VMA"
 
-          print(f"INFO: Scanning {len(all_ksu_files)} KernelSU-Next .c files for prctl handler")
-
-          # Log every file and whether it contains prctl references
-          for cf in all_ksu_files:
-              text = cf.read_text(errors='replace')
-              if 'prctl' in text:
-                  fns = re.findall(r'(?:int|long)\s+(\w*prctl\w*)\s*\(', text)
-                  print(f"  {cf}: prctl refs found, handler candidates: {fns}")
-              if BRIDGE_MARKER in text:
-                  print(f"  {cf}: bridge already injected (idempotent)")
-
-          # Prctl handler name patterns to try, in order of likelihood
-          prctl_patterns = [
-              r'((?:static\s+)?int\s+ksu_handle_prctl\s*\([^)]*\)\s*\{)',
-              r'((?:static\s+)?int\s+ksu_prctl_handler\s*\([^)]*\)\s*\{)',
-              r'((?:static\s+)?(?:int|long)\s+\w*prctl\w*\s*\([^)]{5,120}\)\s*\{)',
+          # Gather all search candidates: KernelSU-Next + kernel/sys.c
+          search_roots = [
+              Path("KernelSU-Next/kernel"),
+              Path("drivers/kernelsu"),
           ]
+          all_ksu_c = []
+          for root in search_roots:
+              if root.exists():
+                  all_ksu_c.extend(sorted(root.rglob("*.c")))
+          # Also search kernel/sys.c — KernelSU patches prctl() there
+          sys_c = Path("kernel/sys.c")
+          if sys_c.exists():
+              all_ksu_c.append(sys_c)
+
+          print(f"INFO: Searching {len(all_ksu_c)} files for PR_SET_VMA hook")
+
+          # Diagnostic: log every file containing PR_SET_VMA or prctl references
+          for cf in all_ksu_c:
+              txt = cf.read_text(errors='replace')
+              has_vma = PR_SET_VMA_HEX in txt or PR_SET_VMA_NAME in txt
+              has_prc = 'prctl' in txt
+              if has_vma or has_prc:
+                  fns = re.findall(r'(?:int|bool|long)\s+(\w+)\s*\(', txt)
+                  print(f"  {cf}: VMA={has_vma} prctl={has_prc} fns_sample={fns[:6]}")
+              if BRIDGE_MARKER in txt:
+                  print(f"  {cf}: bridge already present")
+
+          inject_snippet = (
+              "\n\t/* Chimera Mk6r5: SUSFS prctl bridge (" + BRIDGE_MARKER + ")\n"
+              "\t * Routes ZeroMount ShowVersion supercall to SUSFS handler */\n"
+              "#ifdef CONFIG_KSU_SUSFS\n"
+              "\tif (true) {\n"
+              "\t\textern int ksu_susfs_handle_prctl(unsigned long, unsigned long,\n"
+              "\t\t    unsigned long, unsigned long, unsigned long);\n"
+              "\t\tint __s = ksu_susfs_handle_prctl(\n"
+              "\t\t    (unsigned long)option, (unsigned long)arg2,\n"
+              "\t\t    (unsigned long)arg3, (unsigned long)arg4,\n"
+              "\t\t    (unsigned long)arg5);\n"
+              "\t\tif (__s != -EINVAL) return __s;\n"
+              "\t}\n"
+              "#endif\n"
+          )
 
           injected = False
-          for cf in all_ksu_files:
+
+          # ── Pass A: PR_SET_VMA dispatch function ──────────────────────────────
+          for cf in all_ksu_c:
               if injected:
                   break
-              text = cf.read_text(errors='replace')
-              if BRIDGE_MARKER in text:
-                  print(f"OK: bridge already present in {cf} (idempotent)")
+              txt = cf.read_text(errors='replace')
+              if BRIDGE_MARKER in txt:
+                  print(f"OK: already injected in {cf} (idempotent)")
                   injected = True
                   break
-              if 'prctl' not in text:
+              if PR_SET_VMA_HEX not in txt and PR_SET_VMA_NAME not in txt:
                   continue
 
-              for pattern in prctl_patterns:
-                  m = re.search(pattern, text)
-                  if not m:
-                      continue
-
-                  inject = (
-                      "\n\t/* Chimera Mk6r5: SUSFS prctl bridge (" + BRIDGE_MARKER + ") */\n"
-                      "#ifdef CONFIG_KSU_SUSFS\n"
-                      "\t{\n"
-                      "\t\textern int ksu_susfs_handle_prctl(unsigned long, unsigned long,\n"
-                      "\t\t    unsigned long, unsigned long, unsigned long);\n"
-                      "\t\tint __susfs_rc = ksu_susfs_handle_prctl(\n"
-                      "\t\t    (unsigned long)option, (unsigned long)arg2,\n"
-                      "\t\t    (unsigned long)arg3, (unsigned long)arg4,\n"
-                      "\t\t    (unsigned long)arg5);\n"
-                      "\t\tif (__susfs_rc != -EINVAL)\n"
-                      "\t\t\treturn __susfs_rc;\n"
-                      "\t}\n"
-                      "#endif\n"
-                  )
-                  new_text = text[:m.end()] + inject + text[m.end():]
-                  cf.write_text(new_text)
-                  print(f"OK: SUSFS prctl dispatch injected into {cf} (matched: {m.group(0)[:60]}...)")
+              # Find a function body that references PR_SET_VMA
+              # Pattern: match any function opening brace that is followed by
+              # (within a few hundred chars) a PR_SET_VMA check
+              m = re.search(
+                  r'((?:static\s+)?(?:int|bool|long)\s+\w+\s*\([^)]{0,200}\)\s*\{)'
+                  r'(?=[^}]{0,500}(?:PR_SET_VMA|0x53564d41))',
+                  txt,
+                  re.DOTALL
+              )
+              if m:
+                  new_txt = txt[:m.end()] + inject_snippet + txt[m.end():]
+                  cf.write_text(new_txt)
+                  print(f"OK: SUSFS dispatch injected via PR_SET_VMA match in {cf}")
                   injected = True
-                  break
+
+          # ── Pass B: KernelSU ksu_handle_* function in sys.c ───────────────────
+          if not injected and sys_c.exists():
+              txt = sys_c.read_text(errors='replace')
+              if BRIDGE_MARKER not in txt:
+                  # Look for where KernelSU added its hook call into SYSCALL_DEFINE5(prctl,...)
+                  m = re.search(
+                      r'(SYSCALL_DEFINE5\s*\(\s*prctl\s*,[^{]+\{)',
+                      txt,
+                      re.DOTALL
+                  )
+                  if m:
+                      new_txt = txt[:m.end()] + inject_snippet + txt[m.end():]
+                      sys_c.write_text(new_txt)
+                      print(f"OK: SUSFS dispatch injected into SYSCALL_DEFINE5(prctl) in kernel/sys.c")
+                      injected = True
+
+          # ── Pass C: any KSU function that switches/returns on `option` ────────
+          if not injected:
+              for cf in all_ksu_c:
+                  if injected:
+                      break
+                  txt = cf.read_text(errors='replace')
+                  if BRIDGE_MARKER in txt:
+                      injected = True
+                      break
+                  # Find functions that use `option` or `cmd` as a dispatch key
+                  m = re.search(
+                      r'((?:static\s+)?(?:int|bool|long)\s+\w+\s*\([^)]{0,200}'
+                      r'(?:option|cmd|command)[^)]{0,100}\)\s*\{)',
+                      txt,
+                      re.DOTALL
+                  )
+                  if m:
+                      new_txt = txt[:m.end()] + inject_snippet + txt[m.end():]
+                      cf.write_text(new_txt)
+                      print(f"OK: SUSFS dispatch injected via option/cmd dispatch in {cf}")
+                      injected = True
 
           if not injected:
-              # Last resort: create a standalone hook file that uses kprobes
-              # to intercept the prctl syscall and dispatch SUSFS commands.
-              # This works even when we cannot find or modify the KSU handler.
-              hook_content = (
-                  "/* Chimera Mk6r5: SUSFS prctl hook via notifier (" + BRIDGE_MARKER + "_HOOK)\n"
-                  " * Standalone fallback when ksu_handle_prctl cannot be located.\n"
-                  " * Registers a prctl_notifier that intercepts SUSFS command range. */\n"
-                  "#include <linux/module.h>\n"
-                  "#include <linux/prctl.h>\n"
-                  "#include <linux/susfs.h>\n"
-                  "\n"
-                  "#ifdef CONFIG_KSU_SUSFS\n"
-                  "/* Called from fs/susfs.c ksu_susfs_handle_prctl */\n"
-                  "int ksu_susfs_handle_prctl(unsigned long option, unsigned long arg2,\n"
-                  "    unsigned long arg3, unsigned long arg4, unsigned long arg5)\n"
-                  "{\n"
-                  "    /* The actual dispatch is in fs/susfs.c which is compiled separately.\n"
-                  "     * This declaration satisfies the extern reference in ksu.c injection. */\n"
-                  "    return -EINVAL;\n"
-                  "}\n"
-                  "EXPORT_SYMBOL_GPL(ksu_susfs_handle_prctl);\n"
-                  "#endif\n"
-              )
-              hook_path = Path("KernelSU-Next/kernel/susfs_prctl_hook.c")
-              if not hook_path.exists():
-                  hook_path.write_text(hook_content)
-                  print(f"OK: Created standalone hook file at {hook_path}")
+              # Fallback: patch kernel/sys.c SYSCALL_DEFINE5(prctl) directly
+              # even if KernelSU hasn't added its hook yet.
+              # This guarantees the dispatch happens regardless of hook ordering.
+              if sys_c.exists():
+                  txt = sys_c.read_text(errors='replace')
+                  if BRIDGE_MARKER not in txt:
+                      # Insert at very top of sys_prctl body
+                      m = re.search(r'(SYSCALL_DEFINE5\s*\(\s*prctl\b[^{]+\{)', txt, re.DOTALL)
+                      if m:
+                          # Build a self-contained prctl dispatch block
+                          direct_block = (
+                              "\n\t/* Chimera Mk6r5 direct SUSFS prctl dispatch (" + BRIDGE_MARKER + ")\n"
+                              "\t * Inserted directly into sys_prctl as reliable fallback.\n"
+                              "\t * Handles SUSFS ShowVersion for ZeroMount supercall path. */\n"
+                              "#ifdef CONFIG_KSU_SUSFS\n"
+                              "\tif ((unsigned int)option >= 0x55550000U &&\n"
+                              "\t    (unsigned int)option <= 0x5555ffffU) {\n"
+                              "\t\textern int ksu_susfs_handle_prctl(unsigned long, unsigned long,\n"
+                              "\t\t    unsigned long, unsigned long, unsigned long);\n"
+                              "\t\tint __s = ksu_susfs_handle_prctl(\n"
+                              "\t\t    (unsigned long)option, (unsigned long)arg2,\n"
+                              "\t\t    (unsigned long)arg3, (unsigned long)arg4,\n"
+                              "\t\t    (unsigned long)arg5);\n"
+                              "\t\tif (__s != -EINVAL) return __s;\n"
+                              "\t}\n"
+                              "#endif\n"
+                          )
+                          new_txt = txt[:m.end()] + direct_block + txt[m.end():]
+                          sys_c.write_text(new_txt)
+                          print("OK: SUSFS dispatch injected directly into kernel/sys.c SYSCALL_DEFINE5(prctl)")
+                          injected = True
+
+              if not injected:
                   print(
-                      "WARN: Could not find ksu_handle_prctl to inject into.\n"
-                      "      Created susfs_prctl_hook.c as fallback.\n"
-                      "      The prctl bridge in fs/susfs.c is still the primary path.\n"
-                      "      ZeroMount ShowVersion success depends on KSU calling SUSFS handlers."
+                      "WARN: All injection passes exhausted.\n"
+                      "      The bridge function exists in fs/susfs.c and will compile.\n"
+                      "      The SUSFS command range guard in kernel/sys.c was not found.\n"
+                      "      Check susfs-prctl-bridge.log for which files contain PR_SET_VMA.\n"
+                      "      Manual fix: add SUSFS dispatch to the KernelSU prctl handler."
                   )
-              else:
-                  print("OK: standalone hook already exists (idempotent)")
 
 
           # ── Step 5: add declaration to susfs.h ───────────────────────────────
