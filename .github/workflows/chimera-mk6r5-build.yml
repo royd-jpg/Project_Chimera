@@ -816,7 +816,8 @@ jobs:
           # Dispatch: use exact CMD when resolved, otherwise range pass-through
           if show_version_cmd and show_version_func:
               dispatch = (f"\tif (option == {show_version_cmd[1]}) {{\n"
-                          f"\t\treturn {show_version_func}((void __user *)arg2);\n"
+                          f"\t\t{show_version_func}((void __user *)arg2);\n"
+                          f"\t\treturn 0;\n"
                           f"\t}}\n")
           elif show_version_func:
               print("WARN: SHOW_VERSION cmd not found; using range pass-through")
