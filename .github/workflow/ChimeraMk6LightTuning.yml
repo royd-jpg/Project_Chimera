@@ -1,0 +1,229 @@
+name: Commit Chimera Mk6 Light Tuning
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  tuning:
+    name: Apply Kernel Tuning
+    runs-on: ubuntu-24.04
+
+    defaults:
+      run:
+        shell: bash
+
+    env:
+      REPO_URL: https://github.com/royd-jpg/Project_Chimera
+      BRANCH: chimera-mk6l
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          repository: royd-jpg/Project_Chimera
+          ref: chimera-mk6l
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          set -Eeuo pipefail
+
+          git config user.name "Project Chimera CI"
+          git config user.email "ci@chimera.local"
+
+      # =========================================================
+      # schedutil tuning
+      # =========================================================
+
+      - name: Patch schedutil defaults
+        run: |
+          set -Eeuo pipefail
+
+          FILE="drivers/cpufreq/cpufreq_schedutil.c"
+
+          test -f "$FILE"
+
+          sed -ri \
+            's/tunables->up_rate_limit_us *= *[0-9a-zA-Z_()]+;/tunables->up_rate_limit_us = 1500;/g' \
+            "$FILE"
+
+          sed -ri \
+            's/tunables->down_rate_limit_us *= *[0-9a-zA-Z_()]+;/tunables->down_rate_limit_us = 16000;/g' \
+            "$FILE"
+
+      # =========================================================
+      # sugov thread priority
+      # =========================================================
+
+      - name: Lower sugov RT priority
+        run: |
+          set -Eeuo pipefail
+
+          FILE="drivers/cpufreq/cpufreq_schedutil.c"
+
+          sed -ri \
+            's/param\.sched_priority *= *MAX_RT_PRIO *- *1 *;/param.sched_priority = 1;/g' \
+            "$FILE"
+
+          sed -ri \
+            's/SCHED_FIFO/SCHED_RR/g' \
+            "$FILE"
+
+      # =========================================================
+      # UFC disarm
+      # =========================================================
+
+      - name: Disable Samsung UFC notifier
+        run: |
+          set -Eeuo pipefail
+
+          FILE="drivers/cpufreq/exynos-ufc.c"
+
+          if [[ -f "$FILE" ]]; then
+            sed -ri \
+              's/cpufreq_register_notifier\(&exynos_ufc_notifier, CPUFREQ_POLICY_NOTIFIER\);/\/\/ Chimera disabled UFC notifier/g' \
+              "$FILE"
+          fi
+
+      # =========================================================
+      # CFS scheduler latency
+      # =========================================================
+
+      - name: Patch CFS scheduler defaults
+        run: |
+          set -Eeuo pipefail
+
+          FILE="kernel/sched/fair.c"
+
+          sed -ri \
+            's/sysctl_sched_latency *= *[0-9]+ULL/sysctl_sched_latency = 6000000ULL/g' \
+            "$FILE"
+
+          sed -ri \
+            's/sysctl_sched_min_granularity *= *[0-9]+ULL/sysctl_sched_min_granularity = 750000ULL/g' \
+            "$FILE"
+
+          sed -ri \
+            's/sysctl_sched_wakeup_granularity *= *[0-9]+ULL/sysctl_sched_wakeup_granularity = 1000000ULL/g' \
+            "$FILE"
+
+          sed -ri \
+            's/sysctl_sched_migration_cost *= *[0-9]+ULL/sysctl_sched_migration_cost = 5000000ULL/g' \
+            "$FILE"
+
+      # =========================================================
+      # mmc read_ahead
+      # =========================================================
+
+      - name: Patch mmc read_ahead
+        run: |
+          set -Eeuo pipefail
+
+          FILE="drivers/mmc/core/block.c"
+
+          if [[ -f "$FILE" ]]; then
+            sed -ri \
+              's/blk_queue_read_ahead\((.*), *1024\)/blk_queue_read_ahead(\1, 128)/g' \
+              "$FILE"
+
+            sed -ri \
+              's/ra_pages *= *256/ra_pages = 32/g' \
+              "$FILE"
+          fi
+
+      # =========================================================
+      # ZRAM default
+      # =========================================================
+
+      - name: Set LZ4 default ZRAM compression
+        run: |
+          set -Eeuo pipefail
+
+          FILE="drivers/block/zram/zram_drv.c"
+
+          if [[ -f "$FILE" ]]; then
+            sed -ri \
+              's/ZRAM_DEF_COMP_ALGORITHM[[:space:]]+"lzo"/ZRAM_DEF_COMP_ALGORITHM "lz4"/g' \
+              "$FILE"
+          fi
+
+      # =========================================================
+      # Defconfig tuning
+      # =========================================================
+
+      - name: Tune defconfig
+        run: |
+          set -Eeuo pipefail
+
+          DEFCONFIG="arch/arm64/configs/exynos9810-star2lte_defconfig"
+
+          test -f "$DEFCONFIG"
+
+          set_cfg() {
+            sed -i "/^$1=/d" "$DEFCONFIG"
+            sed -i "/^# $1 is not set/d" "$DEFCONFIG"
+            echo "$1=$2" >> "$DEFCONFIG"
+          }
+
+          unset_cfg() {
+            sed -i "/^$1=/d" "$DEFCONFIG"
+            sed -i "/^# $1 is not set/d" "$DEFCONFIG"
+            echo "# $1 is not set" >> "$DEFCONFIG"
+          }
+
+          set_cfg CONFIG_PREEMPT y
+
+          unset_cfg CONFIG_HZ_250
+          set_cfg CONFIG_HZ_300 y
+          set_cfg CONFIG_HZ 300
+
+          set_cfg CONFIG_TCP_CONG_ADVANCED y
+          set_cfg CONFIG_TCP_CONG_BBR y
+          set_cfg CONFIG_DEFAULT_TCP_CONG '"bbr"'
+
+          set_cfg CONFIG_ZRAM y
+          set_cfg CONFIG_ZSMALLOC y
+          set_cfg CONFIG_CRYPTO_LZ4 y
+          set_cfg CONFIG_CRYPTO_LZ4HC y
+
+      # =========================================================
+      # Innocuous uname
+      # =========================================================
+
+      - name: Set innocuous uname
+        run: |
+          set -Eeuo pipefail
+
+          DEFCONFIG="arch/arm64/configs/exynos9810-star2lte_defconfig"
+
+          sed -i '/CONFIG_LOCALVERSION=/d' "$DEFCONFIG"
+
+          echo 'CONFIG_LOCALVERSION="-4.9.337-CM6L"' >> "$DEFCONFIG"
+
+      # =========================================================
+      # Commit
+      # =========================================================
+
+      - name: Commit tuning
+        run: |
+          set -Eeuo pipefail
+
+          git add .
+
+          if git diff --cached --quiet; then
+            echo "No tuning changes detected"
+            exit 0
+          fi
+
+          git commit -m \
+            "Chimera Mk6 Light: scheduler + thermal + IO tuning baseline"
+
+      - name: Push branch
+        run: |
+          set -Eeuo pipefail
+
+          git push origin HEAD:chimera-mk6l
