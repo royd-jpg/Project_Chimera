@@ -1204,7 +1204,7 @@ jobs:
           PYEOF
           python3 /tmp/fix_headers.py | tee -a "$LOG"
 
-            # ── 11c. Resolve SUSFS and KernelSU-Next Linker Symbols ──────────────────
+       # ── 11c. Resolve SUSFS and KernelSU-Next Linker Symbols ──────────────────
       # This script injects weak symbol fallbacks for susfs_is_allow_su and 
       # ksu_escape_to_root. If the main source trees lack these definitions, 
       # these fallbacks satisfy the linker and prevent a vmlinux compile crash.
@@ -1233,7 +1233,7 @@ jobs:
           /* === WEAK_SYMBOL_FALLBACK_BLOCK === */
           #include <linux/cred.h>
           #include <linux/uidgid.h>
-          #include <linux/capabilities.h>
+          #include <linux/capability.h> /* Fixed: singular for Kernel 4.9 */
         
           __attribute__((weak)) bool susfs_is_allow_su = false;
         
