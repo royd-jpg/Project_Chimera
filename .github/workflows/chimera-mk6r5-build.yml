@@ -1235,8 +1235,8 @@ jobs:
           #include <linux/uidgid.h>
           #include <linux/capability.h> /* Fixed: singular for Kernel 4.9 */
         
-          __attribute__((weak)) bool susfs_is_allow_su = false;
-        
+          __attribute__((weak)) bool susfs_is_allow_su(void) { return false; }
+
           __attribute__((weak)) void ksu_escape_to_root(void) {
               struct cred *new_cred = prepare_creds();
               if (!new_cred) return;
