@@ -69,7 +69,6 @@ jobs:
         run: |
           set -Eeuo pipefail
           mkdir -p "$LOG_DIR" "$OUT_DIR"
-
       # ── 1. Dependencies ─────────────────────────────────────────────────────
       - name: Install dependencies
         run: |
@@ -79,7 +78,6 @@ jobs:
             git curl wget bc flex bison python3 python3-pip \
             libssl-dev libelf-dev build-essential zip unzip zstd lz4 \
             gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
-
       # ── 2. Neutron Clang ────────────────────────────────────────────────────
       - name: Cache Neutron Clang
         id: cache-neutron
@@ -98,19 +96,16 @@ jobs:
           tar -xf /tmp/neutron.tar.zst -C neutron-clang --strip-components=1
           test -x neutron-clang/bin/clang || { echo "ERROR: clang binary missing"; exit 1; }
           neutron-clang/bin/clang --version | tee -a "$LOG_DIR/toolchain.log"
-
       - name: Export toolchain PATH
         run: |
           set -Eeuo pipefail
           echo "$GITHUB_WORKSPACE/neutron-clang/bin" >> "$GITHUB_PATH"
-
       # ── 3. Clone kernel ─────────────────────────────────────────────────────
       - name: Clone kernel tree
         run: |
           set -Eeuo pipefail
           git clone --depth=1 -b "$KERNEL_BRANCH" "$KERNEL_REPO" "$KERNEL_DIR"
           git -C "$KERNEL_DIR" log --oneline -3 | tee "$LOG_DIR/kernel-revision.log"
-
       # ── 4. Clone SUSFS ──────────────────────────────────────────────────────
       - name: Clone SUSFS
         run: |
@@ -121,22 +116,17 @@ jobs:
           test -f susfs4ksu/kernel_patches/include/linux/susfs.h
           test -f susfs4ksu/kernel_patches/include/linux/susfs_def.h
           git -C susfs4ksu rev-parse HEAD | tee "$LOG_DIR/susfs-revision.log"
-
       # ── 5. KernelSU-Next pinned submodule ───────────────────────────────────
       - name: Set up KernelSU-Next (pinned submodule)
         working-directory: kernel
         run: |
           set -Eeuo pipefail
-
           git rm -r --cached KernelSU-Next 2>/dev/null || true
           rm -rf .git/modules/KernelSU-Next KernelSU-Next drivers/kernelsu
-
           KSU_URL="$(git config --file .gitmodules submodule.KernelSU-Next.url 2>/dev/null || true)"
           KSU_COMMIT="$(git ls-tree HEAD KernelSU-Next 2>/dev/null | awk '{print $3}' || true)"
-
           echo "Submodule URL: ${KSU_URL:-not found}" | tee "../$LOG_DIR/ksu-submodule.log"
           echo "Pinned commit: ${KSU_COMMIT:-not found}" | tee -a "../$LOG_DIR/ksu-submodule.log"
-
           if [[ -n "$KSU_URL" && -n "$KSU_COMMIT" ]]; then
             git clone "$KSU_URL" KernelSU-Next
             git -C KernelSU-Next checkout "$KSU_COMMIT"
@@ -145,33 +135,26 @@ jobs:
           else
             git clone --depth=1 https://github.com/gavdoc38/KernelSU-Next.git KernelSU-Next
           fi
-
           test -f KernelSU-Next/kernel/Kconfig || { echo "ERROR: KernelSU-Next/kernel/Kconfig missing"; exit 1; }
           git -C KernelSU-Next log --oneline -1 | tee -a "../$LOG_DIR/ksu-submodule.log"
-
           ln -s ../KernelSU-Next/kernel drivers/kernelsu
           test -f drivers/kernelsu/Kconfig || { echo "ERROR: drivers/kernelsu/Kconfig symlink missing"; exit 1; }
-
       # ── 5b. Fix syscall_fn_t for Samsung 4.9 BSP ───────────────────────────
       - name: Fix syscall_fn_t for Samsung 4.9 BSP
         working-directory: kernel
         run: |
           set -Eeuo pipefail
           HOOK_H="KernelSU-Next/kernel/hook/syscall_hook.h"
-
           if [[ ! -f "$HOOK_H" ]] || ! grep -q 'syscall_fn_t' "$HOOK_H"; then
             echo "syscall_fn_t: nothing to fix"
             exit 0
           fi
-
           cat > /tmp/fix_syscall_typedef.py <<'PYEOF'
           from pathlib import Path
           import re
-
           path = Path("KernelSU-Next/kernel/hook/syscall_hook.h")
           if not path.exists():
               raise SystemExit(0)
-
           content = path.read_text()
           typedef_block = (
               "/* syscall_fn_t: Samsung 4.9 BSP compatibility */\n"
@@ -184,11 +167,9 @@ jobs:
               "    unsigned long\n"
               ");\n\n"
           )
-
           pos = 0
           for match in re.finditer(r'^#(include|pragma|ifndef|define)[^\n]*\n', content, re.MULTILINE):
               pos = match.end()
-
           if "typedef long (*syscall_fn_t)" not in content:
               content = content[:pos] + typedef_block + content[pos:]
               path.write_text(content)
@@ -197,7 +178,6 @@ jobs:
               print("OK: typedef already present")
           PYEOF
           python3 /tmp/fix_syscall_typedef.py
-
       # ── 5c. Pre-patch audit ─────────────────────────────────────────────────
       # Captures exact source patterns BEFORE patching for diagnosis.
       - name: Pre-patch rate_limit audit
@@ -217,7 +197,6 @@ jobs:
             grep -rn "read_ahead\|ra_pages\|VM_READAHEAD" \
               drivers/mmc/ include/linux/mm.h 2>/dev/null | grep -v "\.o:" || echo "(not found)"
           } | tee "../$LOG_DIR/prepatch-audit.log"
-
       # ── 6. Brain Core kernel hardening patches (§1–§8) ──────────────────────
       # §1+§2 regexes corrected from run-24 audit:
       #   Samsung BSP uses policy->up_transition_delay_us (not 0/5000),
@@ -229,20 +208,16 @@ jobs:
           set -Eeuo pipefail
           LOG="../$LOG_DIR/braincore-patches.log"
           echo "=== Brain Core kernel hardening — Chimera Mk6r5 ===" | tee "$LOG"
-
           # ── §1 rate limits + §2 sugov priority ─────────────────────────────
           cat > /tmp/patch_schedutil.py <<'PYEOF'
           import re, sys
           from pathlib import Path
-
           f = Path("kernel/sched/cpufreq_schedutil.c")
           if not f.exists():
               print("WARN: kernel/sched/cpufreq_schedutil.c not found — skipping §1+§2")
               sys.exit(0)
-
           content = f.read_text()
           original = content
-
           # ── §1: Rate limit initialization patterns ──────────────────────────
           # Pattern A+B: literal 0 or 5000 (upstream/older Samsung BSP)
           content = re.sub(
@@ -255,7 +230,6 @@ jobs:
               r'\g<1>16000;  /* Chimera Mk6r5 §1 */',
               content
           )
-
           # Pattern C: clamp_val dynamic assignment (single or multi-line)
           content = re.sub(
               r'tunables->up_rate_limit_us\s*=[^;]*clamp_val[^;]+;',
@@ -267,7 +241,6 @@ jobs:
               'tunables->down_rate_limit_us = 16000;  /* Chimera Mk6r5 §1 */',
               content, flags=re.DOTALL
           )
-
           # Pattern D: Samsung BSP transition_delay assignment (run-24 audit line 846-847)
           content = re.sub(
               r'(tunables->up_rate_limit_us\s*=\s*)policy->up_transition_delay_us(\s*;)',
@@ -279,7 +252,6 @@ jobs:
               r'\g<1>16000\2  /* Chimera Mk6r5 §1 */',
               content
           )
-
           # Pattern E: LATENCY_MULTIPLIER fallback (run-24 audit lines 851-852)
           content = re.sub(
               r'(tunables->up_rate_limit_us\s*=\s*)LATENCY_MULTIPLIER(\s*;)',
@@ -291,7 +263,6 @@ jobs:
               r'\g<1>16000\2  /* Chimera Mk6r5 §1 */',
               content
           )
-
           # Pattern F: *= lat multiplier adjustment (run-24 audit lines 855-856)
           # Comment out — baked values should not be further scaled by latency
           content = re.sub(
@@ -304,7 +275,6 @@ jobs:
               '/* tunables->down_rate_limit_us *= lat; -- Chimera Mk6r5 §1: fixed at 16000 */',
               content
           )
-
           # ── §2: sugov thread scheduling priority ─────────────────────────────
           # chrt from Android userspace cannot touch kernel threads; baked change only.
           # Pattern A: MAX_RT_PRIO - 1 (upstream vanilla 4.9)
@@ -331,7 +301,6 @@ jobs:
               r'\g<1>SCHED_RR\2  /* Chimera Mk6r5 §2 */',
               content
           )
-
           f.write_text(content)
           if content != original:
               print("OK: kernel/sched/cpufreq_schedutil.c — §1 + §2 applied")
@@ -343,14 +312,11 @@ jobs:
               print("WARN: cpufreq_schedutil.c — no patterns matched (already patched or unknown variant)")
           PYEOF
           python3 /tmp/patch_schedutil.py | tee -a "$LOG"
-
           # ── §3: Samsung UFC disarmament ─────────────────────────────────────
           cat > /tmp/patch_ufc_acme.py <<'PYEOF'
           import re, sys
           from pathlib import Path
-
           patched_any = False
-
           # Part A: UFC notifier disable
           ufc_candidates = [
               "drivers/cpufreq/exynos-ufc.c",
@@ -372,7 +338,6 @@ jobs:
                   f.write_text(content)
                   print(f"OK: {cand} — UFC notifier disabled")
                   patched_any = True
-
           # Part B: ACME domain rate_limit init
           acme = Path("drivers/cpufreq/exynos-acme.c")
           if acme.exists():
@@ -423,7 +388,6 @@ jobs:
                   )
           else:
               print("INFO: exynos-acme.c not present in tree")
-
           # Part C: scan remaining exynos*.c files
           cpufreq_dir = Path("drivers/cpufreq")
           if cpufreq_dir.exists():
@@ -441,25 +405,20 @@ jobs:
                       cf.write_text(text)
                       print(f"OK: {cf.name} — rate_limit 5000 patched (§3-scan)")
                       patched_any = True
-
           if not patched_any:
               print("INFO: §3 — No UFC/ACME/rate_limit 5000 patterns found")
           PYEOF
           python3 /tmp/patch_ufc_acme.py | tee -a "$LOG"
-
           # ── §4: CFS scheduler latency tuning ────────────────────────────────
           cat > /tmp/patch_cfs.py <<'PYEOF'
           import re, sys
           from pathlib import Path
-
           f = Path("kernel/sched/fair.c")
           if not f.exists():
               print("WARN: kernel/sched/fair.c not found — skipping §4")
               sys.exit(0)
-
           content = f.read_text()
           original = content
-
           replacements = [
               (
                   r'(unsigned int\s+sysctl_sched_latency\s*=\s*)\d+ULL(\s*;)',
@@ -478,10 +437,8 @@ jobs:
                   r'\g<1>5000000ULL\g<2>  /* Chimera Mk6r5 §4: 5ms big.LITTLE */'
               ),
           ]
-
           for pattern, replacement in replacements:
               content = re.sub(pattern, replacement, content)
-
           f.write_text(content)
           if content != original:
               print("OK: kernel/sched/fair.c — CFS latency tuned (§4)")
@@ -489,27 +446,22 @@ jobs:
               print("INFO: kernel/sched/fair.c — values already match or patterns differ")
           PYEOF
           python3 /tmp/patch_cfs.py | tee -a "$LOG"
-
           # ── §5: mmcblk0 read_ahead 1024kb -> 128kb ──────────────────────────
           cat > /tmp/patch_mmc.py <<'PYEOF'
           import re, sys
           from pathlib import Path
-
           patched = False
           found_locations = []
-
           search_roots = ["drivers/mmc/", "drivers/samsung/mmc/", "drivers/samsung/"]
           all_c_files = []
           for root in search_roots:
               p = Path(root)
               if p.exists():
                   all_c_files.extend(p.rglob("*.c"))
-
           for f in all_c_files:
               content = f.read_text()
               original = content
               changed = False
-
               new = re.sub(
                   r'(blk_queue_read_ahead\s*\([^,]+,\s*)1024(\s*\))',
                   r'\g<1>128\g<2>  /* Chimera Mk6r5 §5 */',
@@ -519,7 +471,6 @@ jobs:
                   content = new
                   changed = True
                   found_locations.append(str(f))
-
               new = re.sub(
                   r'((?:->|\.)\s*(?:ra_pages|queue_ra_pages)\s*=\s*)256(\s*(?:;|,|\}))',
                   r'\g<1>32\g<2>  /* Chimera Mk6r5 §5: 32*4kb=128kb */',
@@ -529,7 +480,6 @@ jobs:
                   content = new
                   changed = True
                   found_locations.append(str(f) + " [ra_pages]")
-
               new = re.sub(
                   r'(read_ahead_kb\s*=\s*)1024(\b)',
                   r'\g<1>128\g<2>  /* Chimera Mk6r5 §5 */',
@@ -538,12 +488,10 @@ jobs:
               if new != content:
                   content = new
                   changed = True
-
               if changed:
                   f.write_text(content)
                   print(f"OK: {f} — read_ahead patched to 128kb (§5)")
                   patched = True
-
           for cand in ["drivers/mmc/core/block.c", "drivers/mmc/core/queue.c",
                        "drivers/mmc/core/mmc.c", "drivers/mmc/card/queue.c"]:
               f = Path(cand)
@@ -565,7 +513,6 @@ jobs:
                   f.write_text(content)
                   print(f"OK: {cand} — read_ahead patched to 128kb (§5)")
                   patched = True
-
           mm_h = Path("include/linux/mm.h")
           if mm_h.exists():
               content = mm_h.read_text()
@@ -583,7 +530,6 @@ jobs:
                   m = re.search(r'#define\s+VM_READAHEAD_PAGES\s+(\S+)', content)
                   if m:
                       print(f"INFO: VM_READAHEAD_PAGES = {m.group(1)} (no change needed)")
-
           dts_root = Path("arch/arm64/boot/dts/exynos")
           if dts_root.exists():
               for dts in list(dts_root.glob("*star2lte*.dts")) + list(dts_root.glob("exynos9810.dtsi")):
@@ -598,7 +544,6 @@ jobs:
                       dts.write_text(content)
                       print(f"OK: {dts.name} — read-ahead-kb patched (§5)")
                       patched = True
-
           if not patched:
               print(
                   "WARN: §5 mmcblk0 — no read_ahead patterns found.\n"
@@ -608,17 +553,14 @@ jobs:
               print(f"     Patched locations: {found_locations}")
           PYEOF
           python3 /tmp/patch_mmc.py | tee -a "$LOG"
-
           # ── §5b: ZRAM default algorithm lzo -> lz4 ──────────────────────────
           cat > /tmp/patch_zram.py <<'PYEOF'
           import re, sys
           from pathlib import Path
-
           f = Path("drivers/block/zram/zram_drv.c")
           if not f.exists():
               print("INFO: zram_drv.c not found — skipping §6e ZRAM")
               sys.exit(0)
-
           content = f.read_text()
           original = content
           content = re.sub(
@@ -633,12 +575,10 @@ jobs:
               print("INFO: zram_drv.c — lzo not found or already lz4")
           PYEOF
           python3 /tmp/patch_zram.py | tee -a "$LOG"
-
           # ── §7: EMS ontime thresholds ────────────────────────────────────────
           cat > /tmp/patch_ems.py <<'PYEOF'
           import re, sys
           from pathlib import Path
-
           candidates = ["kernel/sched/ems/ontime.c", "kernel/sched/ems/tune.c"]
           patched = False
           for cand in candidates:
@@ -661,33 +601,27 @@ jobs:
                   f.write_text(content)
                   print(f"OK: {cand} — EMS ontime thresholds patched (§7)")
                   patched = True
-
           if not patched:
               print("INFO: §7 EMS — ontime.c not found or no patterns matched")
           PYEOF
           python3 /tmp/patch_ems.py | tee -a "$LOG"
-
           # ── §8: Thermal trip points ──────────────────────────────────────────
           cat > /tmp/patch_thermal.py <<'PYEOF'
           import re, sys
           from pathlib import Path
-
           dts_root = Path("arch/arm64/boot/dts/exynos")
           if not dts_root.exists():
               print("INFO: §8 Thermal — DTS path not found")
               sys.exit(0)
-
           thermal_files = (
               list(dts_root.glob("*star2lte*.dts")) +
               list(dts_root.glob("*thermal*.dtsi")) +
               list(dts_root.glob("*tmu*.dtsi")) +
               list(dts_root.glob("*thermal*.dts"))
           )
-
           if not thermal_files:
               print("INFO: §8 Thermal — no thermal DTS/DTSI files found")
               sys.exit(0)
-
           patched = False
           for tf in thermal_files:
               content = tf.read_text()
@@ -701,17 +635,14 @@ jobs:
                   tf.write_text(content)
                   print(f"OK: {tf.name} — passive trip raised 65C->70C (§8)")
                   patched = True
-
           if not patched:
               print("INFO: §8 Thermal — no 65000 passive trip patterns found")
           PYEOF
           python3 /tmp/patch_thermal.py | tee -a "$LOG"
-
           echo "" | tee -a "$LOG"
           echo "=== Brain Core patching summary ===" | tee -a "$LOG"
           grep -c "^OK:" "$LOG" | xargs printf "  %s source patches confirmed applied\n" | tee -a "$LOG" || true
           grep "^WARN:" "$LOG" | tee -a "$LOG" || true
-
       # ── 7. Disable SCM dirty suffix ─────────────────────────────────────────
       # Writes a placeholder to suppress git/dirty output.
       # NOTE: step 14 (branding) OVERWRITES this with the actual brand string.
@@ -719,11 +650,9 @@ jobs:
         working-directory: kernel
         run: |
           set -Eeuo pipefail
-
           cat > /tmp/write_setlocalversion_placeholder.py <<'PYEOF'
           import os
           from pathlib import Path
-
           content = (
               "#!/bin/sh\n"
               "# Chimera Mk6r5: placeholder — overwritten by branding step with brand string\n"
@@ -735,80 +664,62 @@ jobs:
           print("OK: setlocalversion placeholder written (will be overwritten by branding step)")
           PYEOF
           python3 /tmp/write_setlocalversion_placeholder.py | tee "../$LOG_DIR/scm-dirty-fix.log"
-
       # ── 8. Preflight tree state ──────────────────────────────────────────────
       - name: Preflight tree state
         working-directory: kernel
         run: |
           set -Eeuo pipefail
-
           echo "=== git status ===" | tee "../$LOG_DIR/preflight.log"
           git status --short | tee -a "../$LOG_DIR/preflight.log"
-
           echo "=== KSU/SUSFS markers ===" | tee -a "../$LOG_DIR/preflight.log"
           grep -RsnE \
             'KernelSU|kernelsu|CONFIG_KSU|KSU_SUSFS|ksu_handle_faccessat|susfs_task_state|susfs_is_inode_sus_path' \
             fs include kernel arch/arm64/configs 2>/dev/null \
             | tee -a "../$LOG_DIR/preflight.log" || true
-
           ALREADY_PATCHED=false
           if grep -RqsE \
             'source "drivers/kernelsu/Kconfig"|ksu_handle_faccessat|susfs_task_state' \
             fs include kernel arch/arm64/configs 2>/dev/null; then
             ALREADY_PATCHED=true
           fi
-
           echo "ALREADY_PATCHED=$ALREADY_PATCHED" | tee -a "../$LOG_DIR/preflight.log"
-
           if [[ "$ALREADY_PATCHED" == "true" && "${{ inputs.force_repatch }}" != "true" ]]; then
             echo "SKIP_INTEGRATION=true" >> "$GITHUB_ENV"
           else
             echo "SKIP_INTEGRATION=false" >> "$GITHUB_ENV"
           fi
-
       # ── 9. Wire KernelSU Kconfig ────────────────────────────────────────────
       - name: Wire KernelSU Kconfig
         working-directory: kernel
         run: |
           set -Eeuo pipefail
-
           sed -i '/source "drivers\/kernelsu\/Kconfig"/d' drivers/Kconfig
-
           if ! grep -q '^endmenu' drivers/Kconfig; then
             printf '\nendmenu\n' >> drivers/Kconfig
           fi
-
           sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
-
           COUNT="$(grep -c 'drivers/kernelsu/Kconfig' drivers/Kconfig || true)"
           [[ "$COUNT" -eq 1 ]] || { echo "ERROR: Expected 1 Kconfig entry, found $COUNT"; exit 1; }
-
       # ── 10. Apply SUSFS patch ────────────────────────────────────────────────
       - name: Apply SUSFS patch
         if: env.SKIP_INTEGRATION == 'false'
         working-directory: kernel
         run: |
           set -Eeuo pipefail
-
           PATCH="$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.9.patch"
-
           set +e
           git apply --reject --whitespace=fix "$PATCH" > "../$LOG_DIR/susfs-apply.log" 2>&1
           APPLY_RC=$?
           set -e
-
           find . -name '*.rej' -print | sort > "../$LOG_DIR/susfs-rejects.log" || true
           echo "Apply RC=$APPLY_RC" | tee -a "../$LOG_DIR/susfs-apply.log"
-
           install -m 0644 "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/fs/susfs.c" fs/susfs.c
           install -m 0644 "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/fs/sus_su.c" fs/sus_su.c
           install -m 0644 "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/include/linux/susfs.h" include/linux/susfs.h
           install -m 0644 "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/include/linux/susfs_def.h" include/linux/susfs_def.h
           install -m 0644 "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/include/linux/sus_su.h" include/linux/sus_su.h
-
           grep -q 'susfs\.o' fs/Makefile || echo 'obj-$(CONFIG_KSU_SUSFS) += susfs.o' >> fs/Makefile
           grep -q 'sus_su\.o' fs/Makefile || echo 'obj-$(CONFIG_KSU_SUSFS) += sus_su.o' >> fs/Makefile
-
       # ── 11a. Guarantee SUSFS files present (no downgrade) ───────────────────
       # Only installs MISSING files. Preserves any existing newer versions.
       # Confirmed fix for run-14 regression (v2.1.0 downgraded to v1.5.5).
@@ -818,9 +729,7 @@ jobs:
           set -Eeuo pipefail
           LOG="../$LOG_DIR/susfs-files-guarantee.log"
           echo "=== SUSFS file guarantee — install-only-if-missing ===" | tee "$LOG"
-
           SUSFS_PATCHES="$GITHUB_WORKSPACE/susfs4ksu/kernel_patches"
-
           for src_dst in "fs/susfs.c:fs/susfs.c" "fs/sus_su.c:fs/sus_su.c"; do
             SRC="${src_dst%%:*}"
             DST="${src_dst##*:}"
@@ -831,7 +740,6 @@ jobs:
               echo "INFO: $DST already present — preserving existing version" | tee -a "$LOG"
             fi
           done
-
           for hdr in "include/linux/susfs.h" "include/linux/susfs_def.h" "include/linux/sus_su.h"; do
             if [[ ! -f "$hdr" ]] && [[ -f "$SUSFS_PATCHES/$hdr" ]]; then
               install -m 0644 "$SUSFS_PATCHES/$hdr" "$hdr"
@@ -840,10 +748,8 @@ jobs:
               echo "INFO: $hdr already present — preserving existing version" | tee -a "$LOG"
             fi
           done
-
           grep -q 'susfs\.o'  fs/Makefile || echo 'obj-$(CONFIG_KSU_SUSFS) += susfs.o'  >> fs/Makefile
           grep -q 'sus_su\.o' fs/Makefile || echo 'obj-$(CONFIG_KSU_SUSFS) += sus_su.o' >> fs/Makefile
-
           echo "=== File presence check ===" | tee -a "$LOG"
           for f in fs/susfs.c fs/sus_su.c include/linux/susfs.h \
                    include/linux/susfs_def.h include/linux/sus_su.h; do
@@ -853,7 +759,6 @@ jobs:
               echo "FAIL: $f MISSING" | tee -a "$LOG"
             fi
           done
-
       # ── 11b. Inject SUSFS prctl bridge (ShowVersion EINVAL fix) ─────────────
       # Corrected from run-24 findings:
       #   - Injection now targets SYSCALL_DEFINE5(prctl) in kernel/sys.c directly.
@@ -866,19 +771,15 @@ jobs:
           set -Eeuo pipefail
           LOG="../$LOG_DIR/susfs-prctl-bridge.log"
           echo "=== SUSFS prctl bridge injection — Chimera Mk6r5 ===" | tee "$LOG"
-
           cat > /tmp/inject_prctl_bridge.py <<'PYEOF'
           import re, sys, os
           from pathlib import Path
-
           BRIDGE_MARKER = "CHIMERA_MK6R5_SUSFS_PRCTL_BRIDGE"
-
           # ── Step 1: read SUSFS header ────────────────────────────────────────
           susfs_h = Path("include/linux/susfs.h")
           if not susfs_h.exists():
               print("FAIL: include/linux/susfs.h missing — cannot inject bridge")
               sys.exit(1)
-
           susfs_h_text = susfs_h.read_text()
           cmd_ids = re.findall(r'#define\s+(CMD_SUSFS_\w+|SUSFS_CMD_\w+)\s+(0x[0-9a-fA-F]+|\d+)', susfs_h_text)
           susfs_funcs = re.findall(r'(?:int|bool|void)\s+(susfs_\w+)\s*\(', susfs_h_text)
@@ -886,7 +787,6 @@ jobs:
           show_version_cmd = next((c for c in cmd_ids if 'SHOW_VERSION' in c[0] or 'VERSION' in c[0]), None)
           print(f"INFO: SUSFS_VERSION cmd={show_version_cmd} func={show_version_func}")
           print(f"INFO: All cmd_ids={cmd_ids}")
-
           # ── Step 2: build bridge function for fs/susfs.c ─────────────────────
           if show_version_cmd and show_version_func:
               dispatch = (
@@ -899,7 +799,6 @@ jobs:
                   "\tif (option >= 0x55550000UL && option <= 0x5555ffffUL)\n"
                   "\t\treturn 0;\n"
               )
-
           bridge_func = (
               "\n\n/* Chimera Mk6r5 SUSFS prctl bridge (" + BRIDGE_MARKER + ") */\n"
               f"#ifndef {BRIDGE_MARKER}\n"
@@ -915,7 +814,6 @@ jobs:
               "#endif\n"
               f"#endif\n"
           )
-
           susfs_c = Path("fs/susfs.c")
           if susfs_c.exists():
               sc_text = susfs_c.read_text()
@@ -924,7 +822,6 @@ jobs:
                   print("OK: prctl bridge function appended to fs/susfs.c")
               else:
                   print("OK: prctl bridge already in fs/susfs.c (idempotent)")
-
           # ── Step 3: helper — build injection snippet ──────────────────────────
           def make_snippet(return_type, params_str):
               if 'bool' in return_type:
@@ -964,18 +861,14 @@ jobs:
                       "\t}\n"
                       "#endif\n"
                   )
-
           PR_SET_VMA_HEX = "0x53564d41"
           PR_SET_VMA_NAME = "PR_SET_VMA"
-
           all_ksu_c = []
           for root in [Path("KernelSU-Next/kernel"), Path("drivers/kernelsu")]:
               if root.exists():
                   all_ksu_c.extend(sorted(root.rglob("*.c")))
-
           sys_c = Path("kernel/sys.c")
           injected = False
-
           # ── Pass A: KernelSU-Next prctl handler (PR_SET_VMA in function body) ─
           # Searches for bool/int functions whose body contains PR_SET_VMA.
           # Correct signature: bool ksu_handle_prctl(int option,..., int *retval)
@@ -987,7 +880,6 @@ jobs:
                   print(f"OK: already injected in {cf} (idempotent)")
                   injected = True
                   break
-
               matches = list(re.finditer(
                   r'((?:static\s+)?(int|bool|long)\s+\w+\s*\(([^)]*?(?:option|cmd|command)[^)]*?)\)\s*\{)',
                   txt, re.DOTALL
@@ -1002,7 +894,6 @@ jobs:
                       print(f"OK: SUSFS dispatch injected in {cf} (return={m.group(2)})")
                       injected = True
                       break
-
           # ── Pass B: SYSCALL_DEFINE5(prctl) in kernel/sys.c ────────────────────
           # Insert after variable declarations, before first executable statement.
           # C89 compliant: declarations must come before any code.
@@ -1026,10 +917,8 @@ jobs:
                       sys_c.write_text(new_txt)
                       print("OK: SUSFS dispatch injected into kernel/sys.c SYSCALL_DEFINE5(prctl) — C89 compliant")
                       injected = True
-
           if not injected:
               print("WARN: All injection passes exhausted — bridge function compiled but not called from prctl")
-
           # ── Step 4: declaration in susfs.h ───────────────────────────────────
           decl_marker = BRIDGE_MARKER + "_DECL"
           if decl_marker not in susfs_h_text:
@@ -1045,11 +934,9 @@ jobs:
               )
               susfs_h.write_text(susfs_h_text + decl)
               print("OK: ksu_susfs_handle_prctl declaration added to susfs.h")
-
           print("\nBridge injection complete.")
           PYEOF
           python3 /tmp/inject_prctl_bridge.py 2>&1 | tee -a "$LOG"
-
       # ── 11c. SUSFS ABI alignment and ShowVersion diagnostic ──────────────────
       # Updated: also searches kernel/sys.c for the bridge (run-24 fix).
       - name: SUSFS ABI alignment and ShowVersion diagnostic
@@ -1058,13 +945,10 @@ jobs:
           set -Eeuo pipefail
           LOG="../$LOG_DIR/susfs-abi.log"
           echo "=== SUSFS ABI alignment — Chimera Mk6r5 ===" | tee "$LOG"
-
           cat > /tmp/susfs_abi_align.py <<'PYEOF'
           import re, sys, os
           from pathlib import Path
-
           results = []
-
           # 1. SUSFS version
           susfs_h = Path("include/linux/susfs.h")
           if susfs_h.exists():
@@ -1075,13 +959,11 @@ jobs:
                   results.append("WARN: SUSFS_VERSION constant not found in susfs.h")
           else:
               results.append("FAIL: include/linux/susfs.h missing")
-
           results.append(
               "OK:   include/linux/susfs_def.h present"
               if Path("include/linux/susfs_def.h").exists()
               else "WARN: include/linux/susfs_def.h missing"
           )
-
           # 2. susfs.c ShowVersion
           susfs_c = Path("fs/susfs.c")
           if susfs_c.exists():
@@ -1095,14 +977,12 @@ jobs:
                   results.append("OK:   ksu_susfs symbols found in fs/susfs.c")
           else:
               results.append("FAIL: fs/susfs.c missing")
-
           # 3. sus_su.c
           results.append(
               "OK:   fs/sus_su.c present"
               if Path("fs/sus_su.c").exists()
               else "WARN: fs/sus_su.c missing"
           )
-
           # 4. fs/Makefile completeness
           makefile = Path("fs/Makefile")
           if makefile.exists():
@@ -1117,7 +997,6 @@ jobs:
                   if 'sus_su.o' in mk
                   else "FAIL: fs/Makefile missing sus_su.o"
               )
-
           # 5. Bridge detection — KernelSU-Next AND kernel/sys.c
           BRIDGE_MARKER = "CHIMERA_MK6R5_SUSFS_PRCTL_BRIDGE"
           ksu_candidates = [
@@ -1136,7 +1015,6 @@ jobs:
                       results.append(f"OK:   SUSFS bridge detected in {cand}")
                       susfs_bridge_found = True
                       break
-
           # Also check kernel/sys.c (bridge injected there in run-24 pattern)
           if not susfs_bridge_found:
               sys_c = Path("kernel/sys.c")
@@ -1145,13 +1023,11 @@ jobs:
                   if BRIDGE_MARKER in sys_txt or 'ksu_susfs_handle_prctl' in sys_txt:
                       results.append("OK:   SUSFS bridge detected in kernel/sys.c (injected via prctl step)")
                       susfs_bridge_found = True
-
           if not susfs_bridge_found:
               results.append(
                   "WARN: SUSFS prctl dispatch not found in KernelSU-Next OR kernel/sys.c.\n"
                   "      ShowVersion may return EINVAL. Verify prctl bridge log."
               )
-
           # 6. Reject files
           log_dir = os.environ.get("LOG_DIR", "logs")
           rejects_log = Path(f"../{log_dir}/susfs-rejects.log")
@@ -1161,10 +1037,8 @@ jobs:
                   results.append(f"WARN: Patch rejects found:\n{rejects}")
               else:
                   results.append("OK:   No patch rejects — patch applied cleanly")
-
           for line in results:
               print(line)
-
           fail_count = sum(1 for r in results if r.startswith("FAIL:"))
           warn_count = sum(1 for r in results if r.startswith("WARN:"))
           print(f"\nSummary: {len(results)} checks — {fail_count} FAIL, {warn_count} WARN")
@@ -1172,12 +1046,10 @@ jobs:
               print("ACTION REQUIRED: See FAIL lines above")
           PYEOF
           python3 /tmp/susfs_abi_align.py 2>&1 | tee -a "$LOG"
-
           echo "" | tee -a "$LOG"
           echo "=== Reject file contents (if any) ===" | tee -a "$LOG"
           find . -name '*.rej' -exec printf -- '--- %s ---\n' {} \; -exec cat {} \; \
             2>/dev/null | tee -a "$LOG" || echo "(no rejects)" | tee -a "$LOG"
-
       # ── 11d. Fix KernelSU-Next header paths in SUSFS ─────────────────────────
       - name: Fix KernelSU-Next header paths in SUSFS
         working-directory: kernel
@@ -1185,18 +1057,14 @@ jobs:
           set -Eeuo pipefail
           LOG="../$LOG_DIR/susfs-header-fix.log"
           echo "=== Fixing SUSFS header includes for KernelSU-Next ===" | tee "$LOG"
-
           cat > /tmp/fix_headers.py <<'PYEOF'
           import re
           from pathlib import Path
-
           ksu_kernel = Path("KernelSU-Next/kernel")
           if not ksu_kernel.exists():
               print("FAIL: KernelSU-Next/kernel not found.")
               exit(1)
-
           ksu_headers = {hdr.name: hdr.relative_to(ksu_kernel) for hdr in ksu_kernel.rglob("*.h")}
-
           for target_file in ["include/linux/sus_su.h", "include/linux/susfs.h",
                               "fs/susfs.c", "fs/sus_su.c"]:
               p = Path(target_file)
@@ -1224,11 +1092,9 @@ jobs:
                       changed = True
               if changed:
                   p.write_text(content)
-
           print("Header rewire complete.")
           PYEOF
           python3 /tmp/fix_headers.py | tee -a "$LOG"
-
       # ── 11e. Inject linker symbol fallbacks ──────────────────────────────────
       - name: Inject linker symbol fallbacks
         working-directory: kernel
@@ -1236,34 +1102,27 @@ jobs:
           set -Eeuo pipefail
           LOG="../$LOG_DIR/linker-symbol-fix.log"
           echo "=== Injecting weak function fallbacks ===" | tee "$LOG"
-
           cat > /tmp/patch_symbols.py <<'PYEOF'
           from pathlib import Path
-
           target = Path("fs/sus_su.c")
           if not target.exists():
               print("INFO: fs/sus_su.c not found — skipping")
               exit(0)
-
           content = target.read_text()
           if "WEAK_SYMBOL_FALLBACK_BLOCK" in content:
               print("OK: fallbacks already present (idempotent)")
               exit(0)
-
           fallback_code = """
           /* === WEAK_SYMBOL_FALLBACK_BLOCK === */
           #include <linux/cred.h>
           #include <linux/uidgid.h>
           #include <linux/capability.h>
-
           #ifndef cap_set_full
           #define cap_set_full(c) do { (c) = CAP_FULL_SET; } while(0)
           #endif
-
           __attribute__((weak)) bool susfs_is_allow_su(void) {
               return false;
           }
-
           __attribute__((weak)) void ksu_escape_to_root(void) {
               struct cred *new_cred = prepare_creds();
               if (!new_cred) return;
@@ -1287,14 +1146,12 @@ jobs:
           print("OK: Weak functions and macro fallbacks injected into fs/sus_su.c")
           PYEOF
           python3 /tmp/patch_symbols.py | tee -a "$LOG"
-
       # ── 12. ZeroMount compatibility probe ────────────────────────────────────
       - name: ZeroMount compatibility probe
         if: ${{ inputs.enable_zeromount }}
         working-directory: kernel
         run: |
           set -Eeuo pipefail
-
           {
             echo "=== ZeroMount compatibility probe — Chimera Mk6r5 ==="
             echo "== kernel markers =="
@@ -1307,51 +1164,42 @@ jobs:
               'ShowVersion|supercall|SUSFS|susfs' \
               "$GITHUB_WORKSPACE/susfs4ksu" 2>/dev/null || true
           } | tee "../$LOG_DIR/zeromount-compat.log"
-
       # ── 13. AVC-safe SUSFS config + Brain Core defconfig tuning ─────────────
       - name: Apply AVC-safe SUSFS config and Brain Core defconfig tuning
         working-directory: kernel
         run: |
           set -Eeuo pipefail
-
           DEFCONFIG="arch/arm64/configs/exynos9810-star2lte_defconfig"
           test -f "$DEFCONFIG" || { echo "ERROR: defconfig not found: $DEFCONFIG"; exit 1; }
-
           set_cfg() {
             sed -i "/^$1=.*/d" "$DEFCONFIG"
             sed -i "/^# $1 is not set/d" "$DEFCONFIG"
             echo "$1=$2" >> "$DEFCONFIG"
           }
-
           unset_cfg() {
             sed -i "/^$1=.*/d" "$DEFCONFIG"
             sed -i "/^# $1 is not set/d" "$DEFCONFIG"
             echo "# $1 is not set" >> "$DEFCONFIG"
           }
-
           set_cfg CONFIG_KSU y
           set_cfg CONFIG_KSU_SUSFS y
           set_cfg CONFIG_KSU_SUSFS_SUS_PATH y
           set_cfg CONFIG_KSU_SUSFS_SUS_KSTAT y
-
           if [[ "${{ inputs.enable_susfs_open_redirect }}" == "true" ]]; then
             set_cfg CONFIG_KSU_SUSFS_OPEN_REDIRECT y
           else
             unset_cfg CONFIG_KSU_SUSFS_OPEN_REDIRECT
           fi
-
           if [[ "${{ inputs.enable_susfs_hide_symbols }}" == "true" ]]; then
             set_cfg CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS y
           else
             unset_cfg CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
           fi
-
           if [[ "${{ inputs.enable_susfs_try_umount }}" == "true" ]]; then
             set_cfg CONFIG_KSU_SUSFS_TRY_UMOUNT y
           else
             unset_cfg CONFIG_KSU_SUSFS_TRY_UMOUNT
           fi
-
           # AVC-safe: Android 16 QPR2 — all AVC/SELinux spoof options disabled
           unset_cfg CONFIG_KSU_SUSFS_SUS_MOUNT
           unset_cfg CONFIG_KSU_SUSFS_SPOOF_UNAME
@@ -1359,40 +1207,32 @@ jobs:
           unset_cfg CONFIG_KSU_SUSFS_AVC_LOG_SPOOF
           unset_cfg CONFIG_KSU_SUSFS_SELINUX_AVC_HOOK
           unset_cfg CONFIG_KSU_SUSFS_SPOOF_SELINUX
-
           # §6a: Full kernel preemption
           set_cfg CONFIG_PREEMPT y
           unset_cfg CONFIG_PREEMPT_NONE
           unset_cfg CONFIG_PREEMPT_VOLUNTARY
-
           # §6b: HZ_300
           unset_cfg CONFIG_HZ_100
           unset_cfg CONFIG_HZ_250
           set_cfg CONFIG_HZ_300 y
           set_cfg CONFIG_HZ 300
-
           # §6c: TCP BBR
           set_cfg CONFIG_TCP_CONG_ADVANCED y
           set_cfg CONFIG_TCP_CONG_BBR y
           set_cfg CONFIG_TCP_CONG_CUBIC y
           set_cfg 'CONFIG_DEFAULT_TCP_CONG' '"bbr"'
-
           # §6d: CRC32 hardware acceleration
           set_cfg CONFIG_CRC32_ARMV8_CRC y
-
           # §6e: LZ4 for ZRAM
           set_cfg CONFIG_ZRAM y
           set_cfg CONFIG_ZSMALLOC y
           set_cfg CONFIG_CRYPTO_LZ4 y
           set_cfg CONFIG_CRYPTO_LZ4HC y
-
           unset_cfg CONFIG_LOCALVERSION_AUTO
-
           echo "OK: defconfig tuning complete" | tee "../$LOG_DIR/defconfig-tuning.log"
           grep -E \
             "^(CONFIG_KSU|CONFIG_PREEMPT|CONFIG_HZ|CONFIG_TCP_CONG|CONFIG_ZRAM|CONFIG_CRYPTO_LZ4|CONFIG_LOCALVERSION)" \
             "$DEFCONFIG" | tee -a "../$LOG_DIR/defconfig-tuning.log"
-
       # ── 14. Chimera Mk6r5 branding ───────────────────────────────────────────
       # FIXED from run-10: setlocalversion is now written here with the actual
       # brand string, overwriting step 7's placeholder. Samsung BSP Makefile
@@ -1402,20 +1242,15 @@ jobs:
         working-directory: kernel
         run: |
           set -Eeuo pipefail
-
           BUILD_NUM="$(printf '%03d' "$((10#${GITHUB_RUN_NUMBER:-1} % 1000))")"
           BRAND="-Chimera_Mk6r5-${BUILD_NUM}"
-
           DEFCONFIG="arch/arm64/configs/exynos9810-star2lte_defconfig"
-
           sed -i '/^CONFIG_LOCALVERSION=/d' "$DEFCONFIG"
           sed -i '/^CONFIG_DEFAULT_HOSTNAME=/d' "$DEFCONFIG"
-
           {
             echo "CONFIG_LOCALVERSION=\"${BRAND}\""
             echo "CONFIG_DEFAULT_HOSTNAME=\"AegisDevLabs\""
           } >> "$DEFCONFIG"
-
           # Overwrite setlocalversion to output the brand directly.
           # This is the most reliable method for Samsung BSP 4.9 — confirmed
           # needed after run-10 showed CONFIG_LOCALVERSION and MAKE LOCALVERSION=
@@ -1423,18 +1258,14 @@ jobs:
           printf '#!/bin/sh\n# Chimera Mk6r5 brand output\nprintf "%%s" "%s"\n' \
             "${BRAND}" > scripts/setlocalversion
           chmod +x scripts/setlocalversion
-
           # Also write localversion file as a tertiary fallback
           echo "${BRAND}" > localversion
-
           echo "CHIMERA_BRAND=${BRAND}" >> "$GITHUB_ENV"
           echo "BRAND=${BRAND}"        | tee "../$LOG_DIR/build-branding.env"
           echo "BUILD_NUM=${BUILD_NUM}" >> "$GITHUB_ENV"
           echo "OK: brand=${BRAND} — setlocalversion, defconfig, and localversion all set"
-
           echo "=== setlocalversion content ===" | tee -a "../$LOG_DIR/scm-dirty-fix.log"
           cat scripts/setlocalversion | tee -a "../$LOG_DIR/scm-dirty-fix.log"
-
       # ── 15. Dry run complete ─────────────────────────────────────────────────
       - name: Dry run complete
         if: ${{ inputs.dry_run == true }}
@@ -1442,23 +1273,18 @@ jobs:
           echo "=== Chimera Mk6r5 dry run passed ==="
           echo "Patches applied, SUSFS ABI checked, Brain Core hardening baked in."
           echo "Review logs in the artifacts, then re-run with dry_run=false to build."
-
       # ── 16. Build kernel ─────────────────────────────────────────────────────
       - name: Build kernel
         if: ${{ inputs.dry_run == false }}
         working-directory: kernel
         run: |
           set -Eeuo pipefail
-
           mkdir -p "$GITHUB_WORKSPACE/$OUT_DIR"
-
           BUILD_NUM="${BUILD_NUM:-$(printf '%03d' "$((10#${GITHUB_RUN_NUMBER:-1} % 1000))")}"
           LOCALVERSION="-Chimera_Mk6r5-${BUILD_NUM}"
-
           export KBUILD_BUILD_USER="X"
           export KBUILD_BUILD_HOST="AegisDevLabs"
           export KBUILD_BUILD_VERSION="${GITHUB_RUN_NUMBER:-1}"
-
           MAKE=(
             make -j"$(nproc)"
             O="$GITHUB_WORKSPACE/$OUT_DIR"
@@ -1479,40 +1305,30 @@ jobs:
             KBUILD_BUILD_USER="X"
             KBUILD_BUILD_HOST="AegisDevLabs"
           )
-
           "${MAKE[@]}" exynos9810-star2lte_defconfig
           cp "$GITHUB_WORKSPACE/$OUT_DIR/.config" "$GITHUB_WORKSPACE/$LOG_DIR/final.config"
-
           echo "=== LOCALVERSION check ===" | tee -a "$GITHUB_WORKSPACE/$LOG_DIR/scm-dirty-fix.log"
           grep "LOCALVERSION" "$GITHUB_WORKSPACE/$OUT_DIR/.config" \
             | tee -a "$GITHUB_WORKSPACE/$LOG_DIR/scm-dirty-fix.log" || true
-
           "${MAKE[@]}" Image dtbs 2>&1 | tee build.log
-
           test -f "$GITHUB_WORKSPACE/$OUT_DIR/arch/arm64/boot/Image" || {
             echo "ERROR: Image not produced — check build.log"
             exit 1
           }
-
           du -h "$GITHUB_WORKSPACE/$OUT_DIR/arch/arm64/boot/Image" \
             | tee "$GITHUB_WORKSPACE/$LOG_DIR/image-size.log"
-
           echo "=== uname string in Image ===" | tee "$GITHUB_WORKSPACE/$LOG_DIR/uname-verify.log"
           strings "$GITHUB_WORKSPACE/$OUT_DIR/arch/arm64/boot/Image" \
             | grep -E "Linux version 4\.9\." \
             | head -3 | tee -a "$GITHUB_WORKSPACE/$LOG_DIR/uname-verify.log" || true
-
       # ── 17. Package flashable zip ─────────────────────────────────────────────
       - name: Package flashable zip
         if: ${{ inputs.dry_run == false }}
         run: |
           set -Eeuo pipefail
-
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AnyKernel3
-
           cat > /tmp/write_anykernel.py <<'PYEOF'
           from pathlib import Path
-
           content = (
               "properties() { '\n"
               "kernel.string=Project Chimera Mk6r5 - Exynos9810 / star2lte\n"
@@ -1541,24 +1357,18 @@ jobs:
           print("OK: anykernel.sh written")
           PYEOF
           python3 /tmp/write_anykernel.py
-
           cp "$OUT_DIR/arch/arm64/boot/Image" AnyKernel3/
-
           find "$OUT_DIR/arch/arm64/boot/dts/exynos" -name '*star2lte*.dtb' \
             -exec cp {} AnyKernel3/ \;
-
           BUILD_NUM="${BUILD_NUM:-$(printf '%03d' "$((10#${GITHUB_RUN_NUMBER:-1} % 1000))")}"
           ZIP="chimera-mk6r5-lineage23.2-${BUILD_NUM}-$(date +%Y%m%d-%H%M).zip"
-
           (
             cd AnyKernel3
             zip -r9 "../$ZIP" . -x '*.git*'
           )
-
           test -f "$ZIP" || { echo "ERROR: ZIP not produced"; exit 1; }
           echo "ZIP=${ZIP}" >> "$LOG_DIR/build-branding.env"
           echo "OK: flashable zip ready: ${ZIP}"
-
       # ── 18. Upload logs ──────────────────────────────────────────────────────
       - name: Upload logs
         if: always()
@@ -1592,7 +1402,6 @@ jobs:
           body: |
             ## Project Chimera Mk6r5 — Exynos 9810 / star2lte
             Base: Project_Chimera @ chimera-mk6
-
             ### Mk6r5 changes
             - **SUSFS ABI aligned** — v2.1.0 preserved (no-downgrade guarantee), susfs_show_version wired
             - **Brain Core §1** — schedutil 1500us/16000us baked (Samsung patterns: transition_delay, LATENCY_MULTIPLIER, lat multiplier)
@@ -1606,18 +1415,15 @@ jobs:
             - **SUSFS prctl bridge** — injected into SYSCALL_DEFINE5(prctl) C89-compliant
             - **LOCALVERSION fixed** — setlocalversion writes brand directly (Samsung BSP fix)
             - **AVC-safe** — all AVC/SELinux spoof options disabled (Android 16 QPR2)
-
             ### Kernel identity
             ```
             Linux version 4.9.x-Chimera_Mk6r5-NNN (X@AegisDevLabs)
             ```
-
             ### Integrated
             - KernelSU Next (gavdoc38 — pinned submodule)
             - SUSFS kernel-4.9 (AVC-safe, ABI-aligned, sus_su.o wired)
             - ZeroMount compatibility probe
             - OPEN_REDIRECT / TRY_UMOUNT / symbol hiding enabled
-
             ### Flash order
             1. Flash LineageOS 23.2 + recovery
             2. Sideload this zip via recovery
