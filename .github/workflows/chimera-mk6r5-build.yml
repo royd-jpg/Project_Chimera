@@ -4,12 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       susfs_mode:
-        description: "SUSFS Integration Mode (none/avc_safe/full)"
+        description: "SUSFS Integration Mode (safe profiles only: none/avc_safe)"
         required: true
         type: choice
         options:
           - "avc_safe"
-          - "full"
           - "none"
         default: "avc_safe"
       force_selinux_enforcing:
@@ -703,15 +702,28 @@ jobs:
               r'#define\s+(CMD_SUSFS_\w+|SUSFS_CMD_\w+)\s+(0x[0-9a-fA-F]+|\d+)',
               susfs_h_text_for_cmds
           )
+          cmd_values = []
+          for _, raw in cmd_ids:
+              try:
+                  cmd_values.append(int(raw, 0))
+              except ValueError:
+                  pass
           susfs_funcs = re.findall(r'(?:int|bool|void)\s+(susfs_\w+)\s*\(', susfs_h_text)
           show_version_func = next((fn for fn in susfs_funcs if 'version' in fn.lower()), None)
           show_version_cmd = next((c for c in cmd_ids if 'SHOW_VERSION' in c[0] or 'VERSION' in c[0]), None)
-          print(f"INFO: cmd_ids={cmd_ids} show_version_func={show_version_func} cmd={show_version_cmd}")
+          cmd_min = min(cmd_values) if cmd_values else 0x55550
+          cmd_max = max(cmd_values) if cmd_values else 0x60000
+          print(f"INFO: cmd_ids={cmd_ids} show_version_func={show_version_func} cmd={show_version_cmd} range=[{hex(cmd_min)}, {hex(cmd_max)}]")
+
+          if not cmd_ids:
+              print("FAIL: no CMD_SUSFS_* / SUSFS_CMD_* constants found (bridge would be dead)")
+              sys.exit(2)
 
           if show_version_cmd and show_version_func:
               dispatch = f"\tif (option == {show_version_cmd[1]}) {{\n\t\t{show_version_func}((void __user *)arg2);\n\t\treturn 0;\n\t}}\n"
           else:
-              dispatch = "\tif ((unsigned long)option >= 0x55550UL &&\n\t    (unsigned long)option <= 0x60000UL)\n\t\treturn 0;\n"
+              print("FAIL: unable to resolve SHOW_VERSION command/function in SUSFS headers")
+              sys.exit(3)
 
           bridge_func = (
               "\n\n/* Chimera Mk6r5 SUSFS prctl bridge (" + BRIDGE_MARKER + ") */\n"
@@ -734,14 +746,17 @@ jobs:
                   print("OK: prctl bridge already in fs/susfs.c (idempotent)")
 
           def make_snippet(return_type, params_str):
+              gate = (
+                  f"\tif ((unsigned long)option >= {hex(cmd_min)}UL &&\n"
+                  f"\t    (unsigned long)option <= {hex(cmd_max)}UL) {{\n"
+              )
               if 'bool' in return_type:
                   m_ret = re.search(r'int\s*\*\s*(\w+)', params_str)
                   rv = m_ret.group(1) if m_ret else "retval"
                   return (
                       "\n\t/* Chimera Mk6r5: SUSFS prctl bridge (" + BRIDGE_MARKER + ") */\n"
                       "#ifdef CONFIG_KSU_SUSFS\n"
-                      "\tif ((unsigned long)option >= 0x55550UL &&\n"
-                      "\t    (unsigned long)option <= 0x60000UL) {\n"
+                      + gate +
                       "\t\textern int ksu_susfs_handle_prctl(unsigned long, unsigned long,\n"
                       "\t\t    unsigned long, unsigned long, unsigned long);\n"
                       "\t\tint __s = ksu_susfs_handle_prctl(\n"
@@ -757,8 +772,7 @@ jobs:
                   return (
                       "\n\t/* Chimera Mk6r5: SUSFS prctl bridge (" + BRIDGE_MARKER + ") */\n"
                       "#ifdef CONFIG_KSU_SUSFS\n"
-                      "\tif ((unsigned long)option >= 0x55550UL &&\n"
-                      "\t    (unsigned long)option <= 0x60000UL) {\n"
+                      + gate +
                       "\t\textern int ksu_susfs_handle_prctl(unsigned long, unsigned long,\n"
                       "\t\t    unsigned long, unsigned long, unsigned long);\n"
                       "\t\tint __s = ksu_susfs_handle_prctl(\n"
@@ -946,6 +960,7 @@ jobs:
           print(f"\nSummary: {len(results)} checks — {fail_count} FAIL, {warn_count} WARN")
           if fail_count > 0:
               print("ACTION REQUIRED: See FAIL lines above")
+              sys.exit(1)
           PYEOF
           python3 /tmp/susfs_abi_align.py 2>&1 | tee -a "$LOG"
 
@@ -978,6 +993,11 @@ jobs:
               for hdr in ksu_linked.rglob("*.h"):
                   ksu_headers.setdefault(hdr.name, hdr.relative_to(ksu_linked))
 
+          core_hook_replacements = []
+          for replacement in ("ksu_hook.h", "core_hook.h", "kernel_compat.h"):
+              if replacement in ksu_headers:
+                  core_hook_replacements.append(replacement)
+
           for target_file in ["include/linux/sus_su.h", "include/linux/susfs.h",
                               "fs/susfs.c", "fs/sus_su.c"]:
               p = Path(target_file)
@@ -1000,6 +1020,10 @@ jobs:
                       changed = True
                   else:
                       print(f"WARN: {target_file}: {header_name} not found in KernelSU-Next headers — preserving include as-is")
+              if "core_hook.h" in content and core_hook_replacements:
+                  content = content.replace("core_hook.h", core_hook_replacements[0])
+                  print(f"OK: {target_file} core_hook.h remapped to {core_hook_replacements[0]}")
+                  changed = True
               if changed:
                   p.write_text(content)
 
@@ -1089,7 +1113,6 @@ jobs:
 
       # ── 13. Defconfig tuning — SUSFS modes + Brain Core §6 + SELinux ─────────
       # susfs_mode=avc_safe: SUSFS enabled, all AVC/SELinux spoof options disabled.
-      # susfs_mode=full:     SUSFS enabled with all features including AVC hooks.
       # susfs_mode=none:     SUSFS fully disabled; compiles pure KernelSU-Next.
       # force_selinux_enforcing: removes CONFIG_SECURITY_SELINUX_DEVELOP so
       #   setenforce 0 fails at kernel level — strictly enforcing binary.
@@ -1140,23 +1163,13 @@ jobs:
               unset_cfg CONFIG_KSU_SUSFS_TRY_UMOUNT
             fi
 
-            if [[ "${{ inputs.susfs_mode }}" == "full" ]]; then
-              # FULL: all SUSFS features including AVC hooks
-              set_cfg CONFIG_KSU_SUSFS_SUS_MOUNT y
-              set_cfg CONFIG_KSU_SUSFS_SPOOF_UNAME y
-              set_cfg CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOF y
-              set_cfg CONFIG_KSU_SUSFS_AVC_LOG_SPOOF y
-              set_cfg CONFIG_KSU_SUSFS_SELINUX_AVC_HOOK y
-              set_cfg CONFIG_KSU_SUSFS_SPOOF_SELINUX y
-            else
-              # AVC_SAFE: disable all options that trigger Android 16 QPR2 boot panics
-              unset_cfg CONFIG_KSU_SUSFS_SUS_MOUNT
-              unset_cfg CONFIG_KSU_SUSFS_SPOOF_UNAME
-              unset_cfg CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOF
-              unset_cfg CONFIG_KSU_SUSFS_AVC_LOG_SPOOF
-              unset_cfg CONFIG_KSU_SUSFS_SELINUX_AVC_HOOK
-              unset_cfg CONFIG_KSU_SUSFS_SPOOF_SELINUX
-            fi
+            # AVC_SAFE: disable all options that trigger Android 16 QPR2 boot panics
+            unset_cfg CONFIG_KSU_SUSFS_SUS_MOUNT
+            unset_cfg CONFIG_KSU_SUSFS_SPOOF_UNAME
+            unset_cfg CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOF
+            unset_cfg CONFIG_KSU_SUSFS_AVC_LOG_SPOOF
+            unset_cfg CONFIG_KSU_SUSFS_SELINUX_AVC_HOOK
+            unset_cfg CONFIG_KSU_SUSFS_SPOOF_SELINUX
           else
             # NONE: disable SUSFS entirely — pure KernelSU-Next build
             unset_cfg CONFIG_KSU_SUSFS
@@ -1414,7 +1427,7 @@ jobs:
             - force_selinux_enforcing: ${{ inputs.force_selinux_enforcing }}
 
             ### Mk6r5 changes
-            - **SUSFS mode selector** — avc_safe / full / none dropdown
+            - **SUSFS mode selector** — avc_safe / none dropdown (panic-safe)
             - **SELinux enforcing toggle** — strips CONFIG_SECURITY_SELINUX_DEVELOP
             - **SUSFS ABI aligned** — v2.1.0 preserved (no-downgrade guarantee)
             - **Brain Core §1** — schedutil 1500/16000us (Samsung BSP patterns confirmed)
