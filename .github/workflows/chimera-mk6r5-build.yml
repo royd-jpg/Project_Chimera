@@ -709,7 +709,7 @@ jobs:
           print(f"INFO: cmd_ids={cmd_ids} show_version_func={show_version_func} cmd={show_version_cmd}")
 
           if show_version_cmd and show_version_func:
-              dispatch = f"\tif (option == {show_version_cmd[1]}) {{\n\t\treturn {show_version_func}((void __user *)arg2);\n\t}}\n"
+              dispatch = f"\tif (option == {show_version_cmd[1]}) {{\n\t\t{show_version_func}((void __user *)arg2);\n\t\treturn 0;\n\t}}\n"
           else:
               dispatch = "\tif ((unsigned long)option >= 0x55550UL &&\n\t    (unsigned long)option <= 0x60000UL)\n\t\treturn 0;\n"
 
