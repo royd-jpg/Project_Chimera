@@ -565,6 +565,10 @@ jobs:
             'KernelSU|kernelsu|CONFIG_KSU|KSU_SUSFS|ksu_handle_faccessat|susfs_task_state|susfs_is_inode_sus_path' \
             fs include kernel arch/arm64/configs 2>/dev/null \
             | tee -a "../$LOG_DIR/preflight.log" || true
+          echo "=== KSU manual hook markers ===" | tee -a "../$LOG_DIR/preflight.log"
+          grep -rn "ksu_handle_exec\|ksu_handle_vfs_read\|ksu_handle_input_handle_event" \
+            fs/ security/ kernel/ drivers/ 2>/dev/null \
+            | tee -a "../$LOG_DIR/preflight.log" || echo "WARN: Missing KSU manual hooks" | tee -a "../$LOG_DIR/preflight.log"
 
           ALREADY_PATCHED=false
           if grep -RqsE \
@@ -693,7 +697,12 @@ jobs:
               sys.exit(1)
 
           susfs_h_text = susfs_h.read_text()
-          cmd_ids = re.findall(r'#define\s+(CMD_SUSFS_\w+|SUSFS_CMD_\w+)\s+(0x[0-9a-fA-F]+|\d+)', susfs_h_text)
+          susfs_def_h = Path("include/linux/susfs_def.h")
+          susfs_h_text_for_cmds = susfs_def_h.read_text() if susfs_def_h.exists() else susfs_h_text
+          cmd_ids = re.findall(
+              r'#define\s+(CMD_SUSFS_\w+|SUSFS_CMD_\w+)\s+(0x[0-9a-fA-F]+|\d+)',
+              susfs_h_text_for_cmds
+          )
           susfs_funcs = re.findall(r'(?:int|bool|void)\s+(susfs_\w+)\s*\(', susfs_h_text)
           show_version_func = next((fn for fn in susfs_funcs if 'version' in fn.lower()), None)
           show_version_cmd = next((c for c in cmd_ids if 'SHOW_VERSION' in c[0] or 'VERSION' in c[0]), None)
@@ -702,7 +711,7 @@ jobs:
           if show_version_cmd and show_version_func:
               dispatch = f"\tif (option == {show_version_cmd[1]}) {{\n\t\treturn {show_version_func}((void __user *)arg2);\n\t}}\n"
           else:
-              dispatch = "\tif (option >= 0x55550000UL && option <= 0x5555ffffUL)\n\t\treturn 0;\n"
+              dispatch = "\tif ((unsigned long)option >= 0x55550UL &&\n\t    (unsigned long)option <= 0x60000UL)\n\t\treturn 0;\n"
 
           bridge_func = (
               "\n\n/* Chimera Mk6r5 SUSFS prctl bridge (" + BRIDGE_MARKER + ") */\n"
@@ -731,8 +740,8 @@ jobs:
                   return (
                       "\n\t/* Chimera Mk6r5: SUSFS prctl bridge (" + BRIDGE_MARKER + ") */\n"
                       "#ifdef CONFIG_KSU_SUSFS\n"
-                      "\tif ((unsigned int)option >= 0x55550000U &&\n"
-                      "\t    (unsigned int)option <= 0x5555ffffU) {\n"
+                      "\tif ((unsigned long)option >= 0x55550UL &&\n"
+                      "\t    (unsigned long)option <= 0x60000UL) {\n"
                       "\t\textern int ksu_susfs_handle_prctl(unsigned long, unsigned long,\n"
                       "\t\t    unsigned long, unsigned long, unsigned long);\n"
                       "\t\tint __s = ksu_susfs_handle_prctl(\n"
@@ -748,8 +757,8 @@ jobs:
                   return (
                       "\n\t/* Chimera Mk6r5: SUSFS prctl bridge (" + BRIDGE_MARKER + ") */\n"
                       "#ifdef CONFIG_KSU_SUSFS\n"
-                      "\tif ((unsigned int)option >= 0x55550000U &&\n"
-                      "\t    (unsigned int)option <= 0x5555ffffU) {\n"
+                      "\tif ((unsigned long)option >= 0x55550UL &&\n"
+                      "\t    (unsigned long)option <= 0x60000UL) {\n"
                       "\t\textern int ksu_susfs_handle_prctl(unsigned long, unsigned long,\n"
                       "\t\t    unsigned long, unsigned long, unsigned long);\n"
                       "\t\tint __s = ksu_susfs_handle_prctl(\n"
@@ -964,6 +973,10 @@ jobs:
               exit(1)
 
           ksu_headers = {hdr.name: hdr.relative_to(ksu_kernel) for hdr in ksu_kernel.rglob("*.h")}
+          ksu_linked = Path("drivers/kernelsu")
+          if ksu_linked.exists():
+              for hdr in ksu_linked.rglob("*.h"):
+                  ksu_headers.setdefault(hdr.name, hdr.relative_to(ksu_linked))
 
           for target_file in ["include/linux/sus_su.h", "include/linux/susfs.h",
                               "fs/susfs.c", "fs/sus_su.c"]:
@@ -986,9 +999,7 @@ jobs:
                       print(f"OK: {target_file} -> {header_name} rewired to {rel_path}")
                       changed = True
                   else:
-                      print(f"INFO: {target_file}: {header_name} not in KernelSU-Next — commenting out")
-                      content = content.replace(full_match, f"/* missing: {full_match} */")
-                      changed = True
+                      print(f"WARN: {target_file}: {header_name} not found in KernelSU-Next headers — preserving include as-is")
               if changed:
                   p.write_text(content)
 
@@ -1185,7 +1196,9 @@ jobs:
           set_cfg CONFIG_TCP_CONG_ADVANCED y
           set_cfg CONFIG_TCP_CONG_BBR y
           set_cfg CONFIG_TCP_CONG_CUBIC y
-          set_cfg 'CONFIG_DEFAULT_TCP_CONG' '"bbr"'
+          sed -i '/^CONFIG_DEFAULT_TCP_CONG=.*/d' "$DEFCONFIG"
+          sed -i '/^# CONFIG_DEFAULT_TCP_CONG is not set/d' "$DEFCONFIG"
+          echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> "$DEFCONFIG"
           set_cfg CONFIG_CRC32_ARMV8_CRC y
           set_cfg CONFIG_ZRAM y
           set_cfg CONFIG_ZSMALLOC y
@@ -1201,14 +1214,14 @@ jobs:
       # ── 14. Chimera Mk6r5 branding ───────────────────────────────────────────
       # FIXED from run-10: setlocalversion is written here with the brand string.
       # Samsung BSP Makefile calls setlocalversion directly — it is authoritative.
-      # uname: Linux version 4.9.x-Chimera_Mk6r5-NNN (X@AegisDevLabs)
+      # uname: Linux version 4.9.x-Chimera_Mk6r5 (X@AegisDevLabs)
       - name: Chimera Mk6r5 branding
         working-directory: kernel
         run: |
           set -Eeuo pipefail
 
           BUILD_NUM="$(printf '%03d' "$((10#${GITHUB_RUN_NUMBER:-1} % 1000))")"
-          BRAND="-Chimera_Mk6r5-${BUILD_NUM}"
+          BRAND="-Chimera_Mk6r5"
 
           DEFCONFIG="arch/arm64/configs/exynos9810-star2lte_defconfig"
 
@@ -1256,7 +1269,7 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/$OUT_DIR"
 
           BUILD_NUM="${BUILD_NUM:-$(printf '%03d' "$((10#${GITHUB_RUN_NUMBER:-1} % 1000))")}"
-          LOCALVERSION="-Chimera_Mk6r5-${BUILD_NUM}"
+          LOCALVERSION="-Chimera_Mk6r5"
 
           export KBUILD_BUILD_USER="X"
           export KBUILD_BUILD_HOST="AegisDevLabs"
@@ -1417,7 +1430,7 @@ jobs:
 
             ### Kernel identity
             ```
-            Linux version 4.9.x-Chimera_Mk6r5-NNN (X@AegisDevLabs)
+            Linux version 4.9.x-Chimera_Mk6r5 (X@AegisDevLabs)
             ```
 
             ### Flash order
