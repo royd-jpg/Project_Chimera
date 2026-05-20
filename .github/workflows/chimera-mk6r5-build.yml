@@ -1204,39 +1204,41 @@ jobs:
           PYEOF
           python3 /tmp/fix_headers.py | tee -a "$LOG"
 
-      # ── 11c. Resolve SUSFS and KernelSU-Next Linker Symbols ──────────────────
-      # This script injects weak symbol fallbacks for susfs_is_allow_su and 
-      # ksu_escape_to_root. If the main source trees lack these definitions, 
-      # these fallbacks satisfy the linker and prevent a vmlinux compile crash.
+       # ── 11c. Resolve SUSFS and KernelSU-Next Linker Symbols ──────────────────
       - name: Inject Linker Symbol Fallbacks
         working-directory: kernel
         run: |
           set -Eeuo pipefail
           LOG="../$LOG_DIR/linker-symbol-fix.log"
-          echo "=== Injecting weak symbol fallbacks for linker alignment ===" | tee "$LOG"
+          echo "=== Injecting weak function fallbacks and capability macros ===" | tee "$LOG"
 
           cat > /tmp/patch_symbols.py <<'PYEOF'
           from pathlib import Path
 
           target = Path("fs/sus_su.c")
           if not target.exists():
-              print("WARN: fs/sus_su.c not found, skipping symbol fallback injection.")
               exit(0)
 
           content = target.read_text()
           
           if "WEAK_SYMBOL_FALLBACK_BLOCK" in content:
-              print("INFO: Fallback block already present.")
               exit(0)
 
+          # We include the cap_set_full macro definition to bridge the missing tool
           fallback_code = """
           /* === WEAK_SYMBOL_FALLBACK_BLOCK === */
           #include <linux/cred.h>
           #include <linux/uidgid.h>
-          #include <linux/capability.h> /* Fixed: singular for Kernel 4.9 */
+          #include <linux/capability.h>
         
-          __attribute__((weak)) bool susfs_is_allow_su(void) { return false; }
-
+          #ifndef cap_set_full
+          #define cap_set_full(c) do { (c) = CAP_FULL_SET; } while(0)
+          #endif
+        
+          __attribute__((weak)) bool susfs_is_allow_su(void) {
+              return false;
+          }
+        
           __attribute__((weak)) void ksu_escape_to_root(void) {
               struct cred *new_cred = prepare_creds();
               if (!new_cred) return;
@@ -1248,17 +1250,19 @@ jobs:
               new_cred->egid = GLOBAL_ROOT_GID;
               new_cred->fsuid = GLOBAL_ROOT_UID;
               new_cred->fsgid = GLOBAL_ROOT_GID;
+              
               cap_set_full(new_cred->cap_inheritable);
               cap_set_full(new_cred->cap_permitted);
               cap_set_full(new_cred->cap_effective);
               cap_set_full(new_cred->cap_bset);
+              
               commit_creds(new_cred);
           }
           /* ================================== */
           """
           new_content = content + "\n" + fallback_code
           target.write_text(new_content)
-          print("OK: Weak linker fallbacks successfully stitched into fs/sus_su.c")
+          print("OK: Weak functions and macro fallbacks injected.")
           PYEOF
           python3 /tmp/patch_symbols.py | tee -a "$LOG"
           
