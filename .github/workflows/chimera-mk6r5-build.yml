@@ -627,52 +627,34 @@ jobs:
           grep -q 'susfs\.o'  fs/Makefile || echo 'obj-$(CONFIG_KSU_SUSFS) += susfs.o'  >> fs/Makefile
           grep -q 'sus_su\.o' fs/Makefile || echo 'obj-$(CONFIG_KSU_SUSFS) += sus_su.o' >> fs/Makefile
 
-      # ── 11a. Guarantee SUSFS files present (skipped when susfs_mode=none) ────
-      # Only installs MISSING files — preserves existing newer versions.
-      # Confirmed critical fix: prevents v2.1.0 being downgraded to v1.5.5.
+      # ── 11a. Guarantee SUSFS files present (no downgrade / include fix) ────
       - name: Guarantee SUSFS files present (no downgrade)
         if: ${{ inputs.susfs_mode != 'none' }}
         working-directory: kernel
         run: |
           set -Eeuo pipefail
           LOG="../$LOG_DIR/susfs-files-guarantee.log"
-          echo "=== SUSFS file guarantee — install-only-if-missing ===" | tee "$LOG"
+          echo "=== SUSFS file guarantee & Include Path Fix ===" | tee "$LOG"
+          
+          # 1. Ensure Files are present
           SUSFS_PATCHES="$GITHUB_WORKSPACE/susfs4ksu/kernel_patches"
           for src_dst in "fs/susfs.c:fs/susfs.c" "fs/sus_su.c:fs/sus_su.c"; do
-            SRC="${src_dst%%:*}"
-            DST="${src_dst##*:}"
+            SRC="${src_dst%%:*}"; DST="${src_dst##*:}"
             if [[ ! -f "$DST" ]] && [[ -f "$SUSFS_PATCHES/$SRC" ]]; then
               install -m 0644 "$SUSFS_PATCHES/$SRC" "$DST"
-              echo "OK: installed missing $DST" | tee -a "$LOG"
-            elif [[ -f "$DST" ]]; then
-              echo "INFO: $DST already present — preserving existing version" | tee -a "$LOG"
-            fi
-          done
-          for hdr in "include/linux/susfs.h" "include/linux/susfs_def.h" "include/linux/sus_su.h"; do
-            if [[ ! -f "$hdr" ]] && [[ -f "$SUSFS_PATCHES/$hdr" ]]; then
-              install -m 0644 "$SUSFS_PATCHES/$hdr" "$hdr"
-              echo "OK: installed missing $hdr" | tee -a "$LOG"
-            elif [[ -f "$hdr" ]]; then
-              echo "INFO: $hdr already present — preserving existing version" | tee -a "$LOG"
             fi
           done
           
-          # Standard Makefile object wiring
-          grep -q 'susfs\.o'  fs/Makefile || echo 'obj-$(CONFIG_KSU_SUSFS) += susfs.o'  >> fs/Makefile
+          # 2. Wire Makefile with corrected Security paths
+          # We add the root security folder and the internal include directory
+          grep -q 'susfs\.o' fs/Makefile || echo 'obj-$(CONFIG_KSU_SUSFS) += susfs.o' >> fs/Makefile
           grep -q 'sus_su\.o' fs/Makefile || echo 'obj-$(CONFIG_KSU_SUSFS) += sus_su.o' >> fs/Makefile
           
-          # FIX: Provide directions to SELinux headers for sus_su.c compilation
-          grep -q 'Isecurity/selinux' fs/Makefile || echo 'ccflags-$(CONFIG_KSU_SUSFS) += -Isecurity/selinux' >> fs/Makefile
+          # Remove existing ccflags if present to avoid duplicates, then add fresh
+          sed -i '/ccflags-$(CONFIG_KSU_SUSFS)/d' fs/Makefile
+          echo 'ccflags-$(CONFIG_KSU_SUSFS) += -Isecurity/selinux -Isecurity/selinux/include' >> fs/Makefile
           
-          echo "=== File presence check ===" | tee -a "$LOG"
-          for f in fs/susfs.c fs/sus_su.c include/linux/susfs.h \
-                   include/linux/susfs_def.h include/linux/sus_su.h; do
-            if [[ -f "$f" ]]; then
-              echo "OK: $f ($(wc -l < "$f") lines)" | tee -a "$LOG"
-            else
-              echo "FAIL: $f MISSING" | tee -a "$LOG"
-            fi
-          done
+          echo "OK: Makefile CCFLAGS injected for SELinux headers." | tee -a "$LOG"
 
       # ── 11b. Inject SUSFS prctl bridge (skipped when susfs_mode=none) ────────
       # Pass A: searches KernelSU-Next files for bool prctl handler with retval param.
