@@ -198,6 +198,24 @@ jobs:
           PYEOF
           python3 /tmp/fix_syscall_typedef.py
 
+      - name: Pre-patch rate_limit audit
+        working-directory: kernel
+        run: |
+          {
+            echo "=== cpufreq_schedutil.c rate_limit lines ==="
+            grep -n "rate_limit\|SCHED_FIFO\|SCHED_RR\|sched_priority" \
+              kernel/sched/cpufreq_schedutil.c 2>/dev/null || echo "(not found)"
+            echo "=== exynos-acme.c rate_limit lines ==="
+            grep -n "rate_limit\|RATE_LIMIT\|5000\|up_rate\|down_rate" \
+              drivers/cpufreq/exynos-acme.c 2>/dev/null || echo "(not found)"
+            echo "=== exynos-ufc.c rate_limit lines ==="
+            grep -n "rate_limit\|5000\|up_rate\|down_rate\|cpufreq_register_notifier" \
+              drivers/cpufreq/exynos-ufc.c 2>/dev/null || echo "(not found)"
+            echo "=== MMC read_ahead candidates ==="
+            grep -rn "read_ahead\|ra_pages\|VM_READAHEAD" \
+              drivers/mmc/ include/linux/mm.h 2>/dev/null | grep -v ".o:" || echo "(not found)"
+          } | tee "../$LOG_DIR/prepatch-audit.log"
+
       # ── 6. Brain Core kernel hardening patches (§1–§8) ──────────────────────
       # Bakes in schedutil rates, sugov priority, UFC disable, CFS tuning,
       # mmcblk0 read_ahead, ZRAM lz4, EMS thresholds, and thermal trip points.
