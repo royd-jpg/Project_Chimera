@@ -639,9 +639,10 @@ jobs:
           {
             echo "BRAND=$BRAND"
             echo "RUN=${GITHUB_RUN_NUMBER}"
-          } | tee "$LOG_DIR/branding.env"
-          echo "=== setlocalversion ===" | tee "$LOG_DIR/scm-dirty.log"
-          cat scripts/setlocalversion | tee -a "$LOG_DIR/scm-dirty.log"
+          } | tee "../$LOG_DIR/branding.env"
+          
+          echo "=== setlocalversion ===" | tee "../$LOG_DIR/scm-dirty.log"
+          cat scripts/setlocalversion | tee -a "../$LOG_DIR/scm-dirty.log"
 
       # ── 15. Pre-build SUSFS sanity check ────────────────────────────────────
       - name: SUSFS pre-build sanity check
