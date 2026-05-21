@@ -39,21 +39,99 @@ jobs:
       # schedutil tuning
       # =========================================================
 
-      - name: Patch schedutil defaults
+      - name: Apply schedutil tuning
         run: |
           set -Eeuo pipefail
-
-          FILE="drivers/cpufreq/cpufreq_schedutil.c"
-
+      
+          FILE="kernel/drivers/cpufreq/cpufreq_schedutil.c"
+      
           test -f "$FILE"
-
-          sed -ri \
-            's/tunables->up_rate_limit_us *= *[0-9a-zA-Z_()]+;/tunables->up_rate_limit_us = 1500;/g' \
-            "$FILE"
-
-          sed -ri \
-            's/tunables->down_rate_limit_us *= *[0-9a-zA-Z_()]+;/tunables->down_rate_limit_us = 16000;/g' \
-            "$FILE"
+      
+          cp "$FILE" "${FILE}.bak"
+      
+          python3 <<'PYEOF'
+          from pathlib import Path
+          import re
+      
+          path = Path("kernel/drivers/cpufreq/cpufreq_schedutil.c")
+          text = path.read_text()
+      
+          original = text
+      
+          #
+          # Fix schedutil rate limits
+          #
+      
+          patterns = [
+              (
+                  r'tunables->up_rate_limit_us\s*=\s*0\s*;',
+                  'tunables->up_rate_limit_us = 1500;'
+              ),
+              (
+                  r'tunables->down_rate_limit_us\s*=\s*0\s*;',
+                  'tunables->down_rate_limit_us = 16000;'
+              ),
+              (
+                  r'tunables->up_rate_limit_us\s*=\s*5000\s*;',
+                  'tunables->up_rate_limit_us = 1500;'
+              ),
+              (
+                  r'tunables->down_rate_limit_us\s*=\s*5000\s*;',
+                  'tunables->down_rate_limit_us = 16000;'
+              ),
+          ]
+      
+          for pattern, replacement in patterns:
+              text = re.sub(pattern, replacement, text)
+      
+          #
+          # Samsung clamp_val() BSP variant
+          #
+      
+          text = re.sub(
+              r'tunables->up_rate_limit_us\s*=\s*'
+              r'clamp_val\s*\(\s*cpufreq_policy_transition_delay_us\(policy\)\s*,\s*0\s*,\s*USEC_PER_MSEC\s*\)\s*;',
+              'tunables->up_rate_limit_us = 1500;',
+              text,
+              flags=re.MULTILINE
+          )
+      
+          text = re.sub(
+              r'tunables->down_rate_limit_us\s*=\s*'
+              r'clamp_val\s*\(\s*cpufreq_policy_transition_delay_us\(policy\)\s*,\s*0\s*,\s*USEC_PER_MSEC\s*\)\s*;',
+              'tunables->down_rate_limit_us = 16000;',
+              text,
+              flags=re.MULTILINE
+          )
+      
+          #
+          # sugov thread scheduler downgrade
+          #
+      
+          text = re.sub(
+              r'param\.sched_priority\s*=\s*MAX_RT_PRIO\s*-\s*1\s*;',
+              'param.sched_priority = 1;',
+              text
+          )
+      
+          text = re.sub(
+              r'sched_setscheduler_nocheck\s*\(\s*sg_policy->thread\s*,\s*SCHED_FIFO\s*,\s*&param\s*\)\s*;',
+              'sched_setscheduler_nocheck(sg_policy->thread, SCHED_RR, &param);',
+              text
+          )
+      
+          if text == original:
+              raise SystemExit("ERROR: no schedutil patterns matched")
+      
+          path.write_text(text)
+      
+          print("schedutil tuning applied successfully")
+          PYEOF
+      
+          grep -n "up_rate_limit_us" "$FILE" | head
+          grep -n "down_rate_limit_us" "$FILE" | head
+          grep -n "sched_priority" "$FILE" | head
+          grep -n "SCHED_RR" "$FILE" | head
 
       # =========================================================
       # sugov thread priority
