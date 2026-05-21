@@ -207,69 +207,69 @@ jobs:
           fi
 
           cat > /tmp/fix_syscall_typedef.pl <<'PL'
-use strict;
-use warnings;
-
-my $path = "KernelSU-Next/kernel/hook/syscall_hook.h";
-
-open my $in, '<', $path or exit 0;
-local $/;
-my $content = <$in>;
-close $in;
-
-if ($content !~ /typedef long \(\*syscall_fn_t\)/) {
-    my $block = "/* syscall_fn_t: Samsung 4.9 BSP compatibility */\n"
-              . "typedef long (*syscall_fn_t)(\n"
-              . "    unsigned long,\n"
-              . "    unsigned long,\n"
-              . "    unsigned long,\n"
-              . "    unsigned long,\n"
-              . "    unsigned long,\n"
-              . "    unsigned long\n"
-              . ");\n\n";
-
-    if ($content =~ s/\A((?:#(?:include|pragma|ifndef|define)[^\n]*\n)+)/$1$block/m) {
-        open my $out, '>', $path or die $!;
-        print {$out} $content;
-        close $out;
-        print "OK: syscall_fn_t typedef injected\n";
-    } else {
-        print "WARN: no insertion point found\n";
-    }
-} else {
-    print "OK: syscall_fn_t already present\n";
-}
-PL
-          perl /tmp/fix_syscall_typedef.pl
-
-      - name: Preflight tree state
-        working-directory: kernel
-        run: |
-          set -Eeuo pipefail
-          LOG="../$LOG_DIR/preflight.log"
-          echo "=== Preflight — Chimera Mk6 Light ===" | tee "$LOG"
-          git status --short | tee -a "$LOG"
-
-          echo "=== KSU/SUSFS markers ===" | tee -a "$LOG"
-          grep -RsnE \
-            'KernelSU|kernelsu|CONFIG_KSU|susfs_task_state|ksu_handle_faccessat' \
-            fs include kernel arch/arm64/configs 2>/dev/null \
-            | tee -a "$LOG" || true
-
-          ALREADY_PATCHED=false
-          if grep -RqsE \
-            'source "drivers/kernelsu/Kconfig"|ksu_handle_faccessat|susfs_task_state' \
-            fs include kernel arch/arm64/configs 2>/dev/null; then
-            ALREADY_PATCHED=true
-          fi
-
-          echo "ALREADY_PATCHED=$ALREADY_PATCHED" | tee -a "$LOG"
-          if [[ "$ALREADY_PATCHED" == "true" && "${{ inputs.force_repatch }}" != "true" ]]; then
-            echo "SKIP_INTEGRATION=true" >> "$GITHUB_ENV"
-            echo "INFO: tree already has KSU/SUSFS markers — skipping patch application"
-          else
-            echo "SKIP_INTEGRATION=false" >> "$GITHUB_ENV"
-          fi
+          use strict;
+          use warnings;
+          
+          my $path = "KernelSU-Next/kernel/hook/syscall_hook.h";
+          
+          open my $in, '<', $path or exit 0;
+          local $/;
+          my $content = <$in>;
+          close $in;
+          
+          if ($content !~ /typedef long \(\*syscall_fn_t\)/) {
+              my $block = "/* syscall_fn_t: Samsung 4.9 BSP compatibility */\n"
+                        . "typedef long (*syscall_fn_t)(\n"
+                        . "    unsigned long,\n"
+                        . "    unsigned long,\n"
+                        . "    unsigned long,\n"
+                        . "    unsigned long,\n"
+                        . "    unsigned long,\n"
+                        . "    unsigned long\n"
+                        . ");\n\n";
+          
+              if ($content =~ s/\A((?:#(?:include|pragma|ifndef|define)[^\n]*\n)+)/$1$block/m) {
+                  open my $out, '>', $path or die $!;
+                  print {$out} $content;
+                  close $out;
+                  print "OK: syscall_fn_t typedef injected\n";
+              } else {
+                  print "WARN: no insertion point found\n";
+              }
+          } else {
+          print "OK: syscall_fn_t already present\n";
+            }
+            PL
+                      perl /tmp/fix_syscall_typedef.pl
+      
+            - name: Preflight tree state
+              working-directory: kernel
+              run: |
+                set -Eeuo pipefail
+                LOG="../$LOG_DIR/preflight.log"
+                echo "=== Preflight — Chimera Mk6 Light ===" | tee "$LOG"
+                git status --short | tee -a "$LOG"
+      
+                echo "=== KSU/SUSFS markers ===" | tee -a "$LOG"
+                grep -RsnE \
+                  'KernelSU|kernelsu|CONFIG_KSU|susfs_task_state|ksu_handle_faccessat' \
+                  fs include kernel arch/arm64/configs 2>/dev/null \
+                  | tee -a "$LOG" || true
+      
+                ALREADY_PATCHED=false
+                if grep -RqsE \
+                  'source "drivers/kernelsu/Kconfig"|ksu_handle_faccessat|susfs_task_state' \
+                  fs include kernel arch/arm64/configs 2>/dev/null; then
+                  ALREADY_PATCHED=true
+                fi
+      
+                echo "ALREADY_PATCHED=$ALREADY_PATCHED" | tee -a "$LOG"
+                if [[ "$ALREADY_PATCHED" == "true" && "${{ inputs.force_repatch }}" != "true" ]]; then
+                  echo "SKIP_INTEGRATION=true" >> "$GITHUB_ENV"
+                  echo "INFO: tree already has KSU/SUSFS markers — skipping patch application"
+                else
+                  echo "SKIP_INTEGRATION=false" >> "$GITHUB_ENV"
+                fi
 
       - name: Wire KernelSU Kconfig
         working-directory: kernel
@@ -382,25 +382,25 @@ PL
                 "$TARGET" > drivers/kernelsu/kernel_compat.h
             else
               cat > drivers/kernelsu/kernel_compat.h <<'EOF'
-#pragma once
-/* Chimera Mk6 Light fallback kernel_compat.h shim */
-#include <linux/kernel.h>
-#include <linux/cred.h>
-#include <linux/sched.h>
-#include <linux/uaccess.h>
-EOF
-            fi
-          fi
-
-          cat > drivers/kernelsu/core_hook.h <<'EOF'
-#pragma once
-/* Chimera Mk6 Light compatibility shim for older SUSFS headers */
-#include "kernel_compat.h"
-EOF
-
-      - name: Apply defconfig tuning
-        working-directory: kernel
-        run: |
+          #pragma once
+          /* Chimera Mk6 Light fallback kernel_compat.h shim */
+          #include <linux/kernel.h>
+          #include <linux/cred.h>
+          #include <linux/sched.h>
+          #include <linux/uaccess.h>
+          EOF
+                      fi
+                    fi
+          
+                    cat > drivers/kernelsu/core_hook.h <<'EOF'
+          #pragma once
+          /* Chimera Mk6 Light compatibility shim for older SUSFS headers */
+          #include "kernel_compat.h"
+          EOF
+          
+                - name: Apply defconfig tuning
+                  working-directory: kernel
+                  run: |
           set -Eeuo pipefail
           test -f "$DEFCONFIG" || { echo "ERROR: $DEFCONFIG not found"; exit 1; }
 
