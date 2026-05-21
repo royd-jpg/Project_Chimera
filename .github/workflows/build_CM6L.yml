@@ -32,12 +32,12 @@ on:
         description: "KernelSU git URL (https only)"
         required: false
         type: string
-        default: "https://github.com/gavdoc38/KernelSU-Next.git"
+        default: "https://github.com/sidex15/KernelSU-Next.git"
       ksu_ref:
         description: "KernelSU branch/tag/ref (used if ksu_commit is empty)"
         required: false
         type: string
-        default: "main"
+        default: "stable"
       ksu_commit:
         description: "KernelSU exact commit SHA to pin (recommended)"
         required: false
@@ -78,7 +78,7 @@ jobs:
       KERNEL_BRANCH: "chimera-mk6l"
       SUSFS_REPO:    "https://gitlab.com/simonpunk/susfs4ksu.git"
       SUSFS_BRANCH:  "kernel-4.9"
-      SUSFS_TARGET_VERSION: "v1.5.12"
+      SUSFS_TARGET_VERSION: "v1.5.5"
       KERNEL_DIR:    "kernel"
       OUT_DIR:       "kernel-out"
       LOG_DIR:       "logs"
@@ -518,7 +518,7 @@ jobs:
               "\t\tif (__r != -EINVAL) return (long)__r;\n"
               "\t}\n#endif\n"
               f"\n\t/* Samsung 4.9 BSP Fix ({SAMSUNG_FIX_MARKER}) */\n"
-              "\tif (option == 0x53564m4d) {\n"
+              "\tif (option == 0x53564D44) {\n"
               "\t\treturn -EINVAL;\n"
               "\t}\n"
           )
