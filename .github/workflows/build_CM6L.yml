@@ -400,23 +400,24 @@ jobs:
         working-directory: kernel
         run: |
           set -Eeuo pipefail
-          
-          # Force SUSFS to use the proper, flattened namespace
+
+          # Force SUSFS to use flattened KernelSU namespace
           sed -i \
             's|#include "../../drivers/kernelsu/core_hook.h"|#include <kernelsu/core_hook.h>|g' \
             include/linux/sus_su.h
-            
+
           sed -i \
             's|#include "../../drivers/kernelsu/kernel_compat.h"|#include <kernelsu/kernel_compat.h>|g' \
             include/linux/susfs.h || true
-            
-          # Update Makefile to look in the standard include directory
+
+          # Ensure compiler can see exported KernelSU headers
           sed -i '/ccflags-.*CONFIG_KSU_SUSFS/d' fs/Makefile
+
           echo 'ccflags-$(CONFIG_KSU_SUSFS) += \
           -Isecurity/selinux \
           -Isecurity/selinux/include \
           -Iinclude' >> fs/Makefile
-            
+
           echo "OK: SUSFS includes normalized to <kernelsu/...>"
 
       # ── 9c. Export REAL KernelSU public headers ─────────────────────────────
