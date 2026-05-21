@@ -43,9 +43,17 @@ jobs:
         run: |
           set -Eeuo pipefail
       
-          FILE="kernel/drivers/cpufreq/cpufreq_schedutil.c"
+          FILE="drivers/cpufreq/cpufreq_schedutil.c"
       
-          test -f "$FILE"
+          if [[ ! -f "$FILE" ]]; then
+            echo "ERROR: $FILE not found"
+            echo "Current directory:"
+            pwd
+            echo ""
+            echo "drivers/cpufreq contents:"
+            ls -la drivers/cpufreq || true
+            exit 1
+          fi
       
           cp "$FILE" "${FILE}.bak"
       
@@ -53,16 +61,16 @@ jobs:
           from pathlib import Path
           import re
       
-          path = Path("kernel/drivers/cpufreq/cpufreq_schedutil.c")
-          text = path.read_text()
+          path = Path("drivers/cpufreq/cpufreq_schedutil.c")
       
+          text = path.read_text()
           original = text
       
           #
-          # Fix schedutil rate limits
+          # schedutil rate limits
           #
       
-          patterns = [
+          replacements = [
               (
                   r'tunables->up_rate_limit_us\s*=\s*0\s*;',
                   'tunables->up_rate_limit_us = 1500;'
@@ -81,11 +89,11 @@ jobs:
               ),
           ]
       
-          for pattern, replacement in patterns:
+          for pattern, replacement in replacements:
               text = re.sub(pattern, replacement, text)
       
           #
-          # Samsung clamp_val() BSP variant
+          # Samsung BSP clamp_val variant
           #
       
           text = re.sub(
@@ -105,7 +113,7 @@ jobs:
           )
       
           #
-          # sugov thread scheduler downgrade
+          # sugov thread scheduling
           #
       
           text = re.sub(
@@ -121,17 +129,19 @@ jobs:
           )
       
           if text == original:
-              raise SystemExit("ERROR: no schedutil patterns matched")
+              raise SystemExit("ERROR: no patterns matched in cpufreq_schedutil.c")
       
           path.write_text(text)
       
           print("schedutil tuning applied successfully")
           PYEOF
       
-          grep -n "up_rate_limit_us" "$FILE" | head
-          grep -n "down_rate_limit_us" "$FILE" | head
-          grep -n "sched_priority" "$FILE" | head
-          grep -n "SCHED_RR" "$FILE" | head
+          echo "==== VERIFY ===="
+      
+          grep -n "1500" "$FILE" || true
+          grep -n "16000" "$FILE" || true
+          grep -n "SCHED_RR" "$FILE" || true
+          grep -n "sched_priority = 1" "$FILE" || true
 
       # =========================================================
       # sugov thread priority
