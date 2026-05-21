@@ -621,28 +621,62 @@ jobs:
           set -Eeuo pipefail
           python3 - << 'PYEOF'
           from pathlib import Path
+
           target = Path("fs/sus_su.c")
+
           if not target.exists():
-              print("INFO: fs/sus_su.c not found — skipping"); exit(0)
+              print("INFO: fs/sus_su.c not found — skipping")
+              raise SystemExit(0)
+
           content = target.read_text()
+
           if "WEAK_SYMBOL_FALLBACK" in content:
-              print("OK: weak fallbacks already present (idempotent)"); exit(0)
+              print("OK: weak fallbacks already present (idempotent)")
+              raise SystemExit(0)
+
           fallback = (
               "\n/* === WEAK_SYMBOL_FALLBACK === */\n"
-              "#include <linux/cred.h>\n#include <linux/uidgid.h>\n"
+              "#include <linux/cred.h>\n"
+              "#include <linux/uidgid.h>\n"
               "#include <linux/capability.h>\n"
+              "\n"
               "#ifndef cap_set_full\n"
-              "#define cap_set_full(c) do { (c) = CAP_FULL_SET; } while(0)\n#endif\n"
-              "__attribute__((weak)) bool susfs_is_allow_su(void) { return false; }\n"
+              "#define cap_set_full(c) do { (c) = CAP_FULL_SET; } while (0)\n"
+              "#endif\n"
+              "\n"
+              "__attribute__((weak)) bool susfs_is_allow_su(void) {\n"
+              "    return false;\n"
+              "}\n"
+              "\n"
               "__attribute__((weak)) void ksu_escape_to_root(void) {\n"
-              "    struct cred *nc = prepare_creds(); if (!nc) return;\n"
-              "    nc->uid = nc->gid = nc->suid = nc->sgid =\n"
-              "    nc->euid = nc->egid = nc->fsuid = nc->fsgid = GLOBAL_ROOT_UID;\n"
-              "    cap_set_full(nc->cap_inheritable); cap_set_full(nc->cap_permitted);\n"
-              "    cap_set_full(nc->cap_effective);   cap_set_full(nc->cap_bset);\n"
-              "    commit_creds(nc);\n}\n/* ========================== */\n"
+              "    struct cred *nc = prepare_creds();\n"
+              "\n"
+              "    if (!nc)\n"
+              "        return;\n"
+              "\n"
+              "    nc->uid   = GLOBAL_ROOT_UID;\n"
+              "    nc->euid  = GLOBAL_ROOT_UID;\n"
+              "    nc->suid  = GLOBAL_ROOT_UID;\n"
+              "    nc->fsuid = GLOBAL_ROOT_UID;\n"
+              "\n"
+              "    nc->gid   = GLOBAL_ROOT_GID;\n"
+              "    nc->egid  = GLOBAL_ROOT_GID;\n"
+              "    nc->sgid  = GLOBAL_ROOT_GID;\n"
+              "    nc->fsgid = GLOBAL_ROOT_GID;\n"
+              "\n"
+              "    cap_set_full(nc->cap_inheritable);\n"
+              "    cap_set_full(nc->cap_permitted);\n"
+              "    cap_set_full(nc->cap_effective);\n"
+              "    cap_set_full(nc->cap_bset);\n"
+              "\n"
+              "    commit_creds(nc);\n"
+              "}\n"
+              "\n"
+              "/* ========================== */\n"
           )
+
           target.write_text(content + fallback)
+
           print("OK: weak symbol fallbacks injected into fs/sus_su.c")
           PYEOF
 
