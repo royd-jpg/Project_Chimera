@@ -608,12 +608,13 @@ jobs:
           set_cfg CONFIG_CRYPTO_LZ4HC  y
           # Prevent git-dirty suffix in kernel version string
           unset_cfg CONFIG_LOCALVERSION_AUTO
-
-          echo "OK: defconfig tuning complete" | tee "$LOG_DIR/defconfig-tuning.log"
+          
+          echo "OK: defconfig tuning complete" | tee "../$LOG_DIR/defconfig-tuning.log"
+          
           grep -E \
             "^(CONFIG_KSU|CONFIG_PREEMPT|CONFIG_HZ|CONFIG_TCP_CONG|CONFIG_DEFAULT_TCP|CONFIG_ZRAM|CONFIG_CRYPTO_LZ4|CONFIG_LOCALVERSION|CONFIG_SECURITY_SELINUX)" \
-            "$DEFCONFIG" | tee -a "$LOG_DIR/defconfig-tuning.log"
-
+            "$DEFCONFIG" | tee -a "../$LOG_DIR/defconfig-tuning.log"
+            
       # ── 14. Branding ─────────────────────────────────────────────────────────
       # setlocalversion is authoritative in the Samsung 4.9 BSP Makefile.
       # uname: Linux version 4.9.x-Chimera_Mk6Light (X@AegisDevLabs)
