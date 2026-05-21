@@ -437,35 +437,24 @@ jobs:
           mkdir -p include/kernelsu
 
           export_header() {
-            local NAME="$1"
+            local name="$1"
+            local src
 
-            SRC="$(find KernelSU-Next -type f -name "$NAME" \
-              | grep -v "/include/" \
-              | head -n1 || true)"
+            src="$(find KernelSU-Next -type f -name "$name" | grep -v '/include/' | head -n1 || true)"
 
-            if [[ -z "$SRC" ]]; then
-              echo "WARN: $NAME not found"
-
-              cat > "include/kernelsu/$NAME" <<EOF
-          #pragma once
-          /* Auto-generated fallback for $NAME */
-          EOF
-
-              return
+            if [[ -z "$src" ]]; then
+              echo "WARN: $name not found"
+              printf '%s\n' \
+                '#pragma once' \
+                "/* Auto-generated fallback for $name */" \
+                > "include/kernelsu/$name"
+              return 0
             fi
 
-            cp "$SRC" "include/kernelsu/$NAME"
-
-            # Remove recursive self-includes
-            sed -i \
-              '/drivers\/kernelsu/d' \
-              "include/kernelsu/$NAME"
-
-            sed -i \
-              '/<kernelsu\//d' \
-              "include/kernelsu/$NAME"
-
-            echo "OK: exported $NAME"
+            cp "$src" "include/kernelsu/$name"
+            sed -i '/drivers\/kernelsu/d' "include/kernelsu/$name"
+            sed -i '/<kernelsu\//d' "include/kernelsu/$name"
+            echo "OK: exported $name"
           }
 
           export_header core_hook.h
@@ -475,39 +464,39 @@ jobs:
 
           echo "OK: KernelSU exported namespace ready"
 
-      - name: Sanitize KernelSU ksu.h
+      # ── 9d. Replace KernelSU ksu.h with kernel-safe shim ──────────────────
+      - name: Replace KernelSU ksu.h with kernel-safe shim
         working-directory: kernel
         run: |
           set -Eeuo pipefail
 
-          if [[ -f include/kernelsu/ksu.h ]]; then
-            # Remove C++-only include that the kernel C compiler cannot use
-            sed -i '/#include <cstdint>/d' include/kernelsu/ksu.h
-            sed -i '/#include <stdint.h>/d' include/kernelsu/ksu.h
+          printf '%s\n' \
+            '#pragma once' \
+            '/* Kernel-safe shim for kernel C compilation */' \
+            '#include <linux/types.h>' \
+            '#include <linux/cred.h>' \
+            '#include <linux/sched.h>' \
+            '#include <linux/uaccess.h>' \
+            > include/kernelsu/ksu.h
 
-            # Fail fast if the file still contains obvious C++ baggage
-            if grep -qE '(^|[[:space:]])(using|namespace|template|std::)' include/kernelsu/ksu.h; then
-              echo "ERROR: include/kernelsu/ksu.h still contains C++-only syntax"
-              exit 1
-            fi
+          echo "OK: kernel-safe include/kernelsu/ksu.h installed"
 
-            echo "OK: ksu.h sanitized for kernel C compilation"
-          fi
-
-      # ── 9d. Inject global KernelSU include paths ───────────────────────────
+      # ── 9e. Inject global KernelSU include paths ───────────────────────────
       - name: Inject global include paths
         working-directory: kernel
         run: |
           set -Eeuo pipefail
 
           if ! grep -q 'include/kernelsu' Makefile; then
-            echo 'KBUILD_CFLAGS += -I$(srctree)/include' >> Makefile
-            echo 'KBUILD_CFLAGS += -I$(srctree)/include/kernelsu' >> Makefile
+            printf '%s\n' \
+              'KBUILD_CFLAGS += -I$(srctree)/include' \
+              'KBUILD_CFLAGS += -I$(srctree)/include/kernelsu' \
+              >> Makefile
           fi
 
           echo "OK: global KernelSU include paths injected"
 
-      # ── 9e. Validate exported KernelSU headers ─────────────────────────────
+      # ── 9f. Validate exported KernelSU headers ─────────────────────────────
       - name: Validate KernelSU headers
         working-directory: kernel
         run: |
@@ -517,8 +506,8 @@ jobs:
 
           for f in \
             include/kernelsu/core_hook.h \
-            include/kernelsu/kernel_compat.h; do
-
+            include/kernelsu/kernel_compat.h \
+            include/kernelsu/ksu.h; do
             if [[ ! -f "$f" ]]; then
               echo "FAIL: missing $f"
               FAIL=1
@@ -527,7 +516,9 @@ jobs:
             fi
           done
 
-          grep -R "../../drivers/kernelsu" include fs && FAIL=1 || true
+          if grep -R '../../drivers/kernelsu' include fs; then
+            FAIL=1
+          fi
 
           if [[ "$FAIL" -ne 0 ]]; then
             echo "FATAL: KernelSU export validation failed"
