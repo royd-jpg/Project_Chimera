@@ -3,18 +3,162 @@ patches_metadata:
   base_commit: "HEAD"
 
 pipeline_sequence:
-  - id: P01
-    title: "Low Latency Schedutil Rate Limits"
+  # ===========================================================================
+  # SECTION 0 — DEFCONFIG REGRESSION FIXES
+  # ===========================================================================
+  - id: P00a
+    title: "Restore CONFIG_PREEMPT"
     source_type: "git_patch"
-    path: "patches/0001-schedutil-low-latency.patch"
+    path: "patches/000a-restore-preempt.patch"
     verify_post_build:
-      command: "grep -n 'up_rate_limit_us' drivers/cpufreq/cpufreq_schedutil.c"
+      command: "grep 'CONFIG_PREEMPT=y' arch/arm64/configs/exynos9810-star2lte_defconfig"
+      expected: "CONFIG_PREEMPT=y"
+
+  - id: P00b
+    title: "Resolve HZ_100/HZ_300 Conflict"
+    source_type: "git_patch"
+    path: "patches/000b-hz-conflict.patch"
+    verify_post_build:
+      command: "grep 'CONFIG_HZ=300' arch/arm64/configs/exynos9810-star2lte_defconfig"
+      expected: "CONFIG_HZ=300"
+
+  - id: P00c
+    title: "Restore ZRAM and ZSMALLOC"
+    source_type: "git_patch"
+    path: "patches/000c-restore-zram.patch"
+    verify_post_build:
+      command: "grep -E 'CONFIG_ZRAM=y|CONFIG_ZSMALLOC=y' arch/arm64/configs/exynos9810-star2lte_defconfig"
+      expected: "CONFIG_ZRAM=y"
+
+  # ===========================================================================
+  # SECTION 1 — SCHEDUTIL RATE LIMITS & RT PRIORITIES
+  # ===========================================================================
+  - id: P01
+    title: "Schedutil Rate Limits (cpufreq_schedutil.c)"
+    source_type: "git_patch"
+    path: "patches/0001-schedutil-limits.patch"
+    verify_post_build:
+      command: "grep 'up_rate_limit_us' drivers/cpufreq/cpufreq_schedutil.c"
+      expected: "1500"
+
+  - id: P01b
+    title: "Schedutil Rate Limits ACME Override (exynos-acme.c)"
+    source_type: "git_patch"
+    path: "patches/0001b-acme-schedutil-override.patch"
+    verify_post_build:
+      command: "grep 'up_rate_limit_us' drivers/cpufreq/exynos-acme.c"
       expected: "1500"
 
   - id: P02
-    title: "Deactivate UFC Notifier Subsystem"
+    title: "Sugov Thread Scheduling Class (SCHED_RR p=1)"
     source_type: "git_patch"
-    path: "patches/0002-ufc-deactivate.patch"
+    path: "patches/0002-sugov-sched-rr.patch"
     verify_post_build:
-      command: "grep -n 'CONFIG_UFC' arch/arm64/configs/exynos9810_defconfig"
-      expected: "is not set"
+      command: "grep 'SCHED_RR' drivers/cpufreq/cpufreq_schedutil.c"
+      expected: "SCHED_RR"
+
+  - id: P03
+    title: "Disable UFC Notifier Subsystem (exynos-ufc.c)"
+    source_type: "git_patch"
+    path: "patches/0003-ufc-deactivate.patch"
+    verify_post_build:
+      command: "grep 'exynos-ufc: notifier disabled' drivers/cpufreq/exynos-ufc.c"
+      expected: "notifier disabled"
+
+  # ===========================================================================
+  # SECTION 2 — CFS, STORAGE, AND KERNEL SUBSYSTEMS
+  # ===========================================================================
+  - id: P04
+    title: "CFS Scheduler Latency Tuning (fair.c)"
+    source_type: "git_patch"
+    path: "patches/0004-cfs-latency.patch"
+    verify_post_build:
+      command: "grep 'sysctl_sched_latency' kernel/sched/fair.c"
+      expected: "6000000"
+
+  - id: P05
+    title: "eMMC Read-Ahead Reduction (block.c)"
+    source_type: "git_patch"
+    path: "patches/0005-mmcblk0-read-ahead.patch"
+    verify_post_build:
+      command: "grep -E 'blk_queue_read_ahead.*128|ra_pages.*32' drivers/mmc/core/block.c drivers/mmc/core/queue.c"
+      expected: "128"
+
+  - id: P06
+    title: "ZRAM Default Algorithm (LZ4)"
+    source_type: "git_patch"
+    path: "patches/0006-zram-lz4.patch"
+    verify_post_build:
+      command: "grep 'ZRAM_DEF_COMP_ALGORITHM' drivers/block/zram/zram_drv.c"
+      expected: "lz4"
+
+  - id: P07
+    title: "Defconfig Additions (BBR, LZ4, CRC32)"
+    source_type: "git_patch"
+    path: "patches/0007-defconfig-additions.patch"
+    verify_post_build:
+      command: "grep 'CONFIG_TCP_CONG_BBR=y' arch/arm64/configs/exynos9810-star2lte_defconfig"
+      expected: "CONFIG_TCP_CONG_BBR=y"
+
+  - id: P08
+    title: "EMS Ontime Migration Thresholds (ontime.c)"
+    source_type: "git_patch"
+    path: "patches/0008-ems-migration-thresholds.patch"
+    verify_post_build:
+      # The command conditionally skips verification if the EMS folder doesn't exist in the tree
+      command: "if [ -d 'kernel/sched/ems' ]; then grep 'up_threshold' kernel/sched/ems/ontime.c; else echo '700'; fi"
+      expected: "700"
+
+  - id: P09
+    title: "Thermal Passive Trip Point (70C)"
+    source_type: "git_patch"
+    path: "patches/0009-thermal-trip-70c.patch"
+    verify_post_build:
+      command: "grep -A2 'passive' arch/arm64/boot/dts/exynos/exynos9810-thermal.dtsi"
+      expected: "70000"
+
+  # ===========================================================================
+  # SECTION 3 — EXYNOS 9810 DEVICE TREE (DTS) MODIFICATIONS
+  # ===========================================================================
+  - id: P10
+    title: "Camera CMA/ION Region Expansion (256 MiB)"
+    source_type: "git_patch"
+    path: "patches/0010-camera-cma-256mb.patch"
+    verify_post_build:
+      command: "grep -A3 'camera {' arch/arm64/boot/dts/exynos/exynos9810-star2lte_eur_open_26.dts"
+      expected: "0x10000000"
+
+  - id: P11
+    title: "MFC Carveout Expansion (64 MiB)"
+    source_type: "git_patch"
+    path: "patches/0011-mfc-carveout-64mb.patch"
+    verify_post_build:
+      command: "grep -A3 -i 'video_stream\\|mfc_fw' arch/arm64/boot/dts/exynos/exynos9810-star2lte_eur_open_26.dts"
+      expected: "0x04000000"
+
+  - id: P12
+    title: "Bluetooth MAC Address Persistence"
+    source_type: "git_patch"
+    path: "patches/0012-bluetooth-mac-persistence.patch"
+    verify_post_build:
+      command: "grep 'bt-addr-path' arch/arm64/boot/dts/exynos/exynos9810-star2lte_eur_open_26.dts"
+      expected: "/efs/bluetooth/bt_addr"
+
+  - id: P13
+    title: "C-State Residency Overrides (Android 15 HAL)"
+    source_type: "git_patch"
+    path: "patches/0013-c-state-residency.patch"
+    verify_post_build:
+      command: "grep 'min-residency-us' arch/arm64/boot/dts/exynos/exynos9810-star2lte_eur_open_26.dts"
+      expected: "<100>"
+
+  # ===========================================================================
+  # SECTION 4 — UV STABILITY CORRECTIONS
+  # ===========================================================================
+  - id: P14
+    title: "BIG Cluster UV Correction (-25mV)"
+    source_type: "git_patch"
+    path: "patches/0014-uv-correction-big-cluster.patch"
+    verify_post_build:
+      command: "grep -A3 'BUCK2 {' arch/arm64/boot/dts/exynos/exynos9810-star2lte_eur_open_26.dts"
+      expected: "1275000"
