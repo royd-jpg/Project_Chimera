@@ -236,6 +236,44 @@ jobs:
               print("OK: syscall_fn_t already present")
           PYEOF
 
+      - name: Create core_hook.h shim
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+
+          python3 - << 'PYEOF'
+          from pathlib import Path
+
+          base = Path("drivers/kernelsu")
+          shim = base / "core_hook.h"
+
+          candidates = [
+              base / "core/core_hook.h",
+              base / "hook/core_hook.h",
+              base / "include/core_hook.h",
+              base / "ksu/core_hook.h",
+          ]
+
+          target = next((p for p in candidates if p.exists()), None)
+
+          if target is None:
+              hits = sorted(base.rglob("core_hook.h")) if base.exists() else []
+              target = hits[0] if hits else None
+
+          if target is None:
+              print("WARN: core_hook.h not found anywhere in KernelSU-Next")
+              raise SystemExit(0)
+
+          rel = target.relative_to(base)
+
+          shim.write_text(
+              "/* Chimera Mk6 Light compatibility shim */\n"
+              f'#include "{rel.as_posix()}"\n'
+          )
+
+          print(f"OK: core_hook.h shim created: drivers/kernelsu/core_hook.h -> {rel}")
+          PYEOF
+
       # ── 6. Preflight: detect pre-integrated KSU/SUSFS ───────────────────────
       - name: Preflight tree state
         working-directory: kernel
