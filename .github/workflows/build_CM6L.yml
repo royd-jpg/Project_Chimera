@@ -403,6 +403,43 @@ jobs:
           [[ "$FAIL" -eq 0 ]] \
             || { echo "ERROR: missing SUSFS files — aborting before build"; exit 1; }
 
+      - name: Patch sus_su.h for KernelSU-Next compatibility
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+
+          python3 - << 'PYEOF'
+          from pathlib import Path
+          import re
+
+          path = Path("include/linux/sus_su.h")
+
+          if not path.exists():
+              print("INFO: sus_su.h missing")
+              raise SystemExit(0)
+
+          txt = path.read_text()
+
+          original = '#include "../../drivers/kernelsu/core_hook.h"'
+
+          if original not in txt:
+              print("INFO: core_hook include already patched")
+              raise SystemExit(0)
+
+          replacement = r'''
+          /* Chimera Mk6 Light compatibility patch */
+          #ifdef CONFIG_KSU
+          #include "../../drivers/kernelsu/kernel_compat.h"
+          #endif
+          '''
+          
+                    txt = txt.replace(original, replacement)
+          
+                    path.write_text(txt)
+          
+                    print("OK: sus_su.h patched for modern KernelSU-Next")
+                    PYEOF
+
       # ── 10. KernelSU-Next kernel_compat.h shim ───────────────────────────────
       - name: Create kernel_compat.h shim
         working-directory: kernel
