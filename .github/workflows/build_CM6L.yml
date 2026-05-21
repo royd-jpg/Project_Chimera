@@ -28,6 +28,36 @@ on:
         required: false
         type: boolean
         default: false
+      ksu_repo:
+        description: "KernelSU git URL (https only)"
+        required: false
+        type: string
+        default: "https://github.com/gavdoc38/KernelSU-Next.git"
+      ksu_ref:
+        description: "KernelSU branch/tag/ref (used if ksu_commit is empty)"
+        required: false
+        type: string
+        default: "main"
+      ksu_commit:
+        description: "KernelSU exact commit SHA to pin (recommended)"
+        required: false
+        type: string
+        default: ""
+      susfs_repo:
+        description: "SUSFS git URL (https only)"
+        required: false
+        type: string
+        default: "https://gitlab.com/simonpunk/susfs4ksu.git"
+      susfs_ref:
+        description: "SUSFS branch/tag/ref (used if susfs_commit is empty)"
+        required: false
+        type: string
+        default: "kernel-4.9"
+      susfs_commit:
+        description: "SUSFS exact commit SHA to pin (recommended)"
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -114,27 +144,45 @@ jobs:
           git -C "$KERNEL_DIR" log --oneline -5 | tee "$LOG_DIR/kernel-revision.log"
           echo "OK: kernel tree cloned (branch: $KERNEL_BRANCH)"
 
-      # ── 4. Clone SUSFS and verify version ────────────────────────────────────
-      - name: Clone SUSFS and verify version
+      # ── 4. Clone SUSFS (repo-agnostic + pinned) and verify version ───────────
+      - name: Clone SUSFS (hardened/pinned)
         run: |
           set -Eeuo pipefail
-          git clone --depth=1 -b "$SUSFS_BRANCH" "$SUSFS_REPO" susfs4ksu
-          git -C susfs4ksu rev-parse HEAD | tee "$LOG_DIR/susfs-revision.log"
+          SUSFS_URL="${{ inputs.susfs_repo }}"
+          SUSFS_REF="${{ inputs.susfs_ref }}"
+          SUSFS_COMMIT="${{ inputs.susfs_commit }}"
 
-          for f in \
-            "kernel_patches/50_add_susfs_in_kernel-4.9.patch" \
-            "kernel_patches/fs/susfs.c" \
-            "kernel_patches/fs/sus_su.c" \
-            "kernel_patches/include/linux/susfs.h" \
-            "kernel_patches/include/linux/susfs_def.h" \
-            "kernel_patches/include/linux/sus_su.h"; do
-            test -f "susfs4ksu/$f" \
-              || { echo "ERROR: susfs4ksu/$f missing — aborting"; exit 1; }
+          [[ "$SUSFS_URL" =~ ^https:// ]] || { echo "ERROR: SUSFS URL must be https://"; exit 1; }
+          [[ "$SUSFS_URL" =~ [[:space:]] ]] && { echo "ERROR: SUSFS URL contains whitespace"; exit 1; }
+          [[ -n "$SUSFS_REF" ]] || SUSFS_REF="$SUSFS_BRANCH"
+
+          if [[ -n "$SUSFS_COMMIT" && ! "$SUSFS_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "ERROR: susfs_commit must be a full 40-char SHA"; exit 1
+          fi
+
+          git clone --filter=blob:none --no-tags "$SUSFS_URL" susfs4ksu
+          if [[ -n "$SUSFS_COMMIT" ]]; then
+            git -C susfs4ksu fetch --depth=1 origin "$SUSFS_COMMIT"
+            git -C susfs4ksu checkout --detach "$SUSFS_COMMIT"
+          else
+            git -C susfs4ksu fetch --depth=1 origin "$SUSFS_REF"
+            git -C susfs4ksu checkout --detach FETCH_HEAD
+          fi
+
+          RESOLVED_SUSFS_COMMIT="$(git -C susfs4ksu rev-parse HEAD)"
+          {
+            echo "SUSFS_URL=$SUSFS_URL"
+            echo "SUSFS_REF=${SUSFS_REF:-none}"
+            echo "SUSFS_COMMIT_INPUT=${SUSFS_COMMIT:-none}"
+            echo "SUSFS_COMMIT_RESOLVED=$RESOLVED_SUSFS_COMMIT"
+          } | tee "$LOG_DIR/susfs-revision.log"
+
+          for f in             "kernel_patches/50_add_susfs_in_kernel-4.9.patch"             "kernel_patches/fs/susfs.c"             "kernel_patches/fs/sus_su.c"             "kernel_patches/include/linux/susfs.h"             "kernel_patches/include/linux/susfs_def.h"             "kernel_patches/include/linux/sus_su.h"; do
+            test -f "susfs4ksu/$f"               || { echo "ERROR: susfs4ksu/$f missing — aborting"; exit 1; }
           done
           echo "OK: all required SUSFS patch files present"
 
-          ACTUAL_VER="$(grep -oP 'SUSFS_VERSION\s+"\K[^"]+' \
-            susfs4ksu/kernel_patches/include/linux/susfs.h 2>/dev/null || echo 'unknown')"
+          ACTUAL_VER="$(grep -oP 'SUSFS_VERSION\s+"\K[^"]+'             susfs4ksu/kernel_patches/include/linux/susfs.h 2>/dev/null || echo 'unknown')"
           echo "SUSFS_ACTUAL_VERSION=$ACTUAL_VER" | tee -a "$LOG_DIR/susfs-revision.log"
           if [[ "$ACTUAL_VER" == "$SUSFS_TARGET_VERSION" ]]; then
             echo "OK: SUSFS version confirmed: $ACTUAL_VER"
@@ -142,43 +190,48 @@ jobs:
             echo "WARN: SUSFS version is '$ACTUAL_VER', expected '$SUSFS_TARGET_VERSION'"
           fi
 
-      # ── 5. Set up KernelSU-Next ──────────────────────────────────────────────
-      - name: Set up KernelSU-Next (pinned submodule)
+      # ── 5. Set up KernelSU-Next (repo-agnostic + pinned) ───────────────────
+      - name: Set up KernelSU-Next (hardened/pinned)
         working-directory: kernel
         run: |
           set -Eeuo pipefail
           git rm -r --cached KernelSU-Next 2>/dev/null || true
           rm -rf .git/modules/KernelSU-Next KernelSU-Next drivers/kernelsu
 
-          KSU_URL="$(git config --file .gitmodules \
-            submodule.KernelSU-Next.url 2>/dev/null || true)"
-          KSU_COMMIT="$(git ls-tree HEAD KernelSU-Next 2>/dev/null \
-            | awk '{print $3}' || true)"
+          KSU_URL="${{ inputs.ksu_repo }}"
+          KSU_REF="${{ inputs.ksu_ref }}"
+          KSU_COMMIT="${{ inputs.ksu_commit }}"
 
-          {
-            echo "KSU_URL=${KSU_URL:-not found in .gitmodules}"
-            echo "KSU_COMMIT=${KSU_COMMIT:-not found}"
-          } | tee "../$LOG_DIR/ksu-submodule.log"
+          [[ "$KSU_URL" =~ ^https:// ]] || { echo "ERROR: KSU URL must be https://"; exit 1; }
+          [[ "$KSU_URL" =~ [[:space:]] ]] && { echo "ERROR: KSU URL contains whitespace"; exit 1; }
+          [[ -n "$KSU_REF" ]] || KSU_REF="main"
 
-          if [[ -n "$KSU_URL" && -n "$KSU_COMMIT" ]]; then
-            git clone "$KSU_URL" KernelSU-Next
-            git -C KernelSU-Next checkout "$KSU_COMMIT"
-          elif [[ -n "$KSU_URL" ]]; then
-            git clone --depth=1 "$KSU_URL" KernelSU-Next
-          else
-            echo "WARN: no submodule URL found — falling back to gavdoc38 fork"
-            git clone --depth=1 \
-              https://github.com/gavdoc38/KernelSU-Next.git KernelSU-Next
+          if [[ -n "$KSU_COMMIT" && ! "$KSU_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "ERROR: ksu_commit must be a full 40-char SHA"; exit 1
           fi
 
-          test -f KernelSU-Next/kernel/Kconfig \
-            || { echo "ERROR: KernelSU-Next/kernel/Kconfig missing"; exit 1; }
-          git -C KernelSU-Next log --oneline -1 \
-            | tee -a "../$LOG_DIR/ksu-submodule.log"
+          git clone --filter=blob:none --no-tags "$KSU_URL" KernelSU-Next
+          if [[ -n "$KSU_COMMIT" ]]; then
+            git -C KernelSU-Next fetch --depth=1 origin "$KSU_COMMIT"
+            git -C KernelSU-Next checkout --detach "$KSU_COMMIT"
+          else
+            git -C KernelSU-Next fetch --depth=1 origin "$KSU_REF"
+            git -C KernelSU-Next checkout --detach FETCH_HEAD
+          fi
+
+          RESOLVED_KSU_COMMIT="$(git -C KernelSU-Next rev-parse HEAD)"
+          {
+            echo "KSU_URL=$KSU_URL"
+            echo "KSU_REF=${KSU_REF:-none}"
+            echo "KSU_COMMIT_INPUT=${KSU_COMMIT:-none}"
+            echo "KSU_COMMIT_RESOLVED=$RESOLVED_KSU_COMMIT"
+          } | tee "../$LOG_DIR/ksu-submodule.log"
+
+          test -f KernelSU-Next/kernel/Kconfig             || { echo "ERROR: KernelSU-Next/kernel/Kconfig missing"; exit 1; }
+          git -C KernelSU-Next log --oneline -1             | tee -a "../$LOG_DIR/ksu-submodule.log"
 
           ln -s ../KernelSU-Next/kernel drivers/kernelsu
-          test -f drivers/kernelsu/Kconfig \
-            || { echo "ERROR: drivers/kernelsu/Kconfig symlink broken"; exit 1; }
+          test -f drivers/kernelsu/Kconfig             || { echo "ERROR: drivers/kernelsu/Kconfig symlink broken"; exit 1; }
           echo "OK: KernelSU-Next wired at drivers/kernelsu"
 
       # ── 5b. Fix syscall_fn_t typedef (Samsung 4.9 BSP) ──────────────────────
