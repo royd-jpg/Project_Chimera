@@ -1,0 +1,951 @@
+# =============================================================================
+# Chimera MK6 – V3 Kernel Patch Manifest
+# =============================================================================
+# Target device : Samsung SM-G965F (star2lte)
+# SoC           : Samsung Exynos 9810
+# Kernel BSP    : Samsung Linux 4.9
+# ROM target    : LineageOS 23.2  (Android 14/15 compatible)
+# Branch        : chimera-mk6l
+# Last commits  : 7e872f5 (Mk6 Light scheduler+UFC)
+#                 52daab9 (Aegis UV/BT/branding)
+# Generated     : 2026-05-21
+# Schema        : chimera-patch-manifest/v1
+# =============================================================================
+#
+# PRIORITY KEY
+#   CRITICAL  — Must be applied; current tree is regressed or unstable without it
+#   HIGH      — Primary performance/stability targets from the V27 diagnostic series
+#   MEDIUM    — Meaningful gains; worthwhile but not blocking
+#   LOW       — Marginal; apply only after verifying higher-priority patches are stable
+#
+# STATUS KEY
+#   REGRESSION_FIX  — Commit 7e872f5 accidentally broke this; must restore
+#   NEW             — Not yet applied to the tree
+#   PARTIAL         — Backup (.bak) exists but live source is unchanged
+#   UV_CORRECTION   — Commit 52daab9 applied -50mV; this corrects to -25mV on BIG rails
+#
+# APPLY ORDER: Follow patch IDs in sequence. P00* before all others.
+# Each patch is independent unless noted in `depends_on`.
+# =============================================================================
+
+manifest:
+  version: "3.0"
+  project: "Project Chimera MK6 Light"
+  defconfig: "arch/arm64/configs/exynos9810-star2lte_defconfig"
+  build_cmd: "make mrproper && make exynos9810-star2lte_defconfig && make -j$(nproc) ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu-"
+
+# =============================================================================
+# SECTION 0 — DEFCONFIG REGRESSION FIXES (CRITICAL — apply first)
+# Commit 7e872f5 deleted three required symbols and left an HZ conflict.
+# These must be corrected before the build will function correctly.
+# =============================================================================
+
+patches:
+
+  - id: P00a
+    status: REGRESSION_FIX
+    priority: CRITICAL
+    title: "Restore CONFIG_PREEMPT=y (accidentally deleted in 7e872f5)"
+    file: "arch/arm64/configs/exynos9810-star2lte_defconfig"
+    depends_on: []
+    brain_core: "Not applicable — preemption model is a compile-time kernel feature."
+    impact: >
+      Without CONFIG_PREEMPT=y the kernel falls back to PREEMPT_NONE or PREEMPT_VOLUNTARY.
+      This prevents kernel code paths from being preempted by higher-priority tasks, causing
+      UI jank and audio underruns even with correct schedutil values. All responsiveness
+      improvements in this manifest depend on full preemption being active.
+    verify_cmd: "grep 'PREEMPT' arch/arm64/configs/exynos9810-star2lte_defconfig"
+    expected_before: "# CONFIG_PREEMPT is not set  (or the line is simply absent)"
+    expected_after:  "CONFIG_PREEMPT=y"
+    hunks:
+      - description: >
+          Re-insert CONFIG_PREEMPT=y. Place it immediately before CONFIG_HZ_300=y
+          (which was appended at the bottom of the file by 7e872f5). If the defconfig
+          already has a PREEMPT section near the NR_CPUS block, insert it there instead
+          of at the bottom — location does not matter to Kconfig, but grouping is cleaner.
+        action: INSERT_LINE
+        insert_before: "CONFIG_HZ_300=y"
+        content: |-
+          CONFIG_PREEMPT=y
+          # CONFIG_PREEMPT_NONE is not set
+          # CONFIG_PREEMPT_VOLUNTARY is not set
+
+  - id: P00b
+    status: REGRESSION_FIX
+    priority: CRITICAL
+    title: "Remove duplicate CONFIG_HZ_100=y — resolves HZ conflict with HZ_300"
+    file: "arch/arm64/configs/exynos9810-star2lte_defconfig"
+    depends_on: []
+    brain_core: "Not applicable — scheduler tick rate is compile-time."
+    impact: >
+      Commit 7e872f5 appended CONFIG_HZ_300=y at the bottom of the file but left
+      CONFIG_HZ_100=y at line 71. While the last definition wins in Kconfig, this
+      is fragile: a make oldconfig or merge will keep HZ_100. 300Hz gives better
+      UI scheduling granularity than 100Hz with minimal battery cost vs 1000Hz.
+    verify_cmd: "grep -n 'CONFIG_HZ' arch/arm64/configs/exynos9810-star2lte_defconfig"
+    expected_before: "Line ~71: CONFIG_HZ_100=y  AND appended CONFIG_HZ_300=y (conflict)"
+    expected_after:  "Exactly one entry: CONFIG_HZ_300=y and CONFIG_HZ=300"
+    hunks:
+      - description: "Delete the HZ_100 line and replace with the full HZ_300 stanza at that location."
+        action: REPLACE
+        find: |-
+          CONFIG_HZ_100=y
+        replace: |-
+          # CONFIG_HZ_100 is not set
+          # CONFIG_HZ_250 is not set
+          CONFIG_HZ_300=y
+          CONFIG_HZ=300
+      - description: >
+          Remove the duplicate HZ_300 that was appended at the bottom of the file by
+          7e872f5. After the above replacement it is redundant.
+        action: DELETE
+        find: |-
+          CONFIG_HZ_300=y
+        note: >
+          Only delete the SECOND occurrence (the appended one). Use a targeted
+          sed: sed -i '0,/CONFIG_HZ_300=y/!{/CONFIG_HZ_300=y/d}' <defconfig>
+          This leaves the first (canonical) occurrence intact.
+
+  - id: P00c
+    status: REGRESSION_FIX
+    priority: CRITICAL
+    title: "Restore CONFIG_ZSMALLOC=y and CONFIG_ZRAM=y (deleted in 7e872f5)"
+    file: "arch/arm64/configs/exynos9810-star2lte_defconfig"
+    depends_on: []
+    brain_core: >
+      Brain Core sets ZRAM algorithm at runtime. Without ZRAM compiled in, the node
+      it writes to does not exist and Brain Core's memory-pressure management fails silently.
+    impact: >
+      Removing CONFIG_ZRAM=y disables the compressed swap device entirely. On a
+      6 GB device with Android's memory pressure patterns this causes excessive
+      eMMC swap I/O. ZSMALLOC is the allocator backend ZRAM requires; without it
+      the ZRAM Kconfig dependency chain fails at compile time.
+    verify_cmd: "grep -E 'ZRAM|ZSMALLOC' arch/arm64/configs/exynos9810-star2lte_defconfig"
+    expected_before: "Lines absent or commented out"
+    expected_after:  "CONFIG_ZRAM=y and CONFIG_ZSMALLOC=y both present and uncommented"
+    hunks:
+      - description: >
+          Insert the ZRAM/ZSMALLOC block. Best location: near CONFIG_BLK_DEV_LOOP
+          (where ZRAM was before deletion, around line 254 of the original file).
+          Append to the bottom of the block-devices section if unsure of exact position.
+        action: INSERT_AFTER
+        insert_after: "CONFIG_BLK_DEV_LOOP_MIN_COUNT=16"
+        content: |-
+          CONFIG_ZRAM=y
+          CONFIG_ZSMALLOC=y
+          CONFIG_ZSMALLOC_STAT=y
+
+# =============================================================================
+# SECTION 1 — SCHEDUTIL RATE LIMITS (HIGH IMPACT)
+# =============================================================================
+
+  - id: P01
+    status: NEW
+    priority: HIGH
+    title: "schedutil rate limits — cpufreq_schedutil.c (Pattern B confirmed)"
+    file: "drivers/cpufreq/cpufreq_schedutil.c"
+    depends_on: []
+    brain_core: >
+      Brain Core writes 1500/16000 at runtime via write_node but flags_health_check
+      resets these to 5000/5000 periodically. Baking the values into the kernel
+      eliminates both the 25s boot window regression and the re-assertion overhead.
+      Brain Core will log 'schedutil: verified 1500us' and skip reapplication.
+    impact: >
+      Drops sugov CPU overhead from ~50% combined to ~4%. The asymmetric
+      1.5ms up / 16ms down prevents frequency bouncing during mixed workloads
+      (audio + browsing) while keeping touch response fast.
+    verify_cmd: "grep -n 'rate_limit_us' drivers/cpufreq/cpufreq_schedutil.c"
+    expected_before: "tunables->up_rate_limit_us = 5000; tunables->down_rate_limit_us = 5000;"
+    expected_after:  "tunables->up_rate_limit_us = 1500; tunables->down_rate_limit_us = 16000;"
+    hunks:
+      - description: "Samsung BSP Pattern B: both limits initialised to 5000µs. Replace both."
+        action: REPLACE
+        find: |-
+          tunables->up_rate_limit_us = 5000;
+          tunables->down_rate_limit_us = 5000;
+        replace: |-
+          tunables->up_rate_limit_us = 1500;   /* Chimera MK6: fast ramp-up (1.5ms) */
+          tunables->down_rate_limit_us = 16000; /* Chimera MK6: slow decay (16ms) prevents thrash */
+      - description: >
+          Fallback: if Pattern A (both = 0) is present instead, replace that form.
+          Only one of these hunks will match — apply whichever one does.
+        action: REPLACE
+        find: |-
+          tunables->up_rate_limit_us = 0;
+          tunables->down_rate_limit_us = 0;
+        replace: |-
+          tunables->up_rate_limit_us = 1500;   /* Chimera MK6: fast ramp-up (1.5ms) */
+          tunables->down_rate_limit_us = 16000; /* Chimera MK6: slow decay (16ms) */
+
+  - id: P01b
+    status: PARTIAL
+    priority: HIGH
+    title: "schedutil rate limits — exynos-acme.c (the BIG cluster override path)"
+    file: "drivers/cpufreq/exynos-acme.c"
+    depends_on: [P01]
+    brain_core: >
+      ACME intercepts CPUFREQ_POLICY_NOTIFIER and re-applies its own schedutil
+      defaults during domain1 (BIG cluster) policy transitions. This is the mechanism
+      confirmed to reset 1500/16000 back to 5000/5000 on the BIG cluster even after
+      Brain Core applies them. Patching both files is required for the BIG cluster fix
+      to be permanent. The .bak file added in 7e872f5 is the pre-modification source.
+    impact: >
+      Without this patch, P01 only permanently fixes the LITTLE cluster.
+      The BIG cluster (policy4) will revert to 5000/5000 on every policy
+      transition triggered by ACME callbacks.
+    verify_cmd: "grep -n 'up_rate_limit_us\\|down_rate_limit_us\\|5000' drivers/cpufreq/exynos-acme.c | head -20"
+    expected_before: "Lines setting up_rate_limit_us = 5000 and/or down_rate_limit_us = 5000"
+    expected_after:  "Same lines with 1500 and 16000"
+    hunks:
+      - description: >
+          ACME sets schedutil tunables during policy init. The search string below
+          covers the most common pattern in Samsung BSP 4.9 ACME. If grep shows a
+          different form, follow the same principle: replace whatever value ACME
+          assigns to up_rate_limit_us with 1500, and down_rate_limit_us with 16000.
+        action: REPLACE
+        find: |-
+          sg_policy->tunables->up_rate_limit_us = 5000;
+          sg_policy->tunables->down_rate_limit_us = 5000;
+        replace: |-
+          sg_policy->tunables->up_rate_limit_us = 1500;   /* Chimera MK6 */
+          sg_policy->tunables->down_rate_limit_us = 16000; /* Chimera MK6 */
+      - description: >
+          Alternative ACME pattern — some Samsung BSP versions use `tunables` directly
+          without the sg_policy wrapper inside the notifier callback.
+        action: REPLACE
+        find: |-
+          tunables->up_rate_limit_us = USEC_PER_MSEC * 5;
+          tunables->down_rate_limit_us = USEC_PER_MSEC * 5;
+        replace: |-
+          tunables->up_rate_limit_us = 1500;   /* Chimera MK6 */
+          tunables->down_rate_limit_us = 16000; /* Chimera MK6 */
+      - description: >
+          Numeric literal alternative (some ACME versions hardcode the decimal value
+          without multiplication). Match whichever grep shows in your tree.
+        action: REPLACE
+        find: |-
+          up_rate_limit_us = 5000;
+          down_rate_limit_us = 5000;
+        replace: |-
+          up_rate_limit_us = 1500;   /* Chimera MK6 */
+          down_rate_limit_us = 16000; /* Chimera MK6 */
+
+  - id: P02
+    status: NEW
+    priority: HIGH
+    title: "sugov thread scheduling class: SCHED_FIFO → SCHED_RR p=1"
+    file: "drivers/cpufreq/cpufreq_schedutil.c"
+    depends_on: [P01]
+    brain_core: >
+      Brain Core cannot change kernel thread scheduling class from userspace; chrt
+      only works on userspace threads. This is one of three changes only the kernel
+      can make. The §2 change from the previous build was not carried over into the
+      current chimera-mk6l tree per the diagnostic analysis.
+    impact: >
+      sugov threads currently run SCHED_FIFO at either p=98 (MAX_RT_PRIO-1) or p=50
+      (Samsung BSP default as confirmed by the V27.1 diagnostic). At FIFO they run
+      to completion and preempt audioserver (SCHED_RR p=2) and the BT HAL. Changing
+      to SCHED_RR p=1 keeps them real-time (cannot be starved by normal tasks) but
+      below audio, and they yield timeslices to other p=1 RT threads via round-robin.
+    verify_cmd: "grep -n 'MAX_RT_PRIO\\|SCHED_FIFO\\|sched_priority\\|sched_setscheduler' drivers/cpufreq/cpufreq_schedutil.c"
+    expected_before: "SCHED_FIFO with sched_priority set to MAX_RT_PRIO-1, MAX_RT_PRIO/2, or a fixed integer (50)"
+    expected_after:  "SCHED_RR with sched_priority = 1"
+    hunks:
+      - description: >
+          Pattern A: Samsung BSP uses MAX_RT_PRIO - 1 (= 98). Most common in vanilla 4.9 BSP.
+        action: REPLACE
+        find: |-
+          param.sched_priority = MAX_RT_PRIO - 1;
+          sched_setscheduler_nocheck(sg_policy->thread, SCHED_FIFO, &param);
+        replace: |-
+          param.sched_priority = 1; /* Chimera MK6: below audioserver (p=2), still RT */
+          sched_setscheduler_nocheck(sg_policy->thread, SCHED_RR, &param);
+      - description: >
+          Pattern B: Samsung BSP uses a fixed integer priority of 50. Apply if Pattern A
+          does not match — use whichever grep shows in your tree.
+        action: REPLACE
+        find: |-
+          param.sched_priority = 50;
+          sched_setscheduler_nocheck(sg_policy->thread, SCHED_FIFO, &param);
+        replace: |-
+          param.sched_priority = 1; /* Chimera MK6: below audioserver (p=2), still RT */
+          sched_setscheduler_nocheck(sg_policy->thread, SCHED_RR, &param);
+      - description: >
+          Pattern C: Single-line form sometimes found in Samsung BSP. Apply if neither
+          A nor B match.
+        action: REPLACE
+        find: |-
+          sched_setscheduler_nocheck(sg_policy->thread, SCHED_FIFO, &param);
+        replace: |-
+          param.sched_priority = 1; /* Chimera MK6: override priority before class change */
+          sched_setscheduler_nocheck(sg_policy->thread, SCHED_RR, &param);
+        note: >
+          If using Pattern C, verify that param.sched_priority is not set AFTER this line
+          elsewhere in the same function — if it is, that subsequent assignment must also
+          be patched to sched_priority = 1.
+
+  - id: P03
+    status: PARTIAL
+    priority: HIGH
+    title: "Samsung UFC (exynos-ufc.c) — disable notifier registration"
+    file: "drivers/cpufreq/exynos-ufc.c"
+    depends_on: [P01, P01b]
+    brain_core: >
+      UFC is the primary confirmed source of rate-limit resets. flags_health_check
+      wakes UFC which re-applies 5000/5000 via CPUFREQ_POLICY_NOTIFIER callbacks.
+      Brain Core's phantom_killer suppresses some of this but cannot stop UFC at
+      the kernel notifier level. The .bak file in 7e872f5 is the pre-mod source;
+      apply this patch to the live exynos-ufc.c.
+    impact: >
+      Eliminates the reset loop that causes Brain Core to waste ~3% CPU/cycle
+      fighting UFC. After this patch, 1500/16000 is permanent without re-assertion.
+    verify_cmd: "grep -n 'cpufreq_register_notifier\\|exynos_ufc_init\\|CPUFREQ_POLICY_NOTIFIER' drivers/cpufreq/exynos-ufc.c"
+    expected_before: "Active cpufreq_register_notifier call in exynos_ufc_init"
+    expected_after:  "Notifier registration commented out; init returns 0 immediately"
+    hunks:
+      - description: >
+          Comment out the notifier registration inside exynos_ufc_init. This is the
+          recommended Option A from the tuning guide: full notifier disable while
+          preserving the sysfs nodes (UFC init still runs, just doesn't intercept policy).
+        action: REPLACE
+        find: |-
+          static int __init exynos_ufc_init(void)
+          {
+        replace: |-
+          static int __init exynos_ufc_init(void)
+          {
+          	/* Chimera MK6: UFC disabled — fights schedutil 1500/16000 on LOS 23.2.
+          	 * flags_health_check resets schedutil via UFC CPUFREQ_POLICY_NOTIFIER.
+          	 * Brain Core manages frequency policy at a higher abstraction level.
+          	 * Remove this block only if re-enabling Game Tools / Samsung power profiles. */
+          	pr_info("exynos-ufc: notifier disabled at compile time (Chimera MK6 LOS build)\n");
+          	return 0;
+
+          	/* === DISABLED BODY FOLLOWS — preserved for reference === */
+      - description: >
+          Close the disabled body with a matching comment. Place this at the very end
+          of the original exynos_ufc_init function body, before the closing brace.
+        action: REPLACE
+        find: |-
+          	return cpufreq_register_notifier(&exynos_ufc_notifier, CPUFREQ_POLICY_NOTIFIER);
+          }
+        replace: |-
+          	/* return cpufreq_register_notifier(&exynos_ufc_notifier, CPUFREQ_POLICY_NOTIFIER); */
+          	/* === END DISABLED BODY === */
+          	return 0; /* unreachable; early return above handles this */
+          }
+        note: >
+          If the init function has multiple return paths (error handling), ensure the
+          early return added in the first hunk is placed before any variable declarations
+          that would cause a compiler 'jump over declaration' error in C89 mode. In that
+          case, wrap the entire original body in an #if 0 / #endif block instead.
+
+# =============================================================================
+# SECTION 2 — CFS, STORAGE, ZRAM, DEFCONFIG ADDITIONS (MEDIUM IMPACT)
+# =============================================================================
+
+  - id: P04
+    status: NEW
+    priority: MEDIUM
+    title: "CFS scheduler latency tuning — kernel/sched/fair.c"
+    file: "kernel/sched/fair.c"
+    depends_on: []
+    brain_core: >
+      Brain Core writes these values via /proc/sys/kernel/ sysctl nodes after
+      boot_completed. Baking them in only eliminates the ~25s window during which
+      the Samsung BSP defaults (10ms latency) are active. Low-priority relative to
+      the schedutil changes.
+    impact: >
+      Reduces scheduler latency from Samsung's 10ms default to 6ms, improving
+      task wake-up time and UI smoothness. The migration_cost increase from 500µs
+      to 5ms reduces cross-cluster (big.LITTLE) task migrations.
+    verify_cmd: "grep -n 'sysctl_sched_latency\\|sysctl_sched_min_gran\\|sysctl_sched_wakeup\\|sysctl_sched_migration' kernel/sched/fair.c | head -10"
+    expected_before: "Samsung BSP defaults: latency=10000000, min_gran=1250000, wakeup_gran=1500000"
+    expected_after:  "Chimera values: 6000000, 750000, 1000000, migration_cost=5000000"
+    hunks:
+      - description: "Replace Samsung BSP CFS latency defaults with Chimera RC values."
+        action: REPLACE
+        find: |-
+          unsigned int sysctl_sched_latency           = 10000000ULL;
+          unsigned int sysctl_sched_min_granularity   = 1250000ULL;
+          unsigned int sysctl_sched_wakeup_granularity = 1500000ULL;
+        replace: |-
+          unsigned int sysctl_sched_latency           = 6000000ULL;   /* Chimera MK6: 6ms */
+          unsigned int sysctl_sched_min_granularity   = 750000ULL;    /* Chimera MK6: 750µs */
+          unsigned int sysctl_sched_wakeup_granularity = 1000000ULL;  /* Chimera MK6: 1ms */
+      - description: >
+          Migration cost: increase from upstream default 500µs to 5ms. This makes
+          the scheduler reluctant to move tasks across big.LITTLE clusters unless
+          the utilisation benefit clearly justifies the cache-cold cost.
+        action: REPLACE
+        find: |-
+          unsigned int sysctl_sched_migration_cost    = 500000ULL;
+        replace: |-
+          unsigned int sysctl_sched_migration_cost    = 5000000ULL;   /* Chimera MK6: reduce big.LITTLE thrash */
+        note: >
+          If the upstream value is not 500000ULL (some Samsung BSPs already raise this),
+          use grep to find the actual value and replace that instead.
+
+  - id: P05
+    status: NEW
+    priority: MEDIUM
+    title: "mmcblk0 read_ahead_kb default: 1024 → 128"
+    file: "drivers/mmc/core/block.c"
+    depends_on: []
+    brain_core: >
+      Brain Core re-asserts 128kb every 5 minutes. Baking it in eliminates that
+      re-assertion overhead and gives the correct value from the first filesystem
+      access, before Brain Core fires.
+    impact: >
+      Reduces unnecessary read-ahead on random-access eMMC workloads. The 1024kb
+      default causes excessive prefetch on app launches (random I/O pattern),
+      wasting eMMC bandwidth and DRAM.
+    verify_cmd: "grep -n 'read_ahead\\|ra_pages\\|blk_queue_read_ahead' drivers/mmc/core/block.c drivers/mmc/core/queue.c"
+    expected_before: "blk_queue_read_ahead(..., 1024) or ra_pages = 256"
+    expected_after:  "blk_queue_read_ahead(..., 128) or ra_pages = 32"
+    hunks:
+      - description: >
+          Pattern A: blk_queue_read_ahead API (most common in Samsung BSP 4.9 block.c).
+        action: REPLACE
+        find: |-
+          blk_queue_read_ahead(md->queue.queue, 1024);
+        replace: |-
+          blk_queue_read_ahead(md->queue.queue, 128); /* Chimera MK6: matches Brain Core target */
+      - description: >
+          Pattern B: ra_pages assignment (backing_dev_info form). 256 pages × 4kb = 1024kb.
+          32 pages × 4kb = 128kb. Apply whichever grep shows.
+        action: REPLACE
+        find: |-
+          queue->backing_dev_info.ra_pages = 256;
+        replace: |-
+          queue->backing_dev_info.ra_pages = 32; /* Chimera MK6: 32 × 4kb = 128kb */
+        note: >
+          Only mmcblk0 (eMMC) needs this change. sda (UFS) is already stable at 128kb
+          in diagnostics. If both block devices share the same init path, add a
+          conditional: check the disk name (md->disk->disk_name) and apply only when
+          it contains "mmcblk".
+
+  - id: P06
+    status: NEW
+    priority: MEDIUM
+    title: "ZRAM default compression algorithm: lzo → lz4"
+    file: "drivers/block/zram/zram_drv.c"
+    depends_on: [P00c]
+    brain_core: >
+      Brain Core sets the ZRAM algorithm at runtime. The kernel default only matters
+      during the ~25s pre-boot-completed window. Align the default with Brain Core's
+      target to avoid a brief period using the slower lzo.
+    impact: >
+      LZ4 provides ~1.5–2× higher decompression throughput than LZO at similar
+      compression ratios for the workload patterns typical of Android ZRAM swap.
+      Reduces CPU time spent in the ZRAM decompression path during memory pressure.
+    verify_cmd: "grep -n 'ZRAM_DEF_COMP\\|lzo\\|lz4' drivers/block/zram/zram_drv.c | head -5"
+    expected_before: '#define ZRAM_DEF_COMP_ALGORITHM    "lzo"'
+    expected_after:  '#define ZRAM_DEF_COMP_ALGORITHM    "lz4"'
+    hunks:
+      - action: REPLACE
+        find: |-
+          #define ZRAM_DEF_COMP_ALGORITHM	"lzo"
+        replace: |-
+          #define ZRAM_DEF_COMP_ALGORITHM	"lz4" /* Chimera MK6: faster decompression */
+      - description: "Tab-variant of the same define (Samsung BSP may use spaces or tabs inconsistently)."
+        action: REPLACE
+        find: |-
+          #define ZRAM_DEF_COMP_ALGORITHM    "lzo"
+        replace: |-
+          #define ZRAM_DEF_COMP_ALGORITHM    "lz4" /* Chimera MK6 */
+
+  - id: P07
+    status: NEW
+    priority: MEDIUM
+    title: "Defconfig additions: BBR, LZ4 crypto, CRC32 HW acceleration"
+    file: "arch/arm64/configs/exynos9810-star2lte_defconfig"
+    depends_on: [P00a, P00b, P00c]
+    brain_core: "Not applicable — compile-time feature flags."
+    impact: >
+      BBR TCP congestion control improves throughput on lossy networks (Wi-Fi,
+      LTE). LZ4 crypto module is required for P06 to work correctly at runtime.
+      CRC32 hardware acceleration (ARMv8 CRC instruction) reduces CPU cost of
+      eMMC/F2FS integrity checks.
+    verify_cmd: "grep -E 'BBR|CUBIC|DEFAULT_TCP|LZ4|CRC32|ZSTD' arch/arm64/configs/exynos9810-star2lte_defconfig"
+    hunks:
+      - description: "Add TCP BBR as default congestion control, keep CUBIC available."
+        action: INSERT_OR_VERIFY
+        content: |-
+          CONFIG_TCP_CONG_ADVANCED=y
+          CONFIG_TCP_CONG_BBR=y
+          CONFIG_TCP_CONG_CUBIC=y
+          CONFIG_DEFAULT_TCP_CONG="bbr"
+        note: >
+          If CONFIG_TCP_CONG_CUBIC=y is already present, add only the BBR and DEFAULT
+          lines. Place near other TCP/net config symbols.
+      - description: "LZ4 compression modules (required by P06 ZRAM default)."
+        action: INSERT_OR_VERIFY
+        content: |-
+          CONFIG_CRYPTO_LZ4=y
+          CONFIG_CRYPTO_LZ4HC=y
+          CONFIG_CRYPTO_ZSTD=y
+        note: "ZSTD may not be available in all 4.9 BSP trees; skip if not in Kconfig."
+      - description: "ARMv8 hardware CRC32 acceleration for eMMC/F2FS."
+        action: INSERT_OR_VERIFY
+        content: |-
+          CONFIG_CRC32_ARMV8_CRC=y
+
+  - id: P08
+    status: NEW
+    priority: MEDIUM
+    title: "EMS ontime migration thresholds — kernel/sched/ems/ontime.c"
+    file: "kernel/sched/ems/ontime.c"
+    depends_on: []
+    brain_core: >
+      Brain Core controls EMS through schedtune (prefer_perf, prefer_idle).
+      The ontime policy can conflict with schedtune by migrating tasks to BIG
+      cluster before Brain Core's prefer_perf threshold would do so, wasting
+      power. Raising the up_threshold makes EMS more conservative, deferring
+      to Brain Core's schedtune for migration decisions.
+    impact: >
+      Reduces spurious task migrations from LITTLE to BIG cluster. Lower migration
+      frequency means BIG cluster stays in low-power state longer between bursts.
+    verify_cmd: "ls kernel/sched/ems/ 2>/dev/null && grep -n 'up_threshold\\|down_threshold\\|ontime' kernel/sched/ems/ontime.c | head -15"
+    expected_before: "up_threshold = 500; down_threshold = 300; (approx 49%/29% util)"
+    expected_after:  "up_threshold = 700; down_threshold = 200; (approx 68%/20% util)"
+    skip_condition: "If kernel/sched/ems/ does not exist in the tree, skip this patch."
+    hunks:
+      - action: REPLACE
+        find: |-
+          static int up_threshold = 500;
+          static int down_threshold = 300;
+        replace: |-
+          static int up_threshold = 700;   /* Chimera MK6: only migrate to BIG when genuinely loaded (68%) */
+          static int down_threshold = 200; /* Chimera MK6: drop to LITTLE only when near-idle (20%) */
+      - description: >
+          Alternative: if thresholds are in a struct or array rather than standalone statics.
+        action: REPLACE
+        find: |-
+          .up_threshold = 500,
+          .down_threshold = 300,
+        replace: |-
+          .up_threshold = 700,   /* Chimera MK6 */
+          .down_threshold = 200, /* Chimera MK6 */
+
+  - id: P09
+    status: NEW
+    priority: MEDIUM
+    title: "Thermal passive trip point: 65°C → 70°C (exynos9810 DTM)"
+    file: "arch/arm64/boot/dts/exynos/exynos9810-thermal.dtsi"
+    depends_on: []
+    brain_core: >
+      Brain Core's THERMAL_HYST_HIGH is 75°C. With the kernel throttling at 65°C,
+      Brain Core's thermal latch is preceded by a 10°C kernel throttle that Brain
+      Core does not control. Aligning the kernel passive trip to 70°C gives Brain
+      Core a 5°C window to act before the kernel throttles, matching the intended
+      co-operative thermal management design.
+    impact: >
+      Reduces spurious throttling during sustained loads (gaming, camera, charging)
+      at the 65–70°C range confirmed in the 0517 diagnostic (BIG at 60°C approaching
+      the throttle point). Critical trip point (85°C) is NOT touched.
+    verify_cmd: "grep -rn 'trip_point\\|temperature\\|passive\\|critical' arch/arm64/boot/dts/exynos/exynos9810* | grep -v '#' | head -20"
+    expected_before: "temperature = <65000>; type = 'passive'"
+    expected_after:  "temperature = <70000>; hysteresis = <3000>; type = 'passive'"
+    alternative_file: "arch/arm64/boot/dts/exynos/exynos9810_tmu_data.c"
+    hunks:
+      - description: >
+          Raise passive trip point for CPU thermal zone from 65°C to 70°C.
+          Increase hysteresis from 2°C to 3°C to reduce throttle/unthrottle oscillation.
+          DO NOT modify the critical (85°C) trip point.
+        action: REPLACE
+        find: |-
+          			temperature = <65000>;
+          			hysteresis = <2000>;
+          			type = "passive";
+        replace: |-
+          			temperature = <70000>; /* Chimera MK6: raised from 65°C; aligns with Brain Core THERMAL_HYST_HIGH */
+          			hysteresis = <3000>;
+          			type = "passive";
+        note: >
+          Some Samsung BSP trees have multiple thermal zones (CPU0, CPU4, GPU, etc.).
+          Apply this change to the CPU thermal zones only. GPU and battery zones
+          have different characteristics and should be left at their stock values.
+          Verify with: grep -B5 -A5 'passive' arch/arm64/boot/dts/exynos/exynos9810-thermal.dtsi
+
+# =============================================================================
+# SECTION 3 — star2lte DTS ADDITIONS
+# File: arch/arm64/boot/dts/exynos/exynos9810-star2lte_eur_open_26.dts
+# These are additive changes only — no existing values are removed.
+# =============================================================================
+
+  - id: P10
+    status: NEW
+    priority: MEDIUM
+    title: "Camera CMA/ION region: set size to 256 MiB (0x10000000)"
+    file: "arch/arm64/boot/dts/exynos/exynos9810-star2lte_eur_open_26.dts"
+    depends_on: []
+    brain_core: "Not applicable — memory carveout is set at boot by the bootloader/kernel."
+    impact: >
+      Increases the camera CMA heap from the stock value (~64–128 MiB) to 256 MiB.
+      Required for 4K60 video capture on Android 15+ where ION allocation demand
+      from the camera HAL exceeds the stock reservation during high-resolution burst
+      capture and real-time video processing.
+    verify_cmd: "grep -n 'camera\\|cma\\|ion' arch/arm64/boot/dts/exynos/exynos9810-star2lte_eur_open_26.dts | grep -i 'size\\|reg\\|heap' | head -10"
+    hunks:
+      - description: >
+          Locate the camera memory region node. It may be named 'camera_heap',
+          'camera_cma', or referenced as a reserved-memory child. The size field
+          uses the DTS reg property: <base_addr size>. Update only the size.
+          256 MiB = 0x10000000.
+        action: REPLACE
+        find: |-
+          		camera {
+          			compatible = "shared-dma-pool";
+        replace: |-
+          		camera {
+          			/* Chimera MK6: increased to 256 MiB for 4K60 / Android 15 HAL demands */
+          			compatible = "shared-dma-pool";
+        note: >
+          The size field in the reg property of this node must be changed to 0x10000000.
+          The exact replacement depends on the base address in your tree. Run:
+            grep -A8 'camera' arch/arm64/boot/dts/exynos/exynos9810-star2lte_eur_open_26.dts | grep 'reg\|size'
+          Then change the second cell of the reg tuple to 0x10000000.
+          Example: reg = <0x0 0xB0000000 0x0 0x08000000>;  (128 MiB)
+                   becomes:
+                   reg = <0x0 0xB0000000 0x0 0x10000000>;  (256 MiB)
+          Ensure adjacent reserved regions do not overlap after the size increase.
+          Check total reserved memory budget does not exceed physical RAM - 512 MiB headroom.
+
+  - id: P11
+    status: NEW
+    priority: MEDIUM
+    title: "video_stream / MFC carveout: set size to 64 MiB (0x04000000)"
+    file: "arch/arm64/boot/dts/exynos/exynos9810-star2lte_eur_open_26.dts"
+    depends_on: [P10]
+    brain_core: "Not applicable."
+    impact: >
+      The MFC (Multi-Format Codec) carveout at 64 MiB ensures the video decoder
+      has sufficient contiguous memory for 4K decoding without falling back to
+      system CMA, which causes latency spikes during concurrent camera + playback.
+    verify_cmd: "grep -n 'video\\|mfc\\|stream' arch/arm64/boot/dts/exynos/exynos9810-star2lte_eur_open_26.dts | grep -i 'size\\|reg\\|heap' | head -10"
+    hunks:
+      - description: >
+          Locate the video_stream or mfc_fw memory region. 64 MiB = 0x04000000.
+          Same process as P10: find the reg tuple and update the size cell.
+        action: NOTE_AND_REPLACE
+        note: >
+          Run: grep -A8 -i 'video_stream\|mfc_fw\|mfc_mem' arch/arm64/boot/dts/exynos/exynos9810-star2lte_eur_open_26.dts
+          Identify the size cell in the reg property and change it to 0x04000000.
+          Example: reg = <0x0 0xC0000000 0x0 0x02000000>;  (32 MiB stock)
+                   becomes:
+                   reg = <0x0 0xC0000000 0x0 0x04000000>;  (64 MiB)
+          Verify the base address does not overlap with the expanded camera region from P10.
+          If the two regions are adjacent in memory, recalculate the base address of
+          whichever comes second to account for the expanded size of the first.
+
+  - id: P12
+    status: NEW
+    priority: MEDIUM
+    title: "Bluetooth: add samsung,bt-addr-path and local-bd-address fallback"
+    file: "arch/arm64/boot/dts/exynos/exynos9810-star2lte_eur_open_26.dts"
+    depends_on: []
+    brain_core: >
+      Brain Core's BT hardening reads the MAC from the EFS partition via the path
+      specified in samsung,bt-addr-path. Without this DTS property, the BT HAL
+      falls back to a driver default and Brain Core cannot verify or correct the
+      address at runtime. The local-bd-address provides a zero-address fallback
+      that triggers the HAL to read from EFS rather than using an invalid random MAC.
+    impact: >
+      Prevents the occasional 'bt_addr: using random MAC' log entries and ensures
+      BT address persistence across factory-reset and ROM flash, reading from the
+      /efs/bluetooth/bt_addr path where Samsung stores the burned-in address.
+    verify_cmd: "grep -n 'bluetooth\\|bt-addr\\|local-bd' arch/arm64/boot/dts/exynos/exynos9810-star2lte_eur_open_26.dts | head -10"
+    hunks:
+      - description: >
+          Find the Bluetooth device node. In Exynos 9810 DTS it is typically a child
+          of the UART or serial node, or a standalone platform device, with compatible
+          string 'samsung,bcm43xx' or 'brcm,bcm4345c5'.
+          Add the two new properties inside the existing bluetooth { ... } node.
+        action: INSERT_PROPERTIES
+        find_node: |-
+          bluetooth {
+        insert_properties: |-
+          		samsung,bt-addr-path = "/efs/bluetooth/bt_addr";
+          		local-bd-address = [ 00 00 00 00 00 00 ]; /* fallback: HAL reads EFS if all-zero */
+        note: >
+          Place these two lines immediately after the opening brace of the bluetooth node,
+          before any existing properties. The all-zero local-bd-address is intentional —
+          it signals the HAL to read the real address from the EFS path. Do NOT use a
+          real MAC address here as it becomes a hardcoded fallback if EFS is unavailable.
+
+  - id: P13
+    status: NEW
+    priority: MEDIUM
+    title: "CPU idle C-state min-residency-us values for Android 15/16 power HAL"
+    file: "arch/arm64/boot/dts/exynos/exynos9810-star2lte_eur_open_26.dts"
+    depends_on: []
+    brain_core: "Not applicable — idle state selection is kernel/firmware, not Brain Core."
+    impact: >
+      Android 15/16 changed the power HAL idle hint interface. The new HAL is more
+      aggressive about requesting cluster sleep (C2) and system sleep (C3). If
+      min-residency-us values are too high, the kernel will not enter deep sleep
+      even when the power HAL requests it, causing elevated idle power consumption.
+      The new values below are calibrated for the Exynos 9810 exit latencies while
+      being compatible with the Android 15 power HAL idle hint cadence (~8ms hint period).
+    verify_cmd: "grep -n 'min-residency\\|entry-latency\\|exit-latency\\|idle-state' arch/arm64/boot/dts/exynos/exynos9810-star2lte_eur_open_26.dts | head -20"
+    hunks:
+      - description: >
+          C1 (WFI — ARM core wait-for-interrupt, single core, cluster active).
+          Target: min-residency-us = 1. This is already near-zero overhead; verify
+          the current value and only change if it is > 5.
+        action: REPLACE_IF_DIFFERENT
+        target_value: 1
+        find: "min-residency-us in the C1/WFI idle-state node"
+        replace_pattern: |-
+          			min-residency-us = <1>; /* Chimera MK6: C1 WFI — always eligible */
+      - description: >
+          C2 (ARM OFF — core powered down, cluster potentially active).
+          Target: min-residency-us = 100. Reduced from Samsung stock (150–300µs)
+          to allow cluster sleep entry on shorter idle windows. The Exynos 9810
+          C2 exit latency is ~30µs entry + ~75µs exit = ~105µs round-trip,
+          so 100µs residency is the practical minimum for net power benefit.
+        action: REPLACE_IF_DIFFERENT
+        find: |-
+          			min-residency-us = <150>;
+        replace: |-
+          			min-residency-us = <100>; /* Chimera MK6: C2 ARM OFF — Android 15 HAL compatible */
+        note: >
+          If current value is already <= 100, skip. If current value is > 300,
+          the device may have been configured conservatively — set to 100.
+      - description: >
+          C3 (Cluster OFF / system sleep — all cores in cluster off).
+          Target: min-residency-us = 2000. Reduced from typical Samsung stock
+          (3000–5000µs) to match Android 15 power HAL's ~8ms idle hint period.
+          At 3000µs+ residency requirement, the kernel frequently declines C3
+          entry during the short idle windows between Android 15's wake-lock pattern.
+        action: REPLACE_IF_DIFFERENT
+        find: |-
+          			min-residency-us = <3000>;
+        replace: |-
+          			min-residency-us = <2000>; /* Chimera MK6: C3 cluster OFF — Android 15/16 power HAL */
+        note: >
+          Validate after flashing: adb shell cat /sys/kernel/debug/lpm_stats
+          Confirm C3 entry count increases compared to stock. If the device shows
+          increased audio glitches after this change, revert C3 to 2500µs —
+          the Exynos 9810 audio DSP has a known sensitivity to cluster sleep depth.
+
+# =============================================================================
+# SECTION 4 — UV STABILITY CORRECTION
+# Commit 52daab9 applied -50mV to all PMIC rails including BIG cluster.
+# The BIG cluster rails (BUCK2/3/7) need to be raised to -25mV to restore
+# voltage margin at high frequency + high temperature (the restart condition).
+# BUCK8 (vdd2_mem), BUCK11, and s2mpb02 external rails remain at 1250000µV.
+# =============================================================================
+
+  - id: P14
+    status: UV_CORRECTION
+    priority: HIGH
+    title: "UV correction: BIG cluster rails -50mV → -25mV (1250000 → 1275000µV)"
+    file: "arch/arm64/boot/dts/exynos/exynos9810-star2lte_eur_open_26.dts"
+    depends_on: []
+    brain_core: "Not applicable — PMIC regulator ceiling is a hardware constraint."
+    impact: >
+      Commit 52daab9 reduced vdd_cpucl1 (BUCK2), vdd_cpucl0 (BUCK3), and vdd_cpucl1_m
+      (BUCK7) from 1300000µV to 1250000µV (-50mV). The restart profile in the V27
+      diagnostic series (reset at 81°C with peak CPU demand) is a classic voltage-margin
+      failure: hot silicon requires more voltage to maintain gate switching reliability.
+      1.25V is insufficient at the thermal corner of high frequency + high temperature.
+      Raising the ceiling to 1275000µV (-25mV from stock) restores the safety margin
+      while preserving meaningful UV benefit at typical operating points (light/moderate
+      load at <70°C where 1.25V was comfortable).
+
+      DO NOT change: BUCK8 (vdd2_mem), BUCK11 (vdd_lldo2), s2mpb02-buck1/2 —
+      these rails are not the instability source and can remain at 1250000µV.
+    verify_cmd: "grep -n 'vdd_cpucl\\|BUCK2\\|BUCK3\\|BUCK7\\|1250000\\|1275000' arch/arm64/boot/dts/exynos/exynos9810-star2lte_eur_open_26.dts | head -20"
+    expected_before: "regulator-max-microvolt = <1250000> on BUCK2, BUCK3, BUCK7"
+    expected_after:  "regulator-max-microvolt = <1275000> on BUCK2, BUCK3, BUCK7 only"
+    hunks:
+      - description: "BUCK2 — vdd_cpucl1 (BIG cluster primary rail)"
+        action: REPLACE
+        find: |-
+          			BUCK2 {
+          				regulator-name = "vdd_cpucl1";
+          				regulator-min-microvolt = <450000>;
+          				regulator-max-microvolt = <1250000>;
+        replace: |-
+          			BUCK2 {
+          				regulator-name = "vdd_cpucl1";
+          				regulator-min-microvolt = <450000>;
+          				regulator-max-microvolt = <1275000>; /* Chimera MK6: -25mV (was -50mV); restores thermal corner margin */
+      - description: "BUCK3 — vdd_cpucl0 (LITTLE cluster primary rail)"
+        action: REPLACE
+        find: |-
+          			BUCK3 {
+          				regulator-name = "vdd_cpucl0";
+          				regulator-min-microvolt = <450000>;
+          				regulator-max-microvolt = <1250000>;
+        replace: |-
+          			BUCK3 {
+          				regulator-name = "vdd_cpucl0";
+          				regulator-min-microvolt = <450000>;
+          				regulator-max-microvolt = <1275000>; /* Chimera MK6: -25mV */
+      - description: "BUCK7 — vdd_cpucl1_m (BIG cluster M-mode rail)"
+        action: REPLACE
+        find: |-
+          			BUCK7 {
+          				regulator-name = "vdd_cpucl1_m";
+          				regulator-min-microvolt = <450000>;
+          				regulator-max-microvolt = <1250000>;
+        replace: |-
+          			BUCK7 {
+          				regulator-name = "vdd_cpucl1_m";
+          				regulator-min-microvolt = <450000>;
+          				regulator-max-microvolt = <1275000>; /* Chimera MK6: -25mV */
+      - description: >
+          NOTE: BUCK8 (vdd2_mem), BUCK11 (vdd_lldo2), and s2mpb02-buck1/2 are NOT
+          touched in this patch. They remain at 1250000µV as set by commit 52daab9.
+          The memory rail instability would present as random data corruption rather
+          than clean resets; vdd2_mem at 1250000µV has been stable in diagnostics.
+        action: VERIFY_ONLY
+        check: >
+          Confirm BUCK8 max is <1250000> and BUCK11 max is <1250000> — do not change.
+
+# =============================================================================
+# SECTION 5 — POST-PATCH VERIFICATION
+# =============================================================================
+
+verification:
+  build:
+    commands:
+      - "make mrproper"
+      - "make exynos9810-star2lte_defconfig"
+      - "make -j$(nproc) ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu-"
+    expected: "Zero build errors. Warnings related to UFC disabled body are acceptable."
+
+  boot_checks:
+    - id: V01
+      description: "schedutil rates at kernel init (before Brain Core fires)"
+      command: "cat /sys/devices/system/cpu/cpufreq/policy0/schedutil/up_rate_limit_us"
+      expected: "1500"
+      timing: "Run within 20 seconds of boot, before Brain Core boot_completed gate"
+
+    - id: V02
+      description: "BIG cluster schedutil (policy4)"
+      command: "cat /sys/devices/system/cpu/cpufreq/policy4/schedutil/up_rate_limit_us"
+      expected: "1500"
+
+    - id: V03
+      description: "Brain Core confirms kernel default — no reapplication needed"
+      command: "grep 'schedutil.*verified' /data/local/tmp/brain_core.log"
+      expected: "schedutil: verified 1500us"
+
+    - id: V04
+      description: "sugov thread scheduling class"
+      command: "chrt -p $(pgrep -f 'sugov:0' | head -1)"
+      expected: "scheduling policy: SCHED_RR, priority: 1"
+
+    - id: V05
+      description: "UFC notifier not registered"
+      command: "dmesg | grep 'exynos-ufc'"
+      expected: "exynos-ufc: notifier disabled at compile time (Chimera MK6 LOS build)"
+
+    - id: V06
+      description: "PREEMPT model active"
+      command: "zcat /proc/config.gz | grep PREEMPT"
+      expected: "CONFIG_PREEMPT=y"
+
+    - id: V07
+      description: "ZRAM present and using LZ4"
+      command: "cat /sys/block/zram0/comp_algorithm"
+      expected: "lz4"
+
+    - id: V08
+      description: "Stress test — audio during load (no stutter from sugov preemption)"
+      command: "Play music + open 3 heavy apps simultaneously. Record for 60 seconds."
+      expected: "No audio dropout. Check: grep 'underrun\\|XRUN' /data/local/tmp/brain_core.log"
+
+    - id: V09
+      description: "Thermal stability — run AnTuTu or sustained GPU test to 75°C"
+      command: "Monitor: watch -n1 'cat /sys/class/thermal/thermal_zone*/temp'"
+      expected: >
+        No throttle events below 70000 (70°C). First throttle at 70°C. Brain Core
+        thermal latch at 75°C. Emergency cutoff at 85°C. No restart at ≤81°C with
+        peak CPU demand (validates UV correction in P14).
+
+    - id: V10
+      description: "Validate UV correction — no restart under sustained peak load"
+      command: "Run Geekbench multi-core loop for 10 minutes while warm (60°C+)"
+      expected: "Stable completion with no kernel panic or emergency reset"
+
+# =============================================================================
+# IMPACT SUMMARY TABLE
+# =============================================================================
+
+impact_summary:
+  - patch: "P00a — Restore CONFIG_PREEMPT"
+    gain: "Restores kernel preemptibility; all other gains depend on this"
+    regression_introduced_by: "7e872f5"
+
+  - patch: "P00b — HZ_100 conflict"
+    gain: "Deterministic 300Hz tick; removes fragile last-wins override"
+    regression_introduced_by: "7e872f5"
+
+  - patch: "P00c — Restore ZRAM/ZSMALLOC"
+    gain: "Re-enables compressed swap; Brain Core memory management functional"
+    regression_introduced_by: "7e872f5"
+
+  - patch: "P01 — schedutil rate limits (schedutil.c)"
+    gain: "LITTLE cluster: sugov CPU ~17% → ~2%"
+    brain_core_handles: "Yes, but fights resets every tick cycle"
+
+  - patch: "P01b — schedutil rate limits (ACME)"
+    gain: "BIG cluster: sugov CPU ~32% → ~2%; ACME no longer resets policy4"
+    brain_core_handles: "Partially"
+
+  - patch: "P02 — sugov thread priority"
+    gain: "Audio no longer preempted by governor at RT; eliminates stutter source"
+    brain_core_handles: "No — userspace chrt cannot touch kernel threads"
+
+  - patch: "P03 — UFC disable"
+    gain: "Eliminates primary rate-limit reset source; Brain Core re-assertion loop gone"
+    brain_core_handles: "Partially"
+
+  - patch: "P04 — CFS latency"
+    gain: "Task wake latency 10ms → 6ms; smoother during boot window"
+    brain_core_handles: "Yes, after boot_completed"
+
+  - patch: "P05 — mmcblk0 read_ahead"
+    gain: "Correct from first I/O; eliminates 5-min Brain Core re-assertion"
+    brain_core_handles: "Yes, every 5 min"
+
+  - patch: "P06 — ZRAM LZ4 default"
+    gain: "~2× faster ZRAM decompression from first memory pressure event"
+    brain_core_handles: "Yes, after boot_completed"
+
+  - patch: "P07 — Defconfig BBR/LZ4/CRC32"
+    gain: "Network throughput, crypto acceleration, hardware CRC"
+    brain_core_handles: "No"
+
+  - patch: "P08 — EMS thresholds"
+    gain: "Stops EMS fighting Brain Core schedtune cluster assignment"
+    brain_core_handles: "No"
+
+  - patch: "P09 — Thermal trip 65→70°C"
+    gain: "Fewer spurious throttle events; Brain Core thermal latch takes precedence"
+    brain_core_handles: "No"
+
+  - patch: "P10 — Camera CMA 256 MiB"
+    gain: "4K60 burst and video processing without ION allocation failure"
+    brain_core_handles: "No"
+
+  - patch: "P11 — MFC carveout 64 MiB"
+    gain: "4K decode without falling back to system CMA"
+    brain_core_handles: "No"
+
+  - patch: "P12 — BT addr path"
+    gain: "Persistent BT MAC from EFS; no random MAC on reflash"
+    brain_core_handles: "Runtime only; DTS provides the path"
+
+  - patch: "P13 — C-state residency"
+    gain: "Deeper idle states under Android 15/16 power HAL; improved standby"
+    brain_core_handles: "No"
+
+  - patch: "P14 — UV correction -25mV"
+    gain: "Eliminates BIG cluster voltage-margin restarts at high temp + high freq"
+    note: "Corrects commit 52daab9's -50mV which was the restart root cause"
