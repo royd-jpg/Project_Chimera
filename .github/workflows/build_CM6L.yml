@@ -419,7 +419,7 @@ jobs:
             
           echo "OK: SUSFS includes normalized to <kernelsu/...>"
 
-      # ── 9c. Export KernelSU public headers (Direct Copy) ────────────────────
+      # ── 9c. Export REAL KernelSU public headers ─────────────────────────────
       - name: Export KernelSU public headers
         working-directory: kernel
         run: |
@@ -427,33 +427,47 @@ jobs:
 
           mkdir -p include/kernelsu
 
-          # Search for the real files in the local KernelSU-Next directory
-          CORE_SRC="$(find KernelSU-Next -type f -name core_hook.h | head -n1 || true)"
-          KCOMP_SRC="$(find KernelSU-Next -type f -name kernel_compat.h | head -n1 || true)"
+          # Remove stale/broken exports
+          rm -f include/kernelsu/core_hook.h
+          rm -f include/kernelsu/kernel_compat.h
 
-          # Copy core_hook.h or create a blank fallback
-          if [[ -n "$CORE_SRC" ]]; then
-            cp -f "$CORE_SRC" include/kernelsu/core_hook.h
-            echo "OK: copied core_hook.h to include/kernelsu/core_hook.h"
-          else
-            cat > include/kernelsu/core_hook.h <<'EOF'
-          #pragma once
-          /* Fallback core_hook.h for KernelSU-Next compatibility */
-          EOF
-            echo "WARN: core_hook.h not found; wrote blank fallback"
+          # Locate actual KernelSU headers
+          REAL_CORE="$(find KernelSU-Next -path '*core_hook.h' \
+            | grep -v 'include/' \
+            | head -n1 || true)"
+
+          REAL_KCOMP="$(find KernelSU-Next -path '*kernel_compat.h' \
+            | grep -v 'include/' \
+            | head -n1 || true)"
+
+          echo "REAL_CORE=$REAL_CORE"
+          echo "REAL_KCOMP=$REAL_KCOMP"
+
+          if [[ -z "$REAL_CORE" ]]; then
+            echo "FATAL: real core_hook.h not found"
+            exit 1
           fi
 
-          # Copy kernel_compat.h or create a blank fallback
-          if [[ -n "$KCOMP_SRC" ]]; then
-            cp -f "$KCOMP_SRC" include/kernelsu/kernel_compat.h
-            echo "OK: copied kernel_compat.h to include/kernelsu/kernel_compat.h"
+          cp "$REAL_CORE" include/kernelsu/core_hook.h
+
+          if [[ -n "$REAL_KCOMP" ]]; then
+            cp "$REAL_KCOMP" include/kernelsu/kernel_compat.h
           else
             cat > include/kernelsu/kernel_compat.h <<'EOF'
           #pragma once
-          /* Fallback kernel_compat.h for KernelSU-Next compatibility */
           EOF
-            echo "WARN: kernel_compat.h not found; wrote blank fallback"
           fi
+
+          # Sanitize recursive includes
+          sed -i \
+            's|#include "../../drivers/kernelsu/core_hook.h"||g' \
+            include/kernelsu/core_hook.h
+
+          sed -i \
+            's|#include <kernelsu/core_hook.h>||g' \
+            include/kernelsu/core_hook.h
+
+          echo "OK: exported REAL KernelSU headers"
 
       # ── 11. Inject minimal SUSFS prctl bridge ────────────────────────────────
       - name: Inject SUSFS prctl bridge
