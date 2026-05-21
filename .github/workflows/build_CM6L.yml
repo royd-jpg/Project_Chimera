@@ -475,6 +475,25 @@ jobs:
 
           echo "OK: KernelSU exported namespace ready"
 
+      - name: Sanitize KernelSU ksu.h
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+
+          if [[ -f include/kernelsu/ksu.h ]]; then
+            # Remove C++-only include that the kernel C compiler cannot use
+            sed -i '/#include <cstdint>/d' include/kernelsu/ksu.h
+            sed -i '/#include <stdint.h>/d' include/kernelsu/ksu.h
+
+            # Fail fast if the file still contains obvious C++ baggage
+            if grep -qE '(^|[[:space:]])(using|namespace|template|std::)' include/kernelsu/ksu.h; then
+              echo "ERROR: include/kernelsu/ksu.h still contains C++-only syntax"
+              exit 1
+            fi
+
+            echo "OK: ksu.h sanitized for kernel C compilation"
+          fi
+
       # ── 9d. Inject global KernelSU include paths ───────────────────────────
       - name: Inject global include paths
         working-directory: kernel
