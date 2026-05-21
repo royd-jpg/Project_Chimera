@@ -401,7 +401,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           
-          # Normalize the SUSFS C headers to use standard kernel namespaces
+          # Force SUSFS to use the proper, flattened namespace
           sed -i \
             's|#include "../../drivers/kernelsu/core_hook.h"|#include <kernelsu/core_hook.h>|g' \
             include/linux/sus_su.h
@@ -410,16 +410,16 @@ jobs:
             's|#include "../../drivers/kernelsu/kernel_compat.h"|#include <kernelsu/kernel_compat.h>|g' \
             include/linux/susfs.h || true
             
-          # Update Makefile: Only -Iinclude is needed now
+          # Update Makefile to look in the standard include directory
           sed -i '/ccflags-.*CONFIG_KSU_SUSFS/d' fs/Makefile
           echo 'ccflags-$(CONFIG_KSU_SUSFS) += \
           -Isecurity/selinux \
           -Isecurity/selinux/include \
           -Iinclude' >> fs/Makefile
             
-          echo "OK: SUSFS include paths normalized and Makefile updated"
+          echo "OK: SUSFS includes normalized to <kernelsu/...>"
 
-      # ── 9c. Export KernelSU public headers (Trampolines) ────────────────────
+      # ── 9c. Export KernelSU public headers (Direct Copy) ────────────────────
       - name: Export KernelSU public headers
         working-directory: kernel
         run: |
@@ -427,59 +427,33 @@ jobs:
 
           mkdir -p include/kernelsu
 
-          cat > include/kernelsu/core_hook.h <<'EOF'
+          # Search for the real files in the KernelSU-Next directory
+          CORE_SRC="$(find ../KernelSU-Next -type f -name core_hook.h | head -n1 || true)"
+          KCOMP_SRC="$(find ../KernelSU-Next -type f -name kernel_compat.h | head -n1 || true)"
+
+          # Copy core_hook.h or create a blank fallback
+          if [[ -n "$CORE_SRC" ]]; then
+            cp -f "$CORE_SRC" include/kernelsu/core_hook.h
+            echo "OK: copied core_hook.h to include/kernelsu/core_hook.h"
+          else
+            cat > include/kernelsu/core_hook.h <<'EOF'
           #pragma once
-          #include "../../drivers/kernelsu/core_hook.h"
+          /* Fallback core_hook.h for KernelSU-Next compatibility */
           EOF
+            echo "WARN: core_hook.h not found; wrote blank fallback"
+          fi
 
-          cat > include/kernelsu/kernel_compat.h <<'EOF'
+          # Copy kernel_compat.h or create a blank fallback
+          if [[ -n "$KCOMP_SRC" ]]; then
+            cp -f "$KCOMP_SRC" include/kernelsu/kernel_compat.h
+            echo "OK: copied kernel_compat.h to include/kernelsu/kernel_compat.h"
+          else
+            cat > include/kernelsu/kernel_compat.h <<'EOF'
           #pragma once
-          #include "../../drivers/kernelsu/kernel_compat.h"
+          /* Fallback kernel_compat.h for KernelSU-Next compatibility */
           EOF
-
-          echo "OK: exported KernelSU wrapper headers"
-          ls -l include/kernelsu
-
-      # ── 10. KernelSU-Next header shims ───────────────────────────────────────
-      - name: Create KernelSU header shims
-        working-directory: kernel
-        run: |
-          set -Eeuo pipefail
-          python3 - << 'PYEOF'
-          from pathlib import Path
-          
-          base = Path("drivers/kernelsu")
-          if not base.exists():
-              print("WARN: drivers/kernelsu not found — skipping shims")
-              raise SystemExit(0)
-              
-          headers_to_shim = ["kernel_compat.h", "core_hook.h"]
-          search_dirs = ["compat", "hook", "include", "ksu"]
-          
-          for header in headers_to_shim:
-              shim = base / header
-              candidates = [base / d / header for d in search_dirs]
-              target = next((c for c in candidates if c.exists()), None)
-              
-              if target is None:
-                  hits = sorted(base.rglob(header))
-                  target = hits[0] if hits else None
-                  
-              if target is None:
-                  print(f"INFO: {header} not found in tree — shim skipped")
-                  continue
-                  
-              rel = target.relative_to(base)
-              
-              if shim.exists() and rel.as_posix() in shim.read_text():
-                  print(f"OK: shim already points to {rel} (idempotent)")
-                  continue
-                  
-              shim.write_text(
-                  f"/* Chimera Mk6 Light: {header} shim */\n#include \"{rel.as_posix()}\"\n"
-              )
-              print(f"OK: shim created: drivers/kernelsu/{header} -> {rel}")
-          PYEOF
+            echo "WARN: kernel_compat.h not found; wrote blank fallback"
+          fi
 
       # ── 11. Inject minimal SUSFS prctl bridge ────────────────────────────────
       - name: Inject SUSFS prctl bridge
