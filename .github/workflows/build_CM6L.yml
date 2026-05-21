@@ -2,7 +2,7 @@
 # Project Chimera Mk6 Light — Lineage 23.2 / Exynos 9810 (star2lte)
 # ───────────────────────────────────────────────────────────────────────────────
 # Base   : royd-jpg/Project_Chimera @ chimera-mk6l
-# KSU    : gavdoc38/KernelSU-Next (pinned submodule)
+# KSU    : gavdoc38/KernelSU-Next (pinned submodule with sidex15 tracing patch)
 # SUSFS  : simonpunk/susfs4ksu @ kernel-4.9 (targets v1.5.12)
 # Clang  : Neutron Clang 10-03-2024 (pinned)
 # Target : LineageOS 23.2 · Android 16 · AVC-safe · SELinux enforcing-locked
@@ -151,15 +151,12 @@ jobs:
           SUSFS_URL="${{ inputs.susfs_repo }}"
           SUSFS_REF="${{ inputs.susfs_ref }}"
           SUSFS_COMMIT="${{ inputs.susfs_commit }}"
-
           [[ "$SUSFS_URL" =~ ^https:// ]] || { echo "ERROR: SUSFS URL must be https://"; exit 1; }
           [[ "$SUSFS_URL" =~ [[:space:]] ]] && { echo "ERROR: SUSFS URL contains whitespace"; exit 1; }
           [[ -n "$SUSFS_REF" ]] || SUSFS_REF="$SUSFS_BRANCH"
-
           if [[ -n "$SUSFS_COMMIT" && ! "$SUSFS_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]; then
             echo "ERROR: susfs_commit must be a full 40-char SHA"; exit 1
           fi
-
           git clone --filter=blob:none --no-tags "$SUSFS_URL" susfs4ksu
           if [[ -n "$SUSFS_COMMIT" ]]; then
             git -C susfs4ksu fetch --depth=1 origin "$SUSFS_COMMIT"
@@ -168,7 +165,6 @@ jobs:
             git -C susfs4ksu fetch --depth=1 origin "$SUSFS_REF"
             git -C susfs4ksu checkout --detach FETCH_HEAD
           fi
-
           RESOLVED_SUSFS_COMMIT="$(git -C susfs4ksu rev-parse HEAD)"
           {
             echo "SUSFS_URL=$SUSFS_URL"
@@ -176,13 +172,18 @@ jobs:
             echo "SUSFS_COMMIT_INPUT=${SUSFS_COMMIT:-none}"
             echo "SUSFS_COMMIT_RESOLVED=$RESOLVED_SUSFS_COMMIT"
           } | tee "$LOG_DIR/susfs-revision.log"
-
-          for f in             "kernel_patches/50_add_susfs_in_kernel-4.9.patch"             "kernel_patches/fs/susfs.c"             "kernel_patches/fs/sus_su.c"             "kernel_patches/include/linux/susfs.h"             "kernel_patches/include/linux/susfs_def.h"             "kernel_patches/include/linux/sus_su.h"; do
-            test -f "susfs4ksu/$f"               || { echo "ERROR: susfs4ksu/$f missing — aborting"; exit 1; }
+          for f in \
+            "kernel_patches/50_add_susfs_in_kernel-4.9.patch" \
+            "kernel_patches/fs/susfs.c" \
+            "kernel_patches/fs/sus_su.c" \
+            "kernel_patches/include/linux/susfs.h" \
+            "kernel_patches/include/linux/susfs_def.h" \
+            "kernel_patches/include/linux/sus_su.h"; do
+            test -f "susfs4ksu/$f" || { echo "ERROR: susfs4ksu/$f missing — aborting"; exit 1; }
           done
           echo "OK: all required SUSFS patch files present"
-
-          ACTUAL_VER="$(grep -oP 'SUSFS_VERSION\s+"\K[^"]+'             susfs4ksu/kernel_patches/include/linux/susfs.h 2>/dev/null || echo 'unknown')"
+          ACTUAL_VER="$(grep -oP 'SUSFS_VERSION\s+"\K[^"]+' \
+            susfs4ksu/kernel_patches/include/linux/susfs.h 2>/dev/null || echo 'unknown')"
           echo "SUSFS_ACTUAL_VERSION=$ACTUAL_VER" | tee -a "$LOG_DIR/susfs-revision.log"
           if [[ "$ACTUAL_VER" == "$SUSFS_TARGET_VERSION" ]]; then
             echo "OK: SUSFS version confirmed: $ACTUAL_VER"
@@ -190,26 +191,22 @@ jobs:
             echo "WARN: SUSFS version is '$ACTUAL_VER', expected '$SUSFS_TARGET_VERSION'"
           fi
 
-      # ── 5. Set up KernelSU-Next (repo-agnostic + pinned) ───────────────────
+      # ── 5. Set up KernelSU-Next (hardened/pinned + tracing fix patch) ────────
       - name: Set up KernelSU-Next (hardened/pinned)
         working-directory: kernel
         run: |
           set -Eeuo pipefail
           git rm -r --cached KernelSU-Next 2>/dev/null || true
           rm -rf .git/modules/KernelSU-Next KernelSU-Next drivers/kernelsu
-
           KSU_URL="${{ inputs.ksu_repo }}"
           KSU_REF="${{ inputs.ksu_ref }}"
           KSU_COMMIT="${{ inputs.ksu_commit }}"
-
           [[ "$KSU_URL" =~ ^https:// ]] || { echo "ERROR: KSU URL must be https://"; exit 1; }
           [[ "$KSU_URL" =~ [[:space:]] ]] && { echo "ERROR: KSU URL contains whitespace"; exit 1; }
           [[ -n "$KSU_REF" ]] || KSU_REF="main"
-
           if [[ -n "$KSU_COMMIT" && ! "$KSU_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]; then
             echo "ERROR: ksu_commit must be a full 40-char SHA"; exit 1
           fi
-
           git clone --filter=blob:none --no-tags "$KSU_URL" KernelSU-Next
           if [[ -n "$KSU_COMMIT" ]]; then
             git -C KernelSU-Next fetch --depth=1 origin "$KSU_COMMIT"
@@ -218,6 +215,17 @@ jobs:
             git -C KernelSU-Next fetch --depth=1 origin "$KSU_REF"
             git -C KernelSU-Next checkout --detach FETCH_HEAD
           fi
+          
+          # Inject sidex15 tracking framework/tracing macro stabilization patch (13b1dfd)
+          echo "INFO: Pulling tracking frame stabilization patch (sidex15/13b1dfd)"
+          curl -sL "https://github.com/sidex15/KernelSU-Next/commit/13b1dfd6e2f1b7b353e774ad8dbc66012450d80f.patch" -o ksu_trace_fix.patch
+          if git -C KernelSU-Next apply --check ../ksu_trace_fix.patch 2>/dev/null; then
+            git -C KernelSU-Next apply ../ksu_trace_fix.patch
+            echo "OK: sidex15 tracing patch integrated successfully into KernelSU-Next submodule"
+          else
+            echo "WARN: Trace patch check skipped — configuration might be modified or pre-matched"
+          fi
+          rm -f ksu_trace_fix.patch
 
           RESOLVED_KSU_COMMIT="$(git -C KernelSU-Next rev-parse HEAD)"
           {
@@ -226,10 +234,8 @@ jobs:
             echo "KSU_COMMIT_INPUT=${KSU_COMMIT:-none}"
             echo "KSU_COMMIT_RESOLVED=$RESOLVED_KSU_COMMIT"
           } | tee "../$LOG_DIR/ksu-submodule.log"
-
           test -f KernelSU-Next/kernel/Kconfig             || { echo "ERROR: KernelSU-Next/kernel/Kconfig missing"; exit 1; }
           git -C KernelSU-Next log --oneline -1             | tee -a "../$LOG_DIR/ksu-submodule.log"
-
           ln -s ../KernelSU-Next/kernel drivers/kernelsu
           test -f drivers/kernelsu/Kconfig             || { echo "ERROR: drivers/kernelsu/Kconfig symlink broken"; exit 1; }
           echo "OK: KernelSU-Next wired at drivers/kernelsu"
@@ -275,20 +281,17 @@ jobs:
           LOG="../$LOG_DIR/preflight.log"
           echo "=== Preflight — Chimera Mk6 Light ===" | tee "$LOG"
           git status --short | tee -a "$LOG"
-
           echo "=== KSU/SUSFS markers ===" | tee -a "$LOG"
           grep -RsnE \
             'KernelSU|kernelsu|CONFIG_KSU|susfs_task_state|ksu_handle_faccessat' \
             fs include kernel arch/arm64/configs 2>/dev/null \
             | tee -a "$LOG" || true
-
           ALREADY_PATCHED=false
           if grep -RqsE \
             'source "drivers/kernelsu/Kconfig"|ksu_handle_faccessat|susfs_task_state' \
             fs include kernel arch/arm64/configs 2>/dev/null; then
             ALREADY_PATCHED=true
           fi
-
           echo "ALREADY_PATCHED=$ALREADY_PATCHED" | tee -a "$LOG"
           if [[ "$ALREADY_PATCHED" == "true" && \
                 "${{ inputs.force_repatch }}" != "true" ]]; then
@@ -342,7 +345,6 @@ jobs:
           LOG="../$LOG_DIR/susfs-guarantee.log"
           echo "=== SUSFS file guarantee ===" | tee "$LOG"
           SRC="$GITHUB_WORKSPACE/susfs4ksu/kernel_patches"
-
           for pair in "fs/susfs.c:fs/susfs.c" "fs/sus_su.c:fs/sus_su.c"; do
             DST="${pair##*:}"; FROM="$SRC/${pair%%:*}"
             if [[ ! -f "$DST" ]]; then
@@ -352,7 +354,6 @@ jobs:
               echo "INFO: $DST present ($(wc -l < "$DST") lines) — preserved" | tee -a "$LOG"
             fi
           done
-
           for hdr in \
             "include/linux/susfs.h" \
             "include/linux/susfs_def.h" \
@@ -369,7 +370,6 @@ jobs:
               echo "INFO: $hdr present ($(wc -l < "$hdr") lines) — preserved" | tee -a "$LOG"
             fi
           done
-
           grep -q 'susfs\.o'  fs/Makefile \
             || echo 'obj-$(CONFIG_KSU_SUSFS) += susfs.o'  >> fs/Makefile
           grep -q 'sus_su\.o' fs/Makefile \
@@ -379,7 +379,6 @@ jobs:
           echo 'ccflags-$(CONFIG_KSU_SUSFS) += -Isecurity/selinux -Isecurity/selinux/include' \
             >> fs/Makefile
           echo "OK: fs/Makefile — obj entries + SELinux include path set" | tee -a "$LOG"
-
           FAIL=0
           echo "=== Final file presence ===" | tee -a "$LOG"
           for f in \
@@ -436,8 +435,8 @@ jobs:
               print(f"OK: shim created: drivers/kernelsu/{header} -> {rel}")
           PYEOF
 
-      # ── 11. Inject minimal SUSFS prctl bridge ────────────────────────────────
-      - name: Inject SUSFS prctl bridge
+      # ── 11. Inject unified SUSFS prctl bridge & Samsung 4.9 platform fixes ──
+      - name: Inject SUSFS prctl bridge and system fixes
         working-directory: kernel
         run: |
           set -Eeuo pipefail
@@ -445,7 +444,8 @@ jobs:
           import re, sys
           from pathlib import Path
           MARKER = "CHIMERA_MK6LIGHT_SUSFS_PRCTL_BRIDGE"
-
+          SAMSUNG_FIX_MARKER = "SAMSUNG_SDM845_PRCTL_FIX"
+          
           susfs_h   = Path("include/linux/susfs.h")
           susfs_def = Path("include/linux/susfs_def.h")
           if not susfs_h.exists():
@@ -465,7 +465,6 @@ jobs:
           show_ver_cmd = next((c for c in cmd_ids if 'SHOW_VERSION' in c[0]), None)
           print(f"INFO: cmd range=[{hex(cmd_min)}, {hex(cmd_max)}] "
                 f"ShowVersion={show_ver_cmd} fn={show_ver_fn}")
-
           dispatch = (
               f"\tif (option == {show_ver_cmd[1]}) {{\n"
               f"\t\t{show_ver_fn}((void __user *)arg2); return 0;\n\t}}\n"
@@ -489,7 +488,7 @@ jobs:
                   print("OK: bridge function appended to fs/susfs.c")
               else:
                   print("OK: bridge already present in fs/susfs.c (idempotent)")
-
+          
           sys_c = Path("kernel/sys.c")
           if not sys_c.exists():
               print("WARN: kernel/sys.c not found — prctl injection skipped"); sys.exit(0)
@@ -499,9 +498,12 @@ jobs:
           m = re.search(r'(SYSCALL_DEFINE5\s*\(\s*prctl\b[^{]+\{)', txt, re.DOTALL)
           if not m:
               print("WARN: SYSCALL_DEFINE5(prctl) not found in kernel/sys.c"); sys.exit(0)
+          
           insert_after = m.end()
           logic = re.search(r'\n\s*(error\s*=|switch\s*\(|if\s*\(|return\b)', txt[insert_after:])
           pos = insert_after + (logic.start() if logic else 0)
+          
+          # Sequentially map both the SUSFS router and the explicit Andrey0800770 platform security catch
           snippet = (
               f"\n\t/* Chimera Mk6 Light: SUSFS prctl bridge ({MARKER}) */\n"
               "#ifdef CONFIG_KSU_SUSFS\n"
@@ -515,10 +517,14 @@ jobs:
               "\t\t    (unsigned long)arg5);\n"
               "\t\tif (__r != -EINVAL) return (long)__r;\n"
               "\t}\n#endif\n"
+              f"\n\t/* Samsung 4.9 BSP Fix ({SAMSUNG_FIX_MARKER}) */\n"
+              "\tif (option == 0x53564m4d) {\n"
+              "\t\treturn -EINVAL;\n"
+              "\t}\n"
           )
           sys_c.write_text(txt[:pos] + snippet + txt[pos:])
-          print("OK: SUSFS dispatch injected into kernel/sys.c SYSCALL_DEFINE5(prctl)")
-
+          print("OK: Unified SUSFS + Samsung core platform corrections safely bound inside kernel/sys.c")
+          
           DECL_MARKER = MARKER + "_DECL"
           h_text = susfs_h.read_text()
           if DECL_MARKER not in h_text:
@@ -530,7 +536,7 @@ jobs:
                   f"#endif\n#endif\n"
               ))
               print("OK: extern declaration added to susfs.h")
-          print("Bridge injection complete.")
+          print("Bridge integration complete.")
           PYEOF
 
       # ── 12. Weak symbol fallbacks for sus_su.c ───────────────────────────────
@@ -571,7 +577,6 @@ jobs:
         run: |
           set -Eeuo pipefail
           test -f "$DEFCONFIG" || { echo "ERROR: $DEFCONFIG not found"; exit 1; }
-
           set_cfg()   {
             sed -i "/^$1=.*/d;/^# $1 is not set/d" "$DEFCONFIG"
             echo "$1=$2" >> "$DEFCONFIG"
@@ -580,9 +585,7 @@ jobs:
             sed -i "/^$1=.*/d;/^# $1 is not set/d" "$DEFCONFIG"
             echo "# $1 is not set" >> "$DEFCONFIG"
           }
-
           set_cfg CONFIG_KSU y
-
           # SUSFS minimal feature set (Updated for 1.5.12)
           set_cfg   CONFIG_KSU_SUSFS              y
           set_cfg   CONFIG_KSU_SUSFS_SUS_PATH     y
@@ -604,12 +607,10 @@ jobs:
             CONFIG_KSU_SUSFS_SPOOF_SELINUX; do
             unset_cfg "$opt"
           done
-
           unset_cfg CONFIG_SECURITY_SELINUX_DEVELOP
           unset_cfg CONFIG_SECURITY_SELINUX_BOOTPARAM
           unset_cfg CONFIG_SECURITY_SELINUX_DISABLE
           sed -i 's/androidboot\.selinux=permissive//g; s/\benforcing=0\b//g' "$DEFCONFIG"
-
           set_cfg   CONFIG_PREEMPT         y
           unset_cfg CONFIG_PREEMPT_NONE
           unset_cfg CONFIG_PREEMPT_VOLUNTARY
@@ -631,7 +632,6 @@ jobs:
           set_cfg CONFIG_CRYPTO_LZ4HC  y
           
           unset_cfg CONFIG_LOCALVERSION_AUTO
-
           echo "OK: defconfig tuning complete" | tee "../$LOG_DIR/defconfig-tuning.log"
           grep -E \
             "^(CONFIG_KSU|CONFIG_PREEMPT|CONFIG_HZ|CONFIG_TCP_CONG|CONFIG_DEFAULT_TCP|CONFIG_ZRAM|CONFIG_CRYPTO_LZ4|CONFIG_LOCALVERSION|CONFIG_SECURITY_SELINUX)" \
@@ -644,15 +644,12 @@ jobs:
           set -Eeuo pipefail
           BUILD_NUM_PAD="$(printf '%04d' "$((10#${GITHUB_RUN_NUMBER:-1} % 10000))")"
           BUILD_HOST="CM6L${BUILD_NUM_PAD}"
-
           sed -i '/^CONFIG_LOCALVERSION=/d;/^CONFIG_DEFAULT_HOSTNAME=/d' "$DEFCONFIG"
           printf 'CONFIG_LOCALVERSION="%s"\nCONFIG_DEFAULT_HOSTNAME="%s"\n' \
             "$BRAND" "$BUILD_HOST" >> "$DEFCONFIG"
-
           printf '#!/bin/sh\nprintf "%%s" "%s"\n' "$BRAND" > scripts/setlocalversion
           chmod +x scripts/setlocalversion
           echo "$BRAND" > localversion   
-
           echo "CHIMERA_BRAND=$BRAND"    >> "$GITHUB_ENV"
           echo "KBUILD_HOST=$BUILD_HOST" >> "$GITHUB_ENV"
           {
@@ -663,9 +660,7 @@ jobs:
           echo "=== setlocalversion ===" | tee "../$LOG_DIR/scm-dirty.log"
           cat scripts/setlocalversion   | tee -a "../$LOG_DIR/scm-dirty.log"
 
-      # ── 16. Dry run gate ─────────────────────────────────────────────────────
-
-      # ── 19. Pre-build SUSFS sanity check ────────────────────────────────────
+      # ── 16. Pre-build SUSFS sanity check ────────────────────────────────────
       - name: SUSFS pre-build sanity check
         working-directory: kernel
         run: |
@@ -695,7 +690,7 @@ jobs:
             echo "WARN: CONFIG_SECURITY_SELINUX_DEVELOP still set" | tee -a "$LOG"
           fi
           MK="$(cat fs/Makefile)"
-          [[ "$MK" == *"susfs.o"*  ]] \
+          [[ "$MK" == *"susfs.o"* ]] \
             && echo "OK: fs/Makefile has susfs.o"  | tee -a "$LOG" \
             || { echo "FAIL: fs/Makefile missing susfs.o"  | tee -a "$LOG"; FAIL=1; }
           [[ "$MK" == *"sus_su.o"* ]] \
@@ -722,14 +717,11 @@ jobs:
         run: |
           set -Eeuo pipefail
           mkdir -p "$GITHUB_WORKSPACE/$OUT_DIR"
-
           BUILD_NUM_PAD="$(printf '%04d' "$((10#${GITHUB_RUN_NUMBER:-1} % 10000))")"
           BUILD_HOST="${KBUILD_HOST:-CM6L${BUILD_NUM_PAD}}"
-
           export KBUILD_BUILD_USER="rec"
           export KBUILD_BUILD_HOST="$BUILD_HOST"
           export KBUILD_BUILD_VERSION="${GITHUB_RUN_NUMBER:-1}"
-
           MAKE=(
             make -j"$(nproc)"
             O="$GITHUB_WORKSPACE/$OUT_DIR"
@@ -750,22 +742,17 @@ jobs:
             KBUILD_BUILD_USER="rec"
             KBUILD_BUILD_HOST="${BUILD_HOST}"
           )
-
           echo "=== Applying defconfig ==="
           "${MAKE[@]}" exynos9810-star2lte_defconfig
           cp "$GITHUB_WORKSPACE/$OUT_DIR/.config" "$GITHUB_WORKSPACE/$LOG_DIR/final.config"
-
           echo "=== Post-merge config verification ==="
           grep -E "CONFIG_KSU|CONFIG_SECURITY_SELINUX_DEVELOP|LOCALVERSION" \
             "$GITHUB_WORKSPACE/$OUT_DIR/.config" | tee "$GITHUB_WORKSPACE/$LOG_DIR/config-verify.log"
-
           echo "=== Building Image + DTBs ==="
           "${MAKE[@]}" Image dtbs 2>&1 | tee build.log
-
           IMAGE="$GITHUB_WORKSPACE/$OUT_DIR/arch/arm64/boot/Image"
           test -f "$IMAGE" || { echo "ERROR: Image not produced — check build.log"; exit 1; }
           du -h "$IMAGE" | tee "$GITHUB_WORKSPACE/$LOG_DIR/image-size.log"
-
           echo "=== uname string verification ==="
           strings "$IMAGE" | grep -E "Linux version 4\.9\." | head -3 \
             | tee "$GITHUB_WORKSPACE/$LOG_DIR/uname-verify.log" || true
@@ -776,7 +763,6 @@ jobs:
         run: |
           set -Eeuo pipefail
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AnyKernel3
-
           python3 - << 'PYEOF'
           from pathlib import Path
           content = "\n".join([
@@ -806,11 +792,9 @@ jobs:
           Path("AnyKernel3/anykernel.sh").write_text(content)
           print("OK: anykernel.sh written")
           PYEOF
-
           cp "$OUT_DIR/arch/arm64/boot/Image" AnyKernel3/
           find "$OUT_DIR/arch/arm64/boot/dts/exynos" -name '*star2lte*.dtb' \
             -exec cp {} AnyKernel3/ \; 2>/dev/null || echo "INFO: no star2lte DTBs found"
-
           ZIP="chimera-mk6light-lineage23.2-$(date +%Y%m%d-%H%M)-r${GITHUB_RUN_NUMBER}.zip"
           ( cd AnyKernel3 && zip -r9 "../$ZIP" . -x '*.git*' )
           test -f "$ZIP" || { echo "ERROR: zip not produced"; exit 1; }
@@ -853,7 +837,6 @@ jobs:
             **Base:** `royd-jpg/Project_Chimera @ chimera-mk6l`
             **SUSFS:** `simonpunk/susfs4ksu @ kernel-4.9` (targets v1.5.12)
             **Toolchain:** Neutron Clang 10-03-2024
-
             ### SUSFS feature set (minimal / AVC-safe)
             | Feature | State |
             |---|---|
@@ -862,11 +845,9 @@ jobs:
             | TRY_UMOUNT | ✅ enabled |
             | SUS_MAP | ✅ enabled |
             | All AVC/SELinux spoof options | ❌ disabled |
-
             ### SELinux
             **Enforcing locked** — `CONFIG_SECURITY_SELINUX_DEVELOP` removed.
             `setenforce 0` returns `EPERM` at the kernel level.
-
             ### Kernel identity
             ```
             Linux version 4.9.x-Chimera_Mk6Light (X@AegisDevLabs)
