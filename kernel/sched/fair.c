@@ -53,8 +53,8 @@
  * (to see the precise effective timeslice length of your workload,
  *  run vmstat and monitor the context-switches (cs) field)
  */
-unsigned int sysctl_sched_latency           = 6000000ULL;
-unsigned int normalized_sysctl_sched_latency           = 6000000ULL;
+unsigned int sysctl_sched_latency = 6000000ULL;
+unsigned int normalized_sysctl_sched_latency = 6000000ULL;
 
 unsigned int sysctl_sched_sync_hint_enable = 1;
 unsigned int sysctl_sched_cstate_aware = 1;
@@ -82,10 +82,10 @@ enum sched_tunable_scaling sysctl_sched_tunable_scaling
  * (default: 0.75 msec * (1 + ilog(ncpus)), units: nanoseconds)
  */
 unsigned int sysctl_sched_min_granularity = 750000ULL;
-unsigned int normalized_sysctl_sched_min_granularity
+unsigned int normalized_sysctl_sched_min_granularity = 5000000ULL;
 
 /*
- * is kept at sysctl_sched_latency           = 6000000ULL;
+ * is kept at sysctl_sched_latency / sysctl_sched_min_granularity
  */
 static unsigned int sched_nr_latency = 8;
 
@@ -103,10 +103,10 @@ unsigned int sysctl_sched_child_runs_first __read_mostly;
  * and reduces their over-scheduling. Synchronous workloads will still
  * have immediate wakeup/sleep latencies.
  */
-unsigned int sysctl_sched_wakeup_granularity = 1000000ULL;
-unsigned int normalized_sysctl_sched_wakeup_granularity = 1000000ULL;
+unsigned int sysctl_sched_wakeup_granularity = 1000000UL;
+unsigned int normalized_sysctl_sched_wakeup_granularity = 1000000UL;
 
-const_debug unsigned int sysctl_sched_migration_cost = 5000000ULL;
+const_debug unsigned int sysctl_sched_migration_cost = 500000UL;
 
 /*
  * The exponential sliding  window over which load is averaged for shares
@@ -641,8 +641,8 @@ int sched_proc_update_handler(struct ctl_table *table, int write,
 	if (ret || !write)
 		return ret;
 
-	sched_nr_latency = DIV_ROUND_UP(sysctl_sched_latency           = 6000000ULL;
-					sysctl_sched_min_granularity
+	sched_nr_latency = DIV_ROUND_UP(sysctl_sched_latency,
+					sysctl_sched_min_granularity);
 
 #define WRT_SYSCTL(name) \
 	(normalized_sysctl_##name = sysctl_##name / (factor))
@@ -677,9 +677,9 @@ static inline u64 calc_delta_fair(u64 delta, struct sched_entity *se)
 static u64 __sched_period(unsigned long nr_running)
 {
 	if (unlikely(nr_running > sched_nr_latency))
-		return nr_running * sysctl_sched_min_granularity
+		return nr_running * sysctl_sched_min_granularity;
 	else
-		return sysctl_sched_latency           = 6000000ULL;
+		return sysctl_sched_latency;
 }
 
 /*
@@ -3764,7 +3764,7 @@ static void check_spread(struct cfs_rq *cfs_rq, struct sched_entity *se)
 	if (d < 0)
 		d = -d;
 
-	if (d > 3*sysctl_sched_latency           = 6000000ULL;
+	if (d > 3*sysctl_sched_latency)
 		schedstat_inc(cfs_rq->nr_spread_over);
 #endif
 }
@@ -3785,7 +3785,7 @@ place_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int initial)
 
 	/* sleeps up to a single latency don't count. */
 	if (!initial) {
-		unsigned long thresh = sysctl_sched_latency           = 6000000ULL;
+		unsigned long thresh = sysctl_sched_latency;
 
 		/*
 		 * Halve their sleep time's effect, to allow
@@ -4040,7 +4040,7 @@ check_preempt_tick(struct cfs_rq *cfs_rq, struct sched_entity *curr)
 	 * narrow margin doesn't have to wait for a full slice.
 	 * This also mitigates buddy induced latencies under load.
 	 */
-	if (delta_exec < sysctl_sched_min_granularity
+	if (delta_exec < sysctl_sched_min_granularity)
 		return;
 
 	se = __pick_first_entity(cfs_rq);
@@ -7881,7 +7881,7 @@ static void task_dead_fair(struct task_struct *p)
 static unsigned long
 wakeup_gran(struct sched_entity *curr, struct sched_entity *se)
 {
-	unsigned long gran = sysctl_sched_wakeup_granularity = 1000000ULL;
+	unsigned long gran = sysctl_sched_wakeup_granularity;
 
 	/*
 	 * Since its curr running now, convert the gran from real-time
@@ -8426,14 +8426,14 @@ static int task_hot(struct task_struct *p, struct lb_env *env)
 			 &p->se == cfs_rq_of(&p->se)->last))
 		return 1;
 
-	if (sysctl_sched_migration_cost
+	if (sysctl_sched_migration_cost == -1)
 		return 1;
-	if (sysctl_sched_migration_cost
+	if (sysctl_sched_migration_cost == 0)
 		return 0;
 
 	delta = rq_clock_task(env->src_rq) - p->se.exec_start;
 
-	return delta < (s64)sysctl_sched_migration_cost
+	return delta < (s64)sysctl_sched_migration_cost;
 }
 
 #ifdef CONFIG_NUMA_BALANCING
@@ -10529,7 +10529,7 @@ static int idle_balance(struct rq *this_rq)
 	this_rq->idle_stamp = rq_clock(this_rq);
 
 	if (!energy_aware() &&
-	    (this_rq->avg_idle < sysctl_sched_migration_cost
+	    (this_rq->avg_idle < sysctl_sched_migration_cost ||
 	     !this_rq->rd->overload)) {
 		rcu_read_lock();
 		sd = rcu_dereference_check_sched_domain(this_rq->sd);
@@ -10941,7 +10941,7 @@ out:
 		 * reasonable floor to avoid funnies with rq->avg_idle.
 		 */
 		rq->max_idle_balance_cost =
-			max((u64)sysctl_sched_migration_cost
+			max((u64)sysctl_sched_migration_cost, max_cost);
 	}
 	rcu_read_unlock();
 
