@@ -1,0 +1,255 @@
+[33mcommit 52daab9671852a1ef7636e4457140b96e1948512[m
+Author: royd-jpg <chan.royd@gmail.com>
+Date:   Thu May 21 07:30:00 2026 +0800
+
+    feat(power/bt): implement Aegis-Tuned -50mV limit, BT hardening, and star2lte branding
+
+[1mdiff --git a/arch/arm64/boot/dts/exynos/exynos9810-crownlte_eur_open_26.dts b/arch/arm64/boot/dts/exynos/exynos9810-crownlte_eur_open_26.dts[m
+[1mindex ac0b66e85da8..f127bb0e9434 100644[m
+[1m--- a/arch/arm64/boot/dts/exynos/exynos9810-crownlte_eur_open_26.dts[m
+[1m+++ b/arch/arm64/boot/dts/exynos/exynos9810-crownlte_eur_open_26.dts[m
+[36m@@ -6538,8 +6538,8 @@[m
+ [m
+ 				s2mpb02-buck1 {[m
+ 					regulator-name = "VDD_EXT_1P3_PB03";[m
+[31m-					regulator-min-microvolt = <1300000>;[m
+[31m-					regulator-max-microvolt = <1300000>;[m
+[32m+[m					[32mregulator-min-microvolt = <1250000>;[m
+[32m+[m					[32mregulator-max-microvolt = <1250000>;[m
+ 					regulator-always-on;[m
+ 					regulator-boot-on;[m
+ 					linux,phandle = <575>;[m
+[36m@@ -6548,8 +6548,8 @@[m
+ [m
+ 				s2mpb02-buck2 {[m
+ 					regulator-name = "VDD_EXT_1P3_PB02";[m
+[31m-					regulator-min-microvolt = <1300000>;[m
+[31m-					regulator-max-microvolt = <1300000>;[m
+[32m+[m					[32mregulator-min-microvolt = <1250000>;[m
+[32m+[m					[32mregulator-max-microvolt = <1250000>;[m
+ 					linux,phandle = <576>;[m
+ 					phandle = <576>;[m
+ 				};[m
+[36m@@ -8795,7 +8795,7 @@[m
+ 				BUCK2 {[m
+ 					regulator-name = "vdd_cpucl1";[m
+ 					regulator-min-microvolt = <450000>;[m
+[31m-					regulator-max-microvolt = <1300000>;[m
+[32m+[m					[32mregulator-max-microvolt = <1250000>;[m
+ 					regulator-always-on;[m
+ 					regulator-ramp-delay = <6000>;[m
+ 					regulator-initial-mode = <1>;[m
+[36m@@ -8806,7 +8806,7 @@[m
+ 				BUCK3 {[m
+ 					regulator-name = "vdd_cpucl0";[m
+ 					regulator-min-microvolt = <450000>;[m
+[31m-					regulator-max-microvolt = <1300000>;[m
+[32m+[m					[32mregulator-max-microvolt = <1250000>;[m
+ 					regulator-always-on;[m
+ 					regulator-ramp-delay = <6000>;[m
+ 					regulator-initial-mode = <1>;[m
+[36m@@ -8850,7 +8850,7 @@[m
+ 				BUCK7 {[m
+ 					regulator-name = "vdd_cpucl1_m";[m
+ 					regulator-min-microvolt = <450000>;[m
+[31m-					regulator-max-microvolt = <1300000>;[m
+[32m+[m					[32mregulator-max-microvolt = <1250000>;[m
+ 					regulator-always-on;[m
+ 					regulator-ramp-delay = <6000>;[m
+ 					regulator-initial-mode = <1>;[m
+[36m@@ -8861,7 +8861,7 @@[m
+ 				BUCK8 {[m
+ 					regulator-name = "vdd2_mem";[m
+ 					regulator-min-microvolt = <900000>;[m
+[31m-					regulator-max-microvolt = <1300000>;[m
+[32m+[m					[32mregulator-max-microvolt = <1250000>;[m
+ 					regulator-always-on;[m
+ 					regulator-ramp-delay = <6000>;[m
+ 					regulator-initial-mode = <3>;[m
+[36m@@ -8894,7 +8894,7 @@[m
+ 				BUCK11 {[m
+ 					regulator-name = "vdd_lldo2";[m
+ 					regulator-min-microvolt = <900000>;[m
+[31m-					regulator-max-microvolt = <1300000>;[m
+[32m+[m					[32mregulator-max-microvolt = <1250000>;[m
+ 					regulator-always-on;[m
+ 					regulator-ramp-delay = <6000>;[m
+ 					regulator-initial-mode = <3>;[m
+[36m@@ -9002,7 +9002,7 @@[m
+ 				LDO8 {[m
+ 					regulator-name = "vdd_ldo8";[m
+ 					regulator-min-microvolt = <700000>;[m
+[31m-					regulator-max-microvolt = <1300000>;[m
+[32m+[m					[32mregulator-max-microvolt = <1250000>;[m
+ 					regulator-always-on;[m
+ 					regulator-ramp-delay = <12000>;[m
+ 					regulator-initial-mode = <1>;[m
+[1mdiff --git a/arch/arm64/boot/dts/exynos/exynos9810-star2lte_eur_open_26.dts b/arch/arm64/boot/dts/exynos/exynos9810-star2lte_eur_open_26.dts[m
+[1mindex 84ba6de51a2f..dbc6a23979f4 100644[m
+[1m--- a/arch/arm64/boot/dts/exynos/exynos9810-star2lte_eur_open_26.dts[m
+[1m+++ b/arch/arm64/boot/dts/exynos/exynos9810-star2lte_eur_open_26.dts[m
+[36m@@ -5,7 +5,7 @@[m
+ 	interrupt-parent = <1>;[m
+ 	#address-cells = <2>;[m
+ 	#size-cells = <1>;[m
+[31m-	model = "Samsung Star2 rev26 board based on EXYNOS9810";[m
+[32m+[m	[32mmodel = "Samsung Galaxy S9+ (Aegis-Tuned) Star2 rev26 board based on EXYNOS9810";[m
+ 	model_info-chip = <9810>;[m
+ 	model_info-platform = "android";[m
+ 	model_info-subtype = "samsung";[m
+[36m@@ -6500,8 +6500,8 @@[m
+ [m
+ 				s2mpb02-buck1 {[m
+ 					regulator-name = "VDD_EXT_1P3_PB03";[m
+[31m-					regulator-min-microvolt = <1300000>;[m
+[31m-					regulator-max-microvolt = <1300000>;[m
+[32m+[m					[32mregulator-min-microvolt = <1250000>;[m
+[32m+[m					[32mregulator-max-microvolt = <1250000>;[m
+ 					regulator-always-on;[m
+ 					regulator-boot-on;[m
+ 					linux,phandle = <573>;[m
+[36m@@ -6510,8 +6510,8 @@[m
+ [m
+ 				s2mpb02-buck2 {[m
+ 					regulator-name = "VDD_EXT_1P3_PB02";[m
+[31m-					regulator-min-microvolt = <1300000>;[m
+[31m-					regulator-max-microvolt = <1300000>;[m
+[32m+[m					[32mregulator-min-microvolt = <1250000>;[m
+[32m+[m					[32mregulator-max-microvolt = <1250000>;[m
+ 					linux,phandle = <574>;[m
+ 					phandle = <574>;[m
+ 				};[m
+[36m@@ -8735,7 +8735,7 @@[m
+ 				BUCK2 {[m
+ 					regulator-name = "vdd_cpucl1";[m
+ 					regulator-min-microvolt = <450000>;[m
+[31m-					regulator-max-microvolt = <1300000>;[m
+[32m+[m					[32mregulator-max-microvolt = <1250000>;[m
+ 					regulator-always-on;[m
+ 					regulator-ramp-delay = <6000>;[m
+ 					regulator-initial-mode = <1>;[m
+[36m@@ -8746,7 +8746,7 @@[m
+ 				BUCK3 {[m
+ 					regulator-name = "vdd_cpucl0";[m
+ 					regulator-min-microvolt = <450000>;[m
+[31m-					regulator-max-microvolt = <1300000>;[m
+[32m+[m					[32mregulator-max-microvolt = <1250000>;[m
+ 					regulator-always-on;[m
+ 					regulator-ramp-delay = <6000>;[m
+ 					regulator-initial-mode = <1>;[m
+[36m@@ -8790,7 +8790,7 @@[m
+ 				BUCK7 {[m
+ 					regulator-name = "vdd_cpucl1_m";[m
+ 					regulator-min-microvolt = <450000>;[m
+[31m-					regulator-max-microvolt = <1300000>;[m
+[32m+[m					[32mregulator-max-microvolt = <1250000>;[m
+ 					regulator-always-on;[m
+ 					regulator-ramp-delay = <6000>;[m
+ 					regulator-initial-mode = <1>;[m
+[36m@@ -8801,7 +8801,7 @@[m
+ 				BUCK8 {[m
+ 					regulator-name = "vdd2_mem";[m
+ 					regulator-min-microvolt = <900000>;[m
+[31m-					regulator-max-microvolt = <1300000>;[m
+[32m+[m					[32mregulator-max-microvolt = <1250000>;[m
+ 					regulator-always-on;[m
+ 					regulator-ramp-delay = <6000>;[m
+ 					regulator-initial-mode = <3>;[m
+[36m@@ -8834,7 +8834,7 @@[m
+ 				BUCK11 {[m
+ 					regulator-name = "vdd_lldo2";[m
+ 					regulator-min-microvolt = <900000>;[m
+[31m-					regulator-max-microvolt = <1300000>;[m
+[32m+[m					[32mregulator-max-microvolt = <1250000>;[m
+ 					regulator-always-on;[m
+ 					regulator-ramp-delay = <6000>;[m
+ 					regulator-initial-mode = <3>;[m
+[36m@@ -8942,7 +8942,7 @@[m
+ 				LDO8 {[m
+ 					regulator-name = "vdd_ldo8";[m
+ 					regulator-min-microvolt = <700000>;[m
+[31m-					regulator-max-microvolt = <1300000>;[m
+[32m+[m					[32mregulator-max-microvolt = <1250000>;[m
+ 					regulator-always-on;[m
+ 					regulator-ramp-delay = <12000>;[m
+ 					regulator-initial-mode = <1>;[m
+[1mdiff --git a/arch/arm64/boot/dts/exynos/exynos9810-starlte_eur_open_26.dts b/arch/arm64/boot/dts/exynos/exynos9810-starlte_eur_open_26.dts[m
+[1mindex 2cdbd815d6bd..f09f3e15bd5c 100644[m
+[1m--- a/arch/arm64/boot/dts/exynos/exynos9810-starlte_eur_open_26.dts[m
+[1m+++ b/arch/arm64/boot/dts/exynos/exynos9810-starlte_eur_open_26.dts[m
+[36m@@ -6556,8 +6556,8 @@[m
+ [m
+ 				s2mpb02-buck1 {[m
+ 					regulator-name = "VDD_EXT_1P3_PB03";[m
+[31m-					regulator-min-microvolt = <1300000>;[m
+[31m-					regulator-max-microvolt = <1300000>;[m
+[32m+[m					[32mregulator-min-microvolt = <1250000>;[m
+[32m+[m					[32mregulator-max-microvolt = <1250000>;[m
+ 					regulator-always-on;[m
+ 					regulator-boot-on;[m
+ 					linux,phandle = <572>;[m
+[36m@@ -6566,8 +6566,8 @@[m
+ [m
+ 				s2mpb02-buck2 {[m
+ 					regulator-name = "VDD_EXT_1P3_PB02";[m
+[31m-					regulator-min-microvolt = <1300000>;[m
+[31m-					regulator-max-microvolt = <1300000>;[m
+[32m+[m					[32mregulator-min-microvolt = <1250000>;[m
+[32m+[m					[32mregulator-max-microvolt = <1250000>;[m
+ 					linux,phandle = <573>;[m
+ 					phandle = <573>;[m
+ 				};[m
+[36m@@ -8791,7 +8791,7 @@[m
+ 				BUCK2 {[m
+ 					regulator-name = "vdd_cpucl1";[m
+ 					regulator-min-microvolt = <450000>;[m
+[31m-					regulator-max-microvolt = <1300000>;[m
+[32m+[m					[32mregulator-max-microvolt = <1250000>;[m
+ 					regulator-always-on;[m
+ 					regulator-ramp-delay = <6000>;[m
+ 					regulator-initial-mode = <1>;[m
+[36m@@ -8802,7 +8802,7 @@[m
+ 				BUCK3 {[m
+ 					regulator-name = "vdd_cpucl0";[m
+ 					regulator-min-microvolt = <450000>;[m
+[31m-					regulator-max-microvolt = <1300000>;[m
+[32m+[m					[32mregulator-max-microvolt = <1250000>;[m
+ 					regulator-always-on;[m
+ 					regulator-ramp-delay = <6000>;[m
+ 					regulator-initial-mode = <1>;[m
+[36m@@ -8846,7 +8846,7 @@[m
+ 				BUCK7 {[m
+ 					regulator-name = "vdd_cpucl1_m";[m
+ 					regulator-min-microvolt = <450000>;[m
+[31m-					regulator-max-microvolt = <1300000>;[m
+[32m+[m					[32mregulator-max-microvolt = <1250000>;[m
+ 					regulator-always-on;[m
+ 					regulator-ramp-delay = <6000>;[m
+ 					regulator-initial-mode = <1>;[m
+[36m@@ -8857,7 +8857,7 @@[m
+ 				BUCK8 {[m
+ 					regulator-name = "vdd2_mem";[m
+ 					regulator-min-microvolt = <900000>;[m
+[31m-					regulator-max-microvolt = <1300000>;[m
+[32m+[m					[32mregulator-max-microvolt = <1250000>;[m
+ 					regulator-always-on;[m
+ 					regulator-ramp-delay = <6000>;[m
+ 					regulator-initial-mode = <3>;[m
+[36m@@ -8890,7 +8890,7 @@[m
+ 				BUCK11 {[m
+ 					regulator-name = "vdd_lldo2";[m
+ 					regulator-min-microvolt = <900000>;[m
+[31m-					regulator-max-microvolt = <1300000>;[m
+[32m+[m					[32mregulator-max-microvolt = <1250000>;[m
+ 					regulator-always-on;[m
+ 					regulator-ramp-delay = <6000>;[m
+ 					regulator-initial-mode = <3>;[m
+[36m@@ -8998,7 +8998,7 @@[m
+ 				LDO8 {[m
+ 					regulator-name = "vdd_ldo8";[m
+ 					regulator-min-microvolt = <700000>;[m
+[31m-					regulator-max-microvolt = <1300000>;[m
+[32m+[m					[32mregulator-max-microvolt = <1250000>;[m
+ 					regulator-always-on;[m
+ 					regulator-ramp-delay = <12000>;[m
+ 					regulator-initial-mode = <1>;[m
