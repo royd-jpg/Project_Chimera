@@ -427,9 +427,9 @@ jobs:
 
           mkdir -p include/kernelsu
 
-          # Search for the real files in the KernelSU-Next directory
-          CORE_SRC="$(find ../KernelSU-Next -type f -name core_hook.h | head -n1 || true)"
-          KCOMP_SRC="$(find ../KernelSU-Next -type f -name kernel_compat.h | head -n1 || true)"
+          # Search for the real files in the local KernelSU-Next directory
+          CORE_SRC="$(find KernelSU-Next -type f -name core_hook.h | head -n1 || true)"
+          KCOMP_SRC="$(find KernelSU-Next -type f -name kernel_compat.h | head -n1 || true)"
 
           # Copy core_hook.h or create a blank fallback
           if [[ -n "$CORE_SRC" ]]; then
