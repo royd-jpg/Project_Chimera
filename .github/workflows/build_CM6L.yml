@@ -272,6 +272,51 @@ jobs:
               shim.write_text(f"/* Chimera Mk6 Light: kernel_compat.h shim */\n#include \"{rel.as_posix()}\"\n")  
           PYEOF  
 
+      # ── 10b. Create core_hook.h shim ───────────────────────────────────────
+      # SUSFS expects drivers/kernelsu/core_hook.h but newer KernelSU-Next
+      # trees may place it in subdirectories. Create a forwarding shim.
+      - name: Create core_hook.h shim
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          python3 - << 'PYEOF'
+          from pathlib import Path
+
+          base = Path("drivers/kernelsu")
+          shim = base / "core_hook.h"
+
+          candidates = [
+              base / "core/core_hook.h",
+              base / "hook/core_hook.h",
+              base / "include/core_hook.h",
+          ]
+
+          target = next((c for c in candidates if c.exists()), None)
+
+          if target is None:
+              hits = sorted(base.rglob("core_hook.h")) if base.exists() else []
+              target = hits[0] if hits else None
+
+          if target is None:
+              print("WARN: core_hook.h not found anywhere in KernelSU-Next")
+              raise SystemExit(0)
+
+          rel = target.relative_to(base)
+
+          if shim.exists():
+              txt = shim.read_text(errors="ignore")
+              if rel.as_posix() in txt:
+                  print(f"OK: core_hook.h shim already points to {rel}")
+                  raise SystemExit(0)
+
+          shim.write_text(
+              "/* Chimera Mk6 Light core_hook.h shim */\n"
+              f'#include "{rel.as_posix()}"\n'
+          )
+
+          print(f"OK: shim created: drivers/kernelsu/core_hook.h -> {rel}")
+          PYEOF
+
       # ── 11. Inject minimal SUSFS prctl bridge ────────────────────────────────  
       - name: Inject SUSFS prctl bridge  
         working-directory: kernel  
