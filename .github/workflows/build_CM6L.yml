@@ -444,16 +444,23 @@ jobs:
 
             if [[ -z "$src" ]]; then
               echo "WARN: $name not found"
+
               printf '%s\n' \
                 '#pragma once' \
                 "/* Auto-generated fallback for $name */" \
                 > "include/kernelsu/$name"
+
               return 0
             fi
 
             cp "$src" "include/kernelsu/$name"
-            sed -i '/drivers\/kernelsu/d' "include/kernelsu/$name"
-            sed -i '/<kernelsu\//d' "include/kernelsu/$name"
+
+            sed -i '/drivers\/kernelsu/d' \
+              "include/kernelsu/$name"
+
+            sed -i '/<kernelsu\//d' \
+              "include/kernelsu/$name"
+
             echo "OK: exported $name"
           }
 
@@ -477,24 +484,28 @@ jobs:
             '#include <linux/cred.h>' \
             '#include <linux/sched.h>' \
             '#include <linux/uaccess.h>' \
+            '' \
+            'extern const struct cred *ksu_cred;' \
             > include/kernelsu/ksu.h
 
           echo "OK: kernel-safe include/kernelsu/ksu.h installed"
 
-      # ── 9e. Inject global KernelSU include paths ───────────────────────────
-      - name: Inject global include paths
+      # ── 9e. Add KernelSU cred declaration to shared headers ────────────────
+      - name: Add KernelSU cred declaration
         working-directory: kernel
         run: |
           set -Eeuo pipefail
 
-          if ! grep -q 'include/kernelsu' Makefile; then
-            printf '%s\n' \
-              'KBUILD_CFLAGS += -I$(srctree)/include' \
-              'KBUILD_CFLAGS += -I$(srctree)/include/kernelsu' \
-              >> Makefile
-          fi
+          for hdr in \
+            include/kernelsu/core_hook.h \
+            include/kernelsu/kernel_compat.h; do
 
-          echo "OK: global KernelSU include paths injected"
+            if [[ -f "$hdr" ]] && ! grep -q 'ksu_cred' "$hdr"; then
+              printf '\nextern const struct cred *ksu_cred;\n' >> "$hdr"
+              echo "OK: added ksu_cred declaration to $hdr"
+            fi
+
+          done
 
       # ── 9f. Validate exported KernelSU headers ─────────────────────────────
       - name: Validate KernelSU headers
