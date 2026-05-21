@@ -126,8 +126,7 @@ jobs:
 
           ACTUAL_VER="$(grep -oP 'SUSFS_VERSION\s+"\K[^"]+' \  
             susfs4ksu/kernel_patches/include/linux/susfs.h 2>/dev/null || echo 'unknown')"  
-          echo "SUSFS_ACTUAL_VERSION=$ACTUAL_VER" | tee -a "$LOG_DIR/susfs-revision.log"  
-          if [[ "$ACTUAL_VER" == "$SUSFS_TARGET_VERSION" ]]; then  
+          echo "SUSFS_ACTUAL_VERSION=$ACTUAL_VER" | tee -a "$LOG_DIR/susfs-revision.log"  if [[ "$ACTUAL_VER" == "$SUSFS_TARGET_VERSION" ]]; then  
             echo "OK: SUSFS version confirmed: $ACTUAL_VER"  
           else  
             echo "WARN: SUSFS version is '$ACTUAL_VER', expected '$SUSFS_TARGET_VERSION'"  
@@ -304,27 +303,34 @@ jobs:
           if susfs_c.exists() and MARKER not in susfs_c.read_text():  
               susfs_c.write_text(susfs_c.read_text() + bridge)  
           
-          # Inject kernel/sys.c
+          # Inject kernel/sys.c safely after local declarations (C89 Compliance)
           sys_c = Path("kernel/sys.c")  
           if not sys_c.exists(): sys.exit(0)  
           txt = sys_c.read_text(errors='replace')  
           if MARKER in txt: sys.exit(0)  
           
-          m = re.search(r'(SYSCALL_DEFINE5\s*\(\s*prctl\b[^{]+\{)', txt, re.DOTALL)  
+          m = re.search(r'SYSCALL_DEFINE5\s*\(\s*prctl\b[^{]+\{', txt, re.DOTALL)  
           if not m: sys.exit(0)  
           
-          insert_after = m.end()  
+          m_switch = re.search(r'switch\s*\(\s*option\s*\)', txt[m.end():])  
+          if not m_switch: sys.exit(0)  
+          
+          insert_pos = m.end() + m_switch.start()  
+          
           prctl_hook = (  
-              f"\n\t/* Chimera Mk6 Light SUSFS bridge ({MARKER}) */\n"  
+              f"\t/* Chimera Mk6 Light SUSFS bridge ({MARKER}) */\n"  
               f"\t#ifdef CONFIG_KSU_SUSFS\n"  
-              f"\textern int ksu_susfs_handle_prctl(unsigned long, unsigned long, unsigned long, unsigned long, unsigned long);\n"  
-              f"\tif (option >= {hex(cmd_min)} && option <= {hex(cmd_max)}) {{\n"  
-              f"\t\tint ksu_ret = ksu_susfs_handle_prctl(option, arg2, arg3, arg4, arg5);\n"  
-              f"\t\tif (ksu_ret == 0) return 0;\n"  
-              f"\t}}\n\t#endif\n"  
+              f"\t{{\n"  
+              f"\t\textern int ksu_susfs_handle_prctl(unsigned long, unsigned long, unsigned long, unsigned long, unsigned long);\n"  
+              f"\t\tif (option >= {hex(cmd_min)} && option <= {hex(cmd_max)}) {{\n"  
+              f"\t\t\tint ksu_ret = ksu_susfs_handle_prctl(option, arg2, arg3, arg4, arg5);\n"  
+              f"\t\t\tif (ksu_ret == 0) return 0;\n"  
+              f"\t\t}}\n"  
+              f"\t}}\n"  
+              f"\t#endif\n\t"  
           )  
-          sys_c.write_text(txt[:insert_after] + prctl_hook + txt[insert_after:])  
-          print("OK: prctl dispatch injected securely into kernel/sys.c")  
+          sys_c.write_text(txt[:insert_pos] + prctl_hook + txt[insert_pos:])  
+          print("OK: prctl dispatch injected securely before switch block")  
           PYEOF  
 
       # ── 12. Pre-Compile Stealth Configuration ────────────────────────────────
@@ -332,9 +338,9 @@ jobs:
         if: ${{ inputs.dry_run == false }}
         working-directory: kernel
         run: |
-          set -Eeuo pipefail
+          set -Eeuo pipefail  
           # Enforce lightweight stealth profile directly in defconfig
-          cat << 'EOF' >> ${{ env.DEFCONFIG }}
+          cat << 'EOF' >> "$DEFCONFIG"
           CONFIG_KSU=y
           CONFIG_KSU_NEXT=y
           CONFIG_KSU_SUSFS=y
@@ -344,6 +350,9 @@ jobs:
           # CONFIG_SUSFS_SUS_MOUNT is not set
           # CONFIG_SUSFS_SPOOF_SELINUX is not set
           # CONFIG_SUSFS_SPOOF_UNAME is not set
+          # Hard Lock SELinux Security Framework
+          # CONFIG_SECURITY_SELINUX_DEVELOP is not set
+          # CONFIG_SECURITY_SELINUX_BOOTPARAM is not set
           EOF
           
       # ── 13. Compile the Kernel ───────────────────────────────────────────────
@@ -351,20 +360,30 @@ jobs:
         if: ${{ inputs.dry_run == false }}
         working-directory: kernel
         run: |
-          set -Eeuo pipefail
+          set -Eeuo pipefail  
           export ARCH=arm64
           export SUBARCH=arm64
           export PATH="$GITHUB_WORKSPACE/neutron-clang/bin:$PATH"
           export CROSS_COMPILE="aarch64-linux-gnu-"
           export CROSS_COMPILE_ARM32="arm-linux-gnueabi-"
           export CC="clang"
-          
-          # Maintain legacy compiler fallback safety for Samsung 4.9
           export KCFLAGS="-fcommon"
           
           make O=../$OUT_DIR clean
-          make O=../$OUT_DIR ${DEFCONFIG##*/}
+          
+          echo "=== Applying Defconfig with Cross-Compiler Variables ==="
+          make O=../$OUT_DIR \
+               ARCH=arm64 \
+               SUBARCH=arm64 \
+               CC="clang" \
+               CROSS_COMPILE="aarch64-linux-gnu-" \
+               CROSS_COMPILE_ARM32="arm-linux-gnueabi-" \
+               ${DEFCONFIG##*/}
+               
+          echo "=== Starting Kernel Compilation ==="
           make O=../$OUT_DIR -j$(nproc --all) \
+               ARCH=arm64 \
+               SUBARCH=arm64 \
                CC="clang" \
                CROSS_COMPILE="aarch64-linux-gnu-" \
                CROSS_COMPILE_ARM32="arm-linux-gnueabi-"
@@ -373,17 +392,21 @@ jobs:
       - name: Package with AnyKernel3
         if: ${{ inputs.dry_run == false }}
         run: |
-          set -Eeuo pipefail
+          set -Eeuo pipefail  
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel
           
           # Transfer the raw boot image payload
           cp $OUT_DIR/arch/arm64/boot/Image.gz-dtb AnyKernel/Image.gz-dtb
           
-          # Adjust AnyKernel3 variables for Samsung S9+ Exynos9810
+          # Adjust AnyKernel3 variables for Samsung S9+ Exynos9810 (Raw Target Configuration)
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel/anykernel.sh
-          sed -i 's|block=/dev/block/bootdevice/by-name/boot;|block=/dev/block/platform/11120000.ufs/by-name/BOOT;|g' AnyKernel/anykernel.sh
+          sed -i 's|^block=.*|block=/dev/block/platform/11120000.ufs/by-name/boot;|g' AnyKernel/anykernel.sh
           sed -i 's/is_slot_device=0;/is_slot_device=0;/g' AnyKernel/anykernel.sh
           sed -i 's/keep_fragments=false/keep_fragments=true/g' AnyKernel/anykernel.sh
+          
+          # Force AnyKernel3 into Split/Raw flashing execution mode for Samsung ramdisk handling
+          sed -i 's/dump_boot;/split_boot;/g' AnyKernel/anykernel.sh
+          sed -i 's/write_boot;/flash_boot;/g' AnyKernel/anykernel.sh
           
           cd AnyKernel
           zip -r9 ../Chimera-Stealth-star2lte${BRAND}.zip *
