@@ -395,6 +395,46 @@ jobs:
           [[ "$FAIL" -eq 0 ]] \
             || { echo "ERROR: missing SUSFS files — aborting before build"; exit 1; }
 
+      # ── 9b. Fix SUSFS include paths ──────────────────────────────────────────
+      - name: Fix SUSFS include paths
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          
+          # 1. Fix the fragile relative paths in the C headers
+          sed -i \
+            's|#include "../../drivers/kernelsu/core_hook.h"|#include <kernelsu/core_hook.h>|g' \
+            include/linux/sus_su.h
+            
+          sed -i \
+            's|#include "../../drivers/kernelsu/kernel_compat.h"|#include <kernelsu/kernel_compat.h>|g' \
+            include/linux/susfs.h || true
+            
+          # 2. Add the proper include directories to the Makefile
+          sed -i '/ccflags-.*CONFIG_KSU_SUSFS/d' fs/Makefile
+          echo 'ccflags-$(CONFIG_KSU_SUSFS) += -Isecurity/selinux -Isecurity/selinux/include -Iinclude -Iinclude/kernelsu' \
+            >> fs/Makefile
+            
+          echo "OK: SUSFS include paths normalized"
+
+      # ── 9c. Export KernelSU public headers ──────────────────────────────────
+      - name: Export KernelSU public headers
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          
+          mkdir -p include/kernelsu
+          
+          for hdr in core_hook.h kernel_compat.h; do
+            FOUND="$(find drivers/kernelsu -name "$hdr" | head -n1 || true)"
+            if [[ -n "$FOUND" ]]; then
+              ln -sf "../../$FOUND" "include/kernelsu/$hdr"
+              echo "OK: exported $hdr"
+            else
+              echo "WARN: $hdr not found"
+            fi
+          done
+
       # ── 10. KernelSU-Next header shims ───────────────────────────────────────
       - name: Create KernelSU header shims
         working-directory: kernel
