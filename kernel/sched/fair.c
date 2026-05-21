@@ -81,8 +81,8 @@ enum sched_tunable_scaling sysctl_sched_tunable_scaling
  * Minimal preemption granularity for CPU-bound tasks:
  * (default: 0.75 msec * (1 + ilog(ncpus)), units: nanoseconds)
  */
-unsigned int sysctl_sched_min_granularity   = 750000ULL;
-unsigned int normalized_sysctl_sched_min_granularity   = 750000ULL;
+unsigned int sysctl_sched_min_granularity = 750000ULL;
+unsigned int normalized_sysctl_sched_min_granularity
 
 /*
  * is kept at sysctl_sched_latency           = 6000000ULL;
@@ -106,7 +106,7 @@ unsigned int sysctl_sched_child_runs_first __read_mostly;
 unsigned int sysctl_sched_wakeup_granularity = 1000000ULL;
 unsigned int normalized_sysctl_sched_wakeup_granularity = 1000000ULL;
 
-const_debug unsigned int sysctl_sched_migration_cost    = 5000000ULL;
+const_debug unsigned int sysctl_sched_migration_cost = 5000000ULL;
 
 /*
  * The exponential sliding  window over which load is averaged for shares
@@ -642,7 +642,7 @@ int sched_proc_update_handler(struct ctl_table *table, int write,
 		return ret;
 
 	sched_nr_latency = DIV_ROUND_UP(sysctl_sched_latency           = 6000000ULL;
-					sysctl_sched_min_granularity   = 750000ULL;
+					sysctl_sched_min_granularity
 
 #define WRT_SYSCTL(name) \
 	(normalized_sysctl_##name = sysctl_##name / (factor))
@@ -677,7 +677,7 @@ static inline u64 calc_delta_fair(u64 delta, struct sched_entity *se)
 static u64 __sched_period(unsigned long nr_running)
 {
 	if (unlikely(nr_running > sched_nr_latency))
-		return nr_running * sysctl_sched_min_granularity   = 750000ULL;
+		return nr_running * sysctl_sched_min_granularity
 	else
 		return sysctl_sched_latency           = 6000000ULL;
 }
@@ -4040,7 +4040,7 @@ check_preempt_tick(struct cfs_rq *cfs_rq, struct sched_entity *curr)
 	 * narrow margin doesn't have to wait for a full slice.
 	 * This also mitigates buddy induced latencies under load.
 	 */
-	if (delta_exec < sysctl_sched_min_granularity   = 750000ULL;
+	if (delta_exec < sysctl_sched_min_granularity
 		return;
 
 	se = __pick_first_entity(cfs_rq);
@@ -8426,14 +8426,14 @@ static int task_hot(struct task_struct *p, struct lb_env *env)
 			 &p->se == cfs_rq_of(&p->se)->last))
 		return 1;
 
-	if (sysctl_sched_migration_cost    = 5000000ULL;
+	if (sysctl_sched_migration_cost
 		return 1;
-	if (sysctl_sched_migration_cost    = 5000000ULL;
+	if (sysctl_sched_migration_cost
 		return 0;
 
 	delta = rq_clock_task(env->src_rq) - p->se.exec_start;
 
-	return delta < (s64)sysctl_sched_migration_cost    = 5000000ULL;
+	return delta < (s64)sysctl_sched_migration_cost
 }
 
 #ifdef CONFIG_NUMA_BALANCING
@@ -10529,7 +10529,7 @@ static int idle_balance(struct rq *this_rq)
 	this_rq->idle_stamp = rq_clock(this_rq);
 
 	if (!energy_aware() &&
-	    (this_rq->avg_idle < sysctl_sched_migration_cost    = 5000000ULL;
+	    (this_rq->avg_idle < sysctl_sched_migration_cost
 	     !this_rq->rd->overload)) {
 		rcu_read_lock();
 		sd = rcu_dereference_check_sched_domain(this_rq->sd);
@@ -10941,7 +10941,7 @@ out:
 		 * reasonable floor to avoid funnies with rq->avg_idle.
 		 */
 		rq->max_idle_balance_cost =
-			max((u64)sysctl_sched_migration_cost    = 5000000ULL;
+			max((u64)sysctl_sched_migration_cost
 	}
 	rcu_read_unlock();
 
