@@ -1,4 +1,4 @@
-name: Commit Chimera Mk6 Light Tuning
+name: Commit Chimera Mk6 Light Kernel Tuning
 
 on:
   workflow_dispatch:
@@ -7,20 +7,11 @@ permissions:
   contents: write
 
 jobs:
-  tuning:
-    name: Apply Kernel Tuning
+  commit-tuning:
     runs-on: ubuntu-24.04
 
-    defaults:
-      run:
-        shell: bash
-
-    env:
-      REPO_URL: https://github.com/royd-jpg/Project_Chimera
-      BRANCH: chimera-mk6l
-
     steps:
-      - name: Checkout repository
+      - name: Checkout chimera-mk6l
         uses: actions/checkout@v4
         with:
           repository: royd-jpg/Project_Chimera
@@ -28,186 +19,154 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Configure git
+      - name: Show tree info
+        run: |
+          pwd
+          ls drivers/cpufreq | head -20
+
+      #
+      # EXYNOS ACME TUNING
+      #
+
+      - name: Tune Exynos ACME scheduler
         run: |
           set -Eeuo pipefail
 
-          git config user.name "Project Chimera CI"
-          git config user.email "ci@chimera.local"
+          FILE="drivers/cpufreq/exynos-acme.c"
 
-      # =========================================================
-      # schedutil tuning
-      # =========================================================
+          test -f "$FILE"
 
-      - name: Apply schedutil tuning
-        run: |
-          set -Eeuo pipefail
-      
-          FILE="drivers/cpufreq/cpufreq_schedutil.c"
-      
-          if [[ ! -f "$FILE" ]]; then
-            echo "ERROR: $FILE not found"
-            echo "Current directory:"
-            pwd
-            echo ""
-            echo "drivers/cpufreq contents:"
-            ls -la drivers/cpufreq || true
-            exit 1
-          fi
-      
           cp "$FILE" "${FILE}.bak"
-      
+
           python3 <<'PYEOF'
           from pathlib import Path
           import re
-      
-          path = Path("drivers/cpufreq/cpufreq_schedutil.c")
-      
+
+          path = Path("drivers/cpufreq/exynos-acme.c")
           text = path.read_text()
+
           original = text
-      
+
           #
-          # schedutil rate limits
+          # Lower aggressive Samsung rate limits
           #
-      
-          replacements = [
-              (
-                  r'tunables->up_rate_limit_us\s*=\s*0\s*;',
-                  'tunables->up_rate_limit_us = 1500;'
-              ),
-              (
-                  r'tunables->down_rate_limit_us\s*=\s*0\s*;',
-                  'tunables->down_rate_limit_us = 16000;'
-              ),
-              (
-                  r'tunables->up_rate_limit_us\s*=\s*5000\s*;',
-                  'tunables->up_rate_limit_us = 1500;'
-              ),
-              (
-                  r'tunables->down_rate_limit_us\s*=\s*5000\s*;',
-                  'tunables->down_rate_limit_us = 16000;'
-              ),
-          ]
-      
-          for pattern, replacement in replacements:
-              text = re.sub(pattern, replacement, text)
-      
-          #
-          # Samsung BSP clamp_val variant
-          #
-      
+
           text = re.sub(
-              r'tunables->up_rate_limit_us\s*=\s*'
-              r'clamp_val\s*\(\s*cpufreq_policy_transition_delay_us\(policy\)\s*,\s*0\s*,\s*USEC_PER_MSEC\s*\)\s*;',
-              'tunables->up_rate_limit_us = 1500;',
-              text,
-              flags=re.MULTILINE
-          )
-      
-          text = re.sub(
-              r'tunables->down_rate_limit_us\s*=\s*'
-              r'clamp_val\s*\(\s*cpufreq_policy_transition_delay_us\(policy\)\s*,\s*0\s*,\s*USEC_PER_MSEC\s*\)\s*;',
-              'tunables->down_rate_limit_us = 16000;',
-              text,
-              flags=re.MULTILINE
-          )
-      
-          #
-          # sugov thread scheduling
-          #
-      
-          text = re.sub(
-              r'param\.sched_priority\s*=\s*MAX_RT_PRIO\s*-\s*1\s*;',
-              'param.sched_priority = 1;',
+              r'up_rate_limit_us\s*=\s*[0-9]+',
+              'up_rate_limit_us = 1500',
               text
           )
-      
+
           text = re.sub(
-              r'sched_setscheduler_nocheck\s*\(\s*sg_policy->thread\s*,\s*SCHED_FIFO\s*,\s*&param\s*\)\s*;',
-              'sched_setscheduler_nocheck(sg_policy->thread, SCHED_RR, &param);',
+              r'down_rate_limit_us\s*=\s*[0-9]+',
+              'down_rate_limit_us = 16000',
               text
           )
-      
+
+          #
+          # Reduce RT scheduler aggressiveness
+          #
+
+          text = re.sub(
+              r'MAX_RT_PRIO\s*-\s*1',
+              '1',
+              text
+          )
+
+          text = text.replace(
+              'SCHED_FIFO',
+              'SCHED_RR'
+          )
+
           if text == original:
-              raise SystemExit("ERROR: no patterns matched in cpufreq_schedutil.c")
-      
-          path.write_text(text)
-      
-          print("schedutil tuning applied successfully")
+              print("No ACME changes matched")
+          else:
+              path.write_text(text)
+              print("ACME tuning applied")
           PYEOF
-      
-          echo "==== VERIFY ===="
-      
-          grep -n "1500" "$FILE" || true
-          grep -n "16000" "$FILE" || true
-          grep -n "SCHED_RR" "$FILE" || true
-          grep -n "sched_priority = 1" "$FILE" || true
 
-      # =========================================================
-      # sugov thread priority
-      # =========================================================
+      #
+      # DISABLE UFC RESET LOOP
+      #
 
-      - name: Lower sugov RT priority
-        run: |
-          set -Eeuo pipefail
-
-          FILE="drivers/cpufreq/cpufreq_schedutil.c"
-
-          sed -ri \
-            's/param\.sched_priority *= *MAX_RT_PRIO *- *1 *;/param.sched_priority = 1;/g' \
-            "$FILE"
-
-          sed -ri \
-            's/SCHED_FIFO/SCHED_RR/g' \
-            "$FILE"
-
-      # =========================================================
-      # UFC disarm
-      # =========================================================
-
-      - name: Disable Samsung UFC notifier
+      - name: Disable Exynos UFC notifier
         run: |
           set -Eeuo pipefail
 
           FILE="drivers/cpufreq/exynos-ufc.c"
 
-          if [[ -f "$FILE" ]]; then
-            sed -ri \
-              's/cpufreq_register_notifier\(&exynos_ufc_notifier, CPUFREQ_POLICY_NOTIFIER\);/\/\/ Chimera disabled UFC notifier/g' \
-              "$FILE"
-          fi
+          test -f "$FILE"
 
-      # =========================================================
-      # CFS scheduler latency
-      # =========================================================
+          cp "$FILE" "${FILE}.bak"
 
-      - name: Patch CFS scheduler defaults
+          python3 <<'PYEOF'
+          from pathlib import Path
+          import re
+
+          path = Path("drivers/cpufreq/exynos-ufc.c")
+          text = path.read_text()
+
+          original = text
+
+          text = re.sub(
+              r'cpufreq_register_notifier\s*\([^;]+;',
+              'pr_info("UFC notifier disabled for Chimera Mk6 Light\\n");',
+              text
+          )
+
+          if text == original:
+              print("No UFC notifier matched")
+          else:
+              path.write_text(text)
+              print("UFC notifier disabled")
+          PYEOF
+
+      #
+      # CFS LATENCY TUNING
+      #
+
+      - name: Tune CFS scheduler
         run: |
           set -Eeuo pipefail
 
           FILE="kernel/sched/fair.c"
 
-          sed -ri \
-            's/sysctl_sched_latency *= *[0-9]+ULL/sysctl_sched_latency = 6000000ULL/g' \
-            "$FILE"
+          test -f "$FILE"
 
-          sed -ri \
-            's/sysctl_sched_min_granularity *= *[0-9]+ULL/sysctl_sched_min_granularity = 750000ULL/g' \
-            "$FILE"
+          python3 <<'PYEOF'
+          from pathlib import Path
+          import re
 
-          sed -ri \
-            's/sysctl_sched_wakeup_granularity *= *[0-9]+ULL/sysctl_sched_wakeup_granularity = 1000000ULL/g' \
-            "$FILE"
+          path = Path("kernel/sched/fair.c")
+          text = path.read_text()
 
-          sed -ri \
-            's/sysctl_sched_migration_cost *= *[0-9]+ULL/sysctl_sched_migration_cost = 5000000ULL/g' \
-            "$FILE"
+          replacements = {
+              r'sysctl_sched_latency\s*=\s*[0-9]+ULL':
+                  'sysctl_sched_latency = 6000000ULL',
 
-      # =========================================================
-      # mmc read_ahead
-      # =========================================================
+              r'sysctl_sched_min_granularity\s*=\s*[0-9]+ULL':
+                  'sysctl_sched_min_granularity = 750000ULL',
 
-      - name: Patch mmc read_ahead
+              r'sysctl_sched_wakeup_granularity\s*=\s*[0-9]+ULL':
+                  'sysctl_sched_wakeup_granularity = 1000000ULL',
+
+              r'sysctl_sched_migration_cost\s*=\s*[0-9]+ULL':
+                  'sysctl_sched_migration_cost = 5000000ULL',
+          }
+
+          for pattern, replacement in replacements.items():
+              text = re.sub(pattern, replacement, text)
+
+          path.write_text(text)
+
+          print("CFS tuning applied")
+          PYEOF
+
+      #
+      # MMC READAHEAD
+      #
+
+      - name: Tune MMC read_ahead
         run: |
           set -Eeuo pipefail
 
@@ -216,32 +175,12 @@ jobs:
           if [[ -f "$FILE" ]]; then
             sed -ri \
               's/blk_queue_read_ahead\((.*), *1024\)/blk_queue_read_ahead(\1, 128)/g' \
-              "$FILE"
-
-            sed -ri \
-              's/ra_pages *= *256/ra_pages = 32/g' \
-              "$FILE"
+              "$FILE" || true
           fi
 
-      # =========================================================
-      # ZRAM default
-      # =========================================================
-
-      - name: Set LZ4 default ZRAM compression
-        run: |
-          set -Eeuo pipefail
-
-          FILE="drivers/block/zram/zram_drv.c"
-
-          if [[ -f "$FILE" ]]; then
-            sed -ri \
-              's/ZRAM_DEF_COMP_ALGORITHM[[:space:]]+"lzo"/ZRAM_DEF_COMP_ALGORITHM "lz4"/g' \
-              "$FILE"
-          fi
-
-      # =========================================================
-      # Defconfig tuning
-      # =========================================================
+      #
+      # DEFCONFIG TUNING
+      #
 
       - name: Tune defconfig
         run: |
@@ -252,66 +191,50 @@ jobs:
           test -f "$DEFCONFIG"
 
           set_cfg() {
-            sed -i "/^$1=/d" "$DEFCONFIG"
+            sed -i "/^$1=.*/d" "$DEFCONFIG"
             sed -i "/^# $1 is not set/d" "$DEFCONFIG"
             echo "$1=$2" >> "$DEFCONFIG"
           }
 
-          unset_cfg() {
-            sed -i "/^$1=/d" "$DEFCONFIG"
-            sed -i "/^# $1 is not set/d" "$DEFCONFIG"
-            echo "# $1 is not set" >> "$DEFCONFIG"
-          }
-
-          set_cfg CONFIG_PREEMPT y
-
-          unset_cfg CONFIG_HZ_250
           set_cfg CONFIG_HZ_300 y
           set_cfg CONFIG_HZ 300
-
-          set_cfg CONFIG_TCP_CONG_ADVANCED y
+          set_cfg CONFIG_PREEMPT y
           set_cfg CONFIG_TCP_CONG_BBR y
-          set_cfg CONFIG_DEFAULT_TCP_CONG '"bbr"'
-
+          set_cfg CONFIG_DEFAULT_TCP_CONG "\"bbr\""
+          set_cfg CONFIG_CRYPTO_LZ4 y
           set_cfg CONFIG_ZRAM y
           set_cfg CONFIG_ZSMALLOC y
-          set_cfg CONFIG_CRYPTO_LZ4 y
-          set_cfg CONFIG_CRYPTO_LZ4HC y
 
-      # =========================================================
-      # Innocuous uname
-      # =========================================================
+      #
+      # LOCALVERSION
+      #
 
       - name: Set innocuous uname
         run: |
-          set -Eeuo pipefail
+          echo 'CONFIG_LOCALVERSION="-4.9.337-CM6L"' \
+            >> arch/arm64/configs/exynos9810-star2lte_defconfig
 
-          DEFCONFIG="arch/arm64/configs/exynos9810-star2lte_defconfig"
+      #
+      # COMMIT
+      #
 
-          sed -i '/CONFIG_LOCALVERSION=/d' "$DEFCONFIG"
-
-          echo 'CONFIG_LOCALVERSION="-4.9.337-CM6L"' >> "$DEFCONFIG"
-
-      # =========================================================
-      # Commit
-      # =========================================================
-
-      - name: Commit tuning
+      - name: Commit changes
         run: |
           set -Eeuo pipefail
 
-          git add .
+          git config user.name "Chimera Bot"
+          git config user.email "chimera@local"
+
+          git add -A
 
           if git diff --cached --quiet; then
-            echo "No tuning changes detected"
+            echo "No changes to commit"
             exit 0
           fi
 
           git commit -m \
-            "Chimera Mk6 Light: scheduler + thermal + IO tuning baseline"
+            "Chimera Mk6 Light: Samsung BSP scheduler + UFC tuning"
 
-      - name: Push branch
+      - name: Push changes
         run: |
-          set -Eeuo pipefail
-
-          git push origin HEAD:chimera-mk6l
+          git push origin chimera-mk6l
