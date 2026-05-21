@@ -63,7 +63,7 @@
 			compatible = "exynos8890-ion,vstream";
 			ion,secure;
 			ion,reusable;
-			size = <113246208>;
+			size = <226492416>;
 			alloc-ranges = <0 1073741824 2952790016>;
 			alignment = <0 4194304>;
 			id = <3>;
@@ -142,7 +142,7 @@
 		camera {
 			compatible = "exynos8890-ion,camera";
 			ion,recyclable;
-			size = <461373440>;
+			size = <536870912>;
 			alloc-ranges = <0 1073741824 3221225472>;
 			alignment = <0 4194304>;
 			id = <10>;
