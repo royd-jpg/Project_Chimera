@@ -1,3 +1,13 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# Project Chimera Mk6 Light — Lineage 23.2 / Exynos 9810 (star2lte)
+# ───────────────────────────────────────────────────────────────────────────────
+# Base   : royd-jpg/Project_Chimera @ chimera-mk6l
+# KSU    : gavdoc38/KernelSU-Next (pinned submodule)
+# SUSFS  : simonpunk/susfs4ksu @ kernel-4.9 (targets v1.5.12)
+# Clang  : Neutron Clang 10-03-2024 (pinned)
+# Target : LineageOS 23.2 · Android 16 · AVC-safe · SELinux enforcing-locked
+# ═══════════════════════════════════════════════════════════════════════════════
+
 name: Project Chimera Mk6 Light — Lineage 23.2 Build
 
 on:
@@ -27,254 +37,375 @@ jobs:
     name: Build Exynos9810 Kernel — Chimera Mk6 Light
     runs-on: ubuntu-24.04
 
-    defaults:  
-      run:  
-        shell: bash  
+    defaults:
+      run:
+        shell: bash
 
-    env:  
-      # Opt into Node.js 24 ahead of the June 2026 forced migration  
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"  
+    env:
+      # Opt into Node.js 24 ahead of the June 2026 forced migration
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
-      KERNEL_REPO:   "https://github.com/royd-jpg/Project_Chimera"  
-      KERNEL_BRANCH: "chimera-mk6l"  
-      SUSFS_REPO:    "https://gitlab.com/simonpunk/susfs4ksu.git"  
-      SUSFS_BRANCH:  "kernel-4.9"  
-      SUSFS_TARGET_VERSION: "v1.5.12"  
-      KERNEL_DIR:    "kernel"  
-      OUT_DIR:       "kernel-out"  
-      LOG_DIR:       "logs"  
-      NEUTRON_URL:   "https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/10032024/neutron-clang-10032024.tar.zst"  
-      NEUTRON_KEY:   "neutron-clang-10032024-pinned-v1"  
-      DEFCONFIG:     "arch/arm64/configs/exynos9810-star2lte_defconfig"  
-      BRAND:         "-Chimera_Mk6Light"  
+      KERNEL_REPO: "https://github.com/royd-jpg/Project_Chimera"
+      KERNEL_BRANCH: "chimera-mk6l"
+      SUSFS_REPO: "https://gitlab.com/simonpunk/susfs4ksu.git"
+      SUSFS_BRANCH: "kernel-4.9"
+      SUSFS_TARGET_VERSION: "v1.5.12"
+      KERNEL_DIR: "kernel"
+      OUT_DIR: "kernel-out"
+      LOG_DIR: "logs"
+      NEUTRON_URL: "https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/10032024/neutron-clang-10032024.tar.zst"
+      NEUTRON_KEY: "neutron-clang-10032024-pinned-v1"
+      DEFCONFIG: "arch/arm64/configs/exynos9810-star2lte_defconfig"
+      BRAND: "-CM6L"
 
-    steps:  
+    steps:
+      # ── 0. Workspace ────────────────────────────────────────────────────────
+      - name: Prepare workspace
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$LOG_DIR" "$OUT_DIR"
+          {
+            echo "build_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "run_number=${GITHUB_RUN_NUMBER}"
+            echo "dry_run=${{ inputs.dry_run }}"
+            echo "do_release=${{ inputs.do_release }}"
+            echo "force_repatch=${{ inputs.force_repatch }}"
+          } | tee "$LOG_DIR/build-inputs.log"
 
-      # ── 0. Workspace ────────────────────────────────────────────────────────  
-      - name: Prepare workspace  
-        run: |  
-          set -Eeuo pipefail  
-          mkdir -p "$LOG_DIR" "$OUT_DIR"  
-          {  
-            echo "build_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)"  
-            echo "run_number=${GITHUB_RUN_NUMBER}"  
-            echo "dry_run=${{ inputs.dry_run }}"  
-            echo "do_release=${{ inputs.do_release }}"  
-            echo "force_repatch=${{ inputs.force_repatch }}"  
-          } | tee "$LOG_DIR/build-inputs.log"  
+      # ── 1. Dependencies ─────────────────────────────────────────────────────
+      - name: Install build dependencies
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update -qq
 
-      # ── 1. Dependencies ─────────────────────────────────────────────────────  
-      - name: Install build dependencies  
-        run: |  
-          set -Eeuo pipefail  
-          sudo apt-get update -qq  
-          sudo apt-get install -yqq \  
-            git curl wget bc flex bison python3 \  
-            libssl-dev libelf-dev build-essential \  
-            zip unzip zstd lz4 \  
-            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi  
+          PKGS=(
+            git
+            curl
+            wget
+            bc
+            flex
+            bison
+            python3
+            libssl-dev
+            libelf-dev
+            build-essential
+            zip
+            unzip
+            zstd
+            lz4
+            gcc-aarch64-linux-gnu
+            gcc-arm-linux-gnueabi
+          )
 
-      # ── 2. Neutron Clang toolchain ───────────────────────────────────────────  
-      - name: Cache Neutron Clang  
-        id: cache-neutron  
-        uses: actions/cache@v4  
-        with:  
-          path: neutron-clang  
-          key: ${{ env.NEUTRON_KEY }}  
+          sudo apt-get install -yqq "${PKGS[@]}"
 
-      - name: Download Neutron Clang  
-        if: steps.cache-neutron.outputs.cache-hit != 'true'  
-        run: |  
-          set -Eeuo pipefail  
-          mkdir -p neutron-clang  
-          echo "Downloading: $NEUTRON_URL" | tee "$LOG_DIR/toolchain.log"  
-          wget -qO /tmp/neutron.tar.zst "$NEUTRON_URL"  
-          tar -xf /tmp/neutron.tar.zst -C neutron-clang --strip-components=1  
-          test -x neutron-clang/bin/clang \  
-            || { echo "ERROR: clang binary missing after extract"; exit 1; }  
-          neutron-clang/bin/clang --version | tee -a "$LOG_DIR/toolchain.log"  
+      # ── 2. Neutron Clang toolchain ───────────────────────────────────────────
+      - name: Cache Neutron Clang
+        id: cache-neutron
+        uses: actions/cache@v4
+        with:
+          path: neutron-clang
+          key: ${{ env.NEUTRON_KEY }}
 
-      - name: Export toolchain PATH  
-        run: echo "$GITHUB_WORKSPACE/neutron-clang/bin" >> "$GITHUB_PATH"  
+      - name: Download Neutron Clang
+        if: steps.cache-neutron.outputs.cache-hit != 'true'
+        run: |
+          set -Eeuo pipefail
+          mkdir -p neutron-clang
+          echo "Downloading: $NEUTRON_URL" | tee "$LOG_DIR/toolchain.log"
+          wget -qO /tmp/neutron.tar.zst "$NEUTRON_URL"
+          tar -xf /tmp/neutron.tar.zst -C neutron-clang --strip-components=1
+          test -x neutron-clang/bin/clang \
+            || { echo "ERROR: clang binary missing after extract"; exit 1; }
+          neutron-clang/bin/clang --version | tee -a "$LOG_DIR/toolchain.log"
 
-      # ── 3. Clone kernel tree ─────────────────────────────────────────────────  
-      - name: Clone kernel tree  
-        run: |  
-          set -Eeuo pipefail  
-          git clone --depth=1 -b "$KERNEL_BRANCH" "$KERNEL_REPO" "$KERNEL_DIR"  
-          git -C "$KERNEL_DIR" log --oneline -5 | tee "$LOG_DIR/kernel-revision.log"  
-          echo "OK: kernel tree cloned (branch: $KERNEL_BRANCH)"  
+      - name: Export toolchain PATH
+        run: echo "$GITHUB_WORKSPACE/neutron-clang/bin" >> "$GITHUB_PATH"
 
-      # ── 4. Clone SUSFS and verify version ────────────────────────────────────  
-      - name: Clone SUSFS and verify version  
-        run: |  
-          set -Eeuo pipefail  
-          git clone --depth=1 -b "$SUSFS_BRANCH" "$SUSFS_REPO" susfs4ksu  
-          git -C susfs4ksu rev-parse HEAD | tee "$LOG_DIR/susfs-revision.log"  
+      # ── 3. Clone kernel tree ─────────────────────────────────────────────────
+      - name: Clone kernel tree
+        run: |
+          set -Eeuo pipefail
+          git clone --depth=1 -b "$KERNEL_BRANCH" "$KERNEL_REPO" "$KERNEL_DIR"
+          git -C "$KERNEL_DIR" log --oneline -5 | tee "$LOG_DIR/kernel-revision.log"
+          echo "OK: kernel tree cloned (branch: $KERNEL_BRANCH)"
 
-          for f in \  
-            "kernel_patches/50_add_susfs_in_kernel-4.9.patch" \  
-            "kernel_patches/fs/susfs.c" \  
-            "kernel_patches/fs/sus_su.c" \  
-            "kernel_patches/include/linux/susfs.h" \  
-            "kernel_patches/include/linux/susfs_def.h" \  
-            "kernel_patches/include/linux/sus_su.h"; do  
-            test -f "susfs4ksu/$f" \  
-              || { echo "ERROR: susfs4ksu/$f missing — aborting"; exit 1; }  
-          done  
-          echo "OK: all required SUSFS patch files present"  
+      # ── 4. Clone SUSFS and verify version ────────────────────────────────────
+      - name: Clone SUSFS and verify version
+        run: |
+          set -Eeuo pipefail
+          git clone --depth=1 -b "$SUSFS_BRANCH" "$SUSFS_REPO" susfs4ksu
+          git -C susfs4ksu rev-parse HEAD | tee "$LOG_DIR/susfs-revision.log"
 
-          ACTUAL_VER="$(grep -oP 'SUSFS_VERSION\s+"\K[^"]+' \  
-            susfs4ksu/kernel_patches/include/linux/susfs.h 2>/dev/null || echo 'unknown')"  
-          echo "SUSFS_ACTUAL_VERSION=$ACTUAL_VER" | tee -a "$LOG_DIR/susfs-revision.log"  if [[ "$ACTUAL_VER" == "$SUSFS_TARGET_VERSION" ]]; then  
-            echo "OK: SUSFS version confirmed: $ACTUAL_VER"  
-          else  
-            echo "WARN: SUSFS version is '$ACTUAL_VER', expected '$SUSFS_TARGET_VERSION'"  
-          fi  
+          for f in \
+            "kernel_patches/50_add_susfs_in_kernel-4.9.patch" \
+            "kernel_patches/fs/susfs.c" \
+            "kernel_patches/fs/sus_su.c" \
+            "kernel_patches/include/linux/susfs.h" \
+            "kernel_patches/include/linux/susfs_def.h" \
+            "kernel_patches/include/linux/sus_su.h"; do
+            test -f "susfs4ksu/$f" \
+              || { echo "ERROR: susfs4ksu/$f missing — aborting"; exit 1; }
+          done
+          echo "OK: all required SUSFS patch files present"
 
-      # ── 5. Set up KernelSU-Next ──────────────────────────────────────────────  
-      - name: Set up KernelSU-Next (pinned submodule)  
-        working-directory: kernel  
-        run: |  
-          set -Eeuo pipefail  
-          git rm -r --cached KernelSU-Next 2>/dev/null || true  
-          rm -rf .git/modules/KernelSU-Next KernelSU-Next drivers/kernelsu  
+          ACTUAL_VER="$(grep -oP 'SUSFS_VERSION\s+"\K[^"]+' \
+            susfs4ksu/kernel_patches/include/linux/susfs.h 2>/dev/null || echo 'unknown')"
+          echo "SUSFS_ACTUAL_VERSION=$ACTUAL_VER" | tee -a "$LOG_DIR/susfs-revision.log"
+          if [[ "$ACTUAL_VER" == "$SUSFS_TARGET_VERSION" ]]; then
+            echo "OK: SUSFS version confirmed: $ACTUAL_VER"
+          else
+            echo "WARN: SUSFS version is '$ACTUAL_VER', expected '$SUSFS_TARGET_VERSION'"
+            echo "      Proceeding with cloned files."
+          fi
 
-          KSU_URL="$(git config --file .gitmodules submodule.KernelSU-Next.url 2>/dev/null || true)"  
-          KSU_COMMIT="$(git ls-tree HEAD KernelSU-Next 2>/dev/null | awk '{print $3}' || true)"  
+      # ── 5. Set up KernelSU-Next ──────────────────────────────────────────────
+      - name: Set up KernelSU-Next (pinned submodule)
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          git rm -r --cached KernelSU-Next 2>/dev/null || true
+          rm -rf .git/modules/KernelSU-Next KernelSU-Next drivers/kernelsu
 
-          if [[ -n "$KSU_URL" && -n "$KSU_COMMIT" ]]; then  
-            git clone "$KSU_URL" KernelSU-Next  
-            git -C KernelSU-Next checkout "$KSU_COMMIT"  
-          elif [[ -n "$KSU_URL" ]]; then  
-            git clone --depth=1 "$KSU_URL" KernelSU-Next  
-          else  
-            echo "WARN: no submodule URL found — falling back to gavdoc38 fork"  
-            git clone --depth=1 https://github.com/gavdoc38/KernelSU-Next.git KernelSU-Next  
-          fi  
+          KSU_URL="$(git config --file .gitmodules \
+            submodule.KernelSU-Next.url 2>/dev/null || true)"
+          KSU_COMMIT="$(git ls-tree HEAD KernelSU-Next 2>/dev/null \
+            | awk '{print $3}' || true)"
 
-          test -f KernelSU-Next/kernel/Kconfig \  
-            || { echo "ERROR: KernelSU-Next/kernel/Kconfig missing"; exit 1; }  
-          
-          ln -s ../KernelSU-Next/kernel drivers/kernelsu  
-          test -f drivers/kernelsu/Kconfig \  
-            || { echo "ERROR: drivers/kernelsu/Kconfig symlink broken"; exit 1; }  
-          echo "OK: KernelSU-Next wired at drivers/kernelsu"  
+          {
+            echo "KSU_URL=${KSU_URL:-not found in .gitmodules}"
+            echo "KSU_COMMIT=${KSU_COMMIT:-not found}"
+          } | tee "../$LOG_DIR/ksu-submodule.log"
 
-      # ── 5b. Fix syscall_fn_t typedef (Samsung 4.9 BSP) ──────────────────────  
-      - name: Fix syscall_fn_t typedef  
-        working-directory: kernel  
-        run: |  
-          set -Eeuo pipefail  
-          HOOK_H="KernelSU-Next/kernel/hook/syscall_hook.h"  
-          if [[ ! -f "$HOOK_H" ]] || ! grep -q 'syscall_fn_t' "$HOOK_H"; then  
-            echo "INFO: syscall_fn_t — nothing to fix"; exit 0  
-          fi  
-          python3 - << 'PYEOF'  
-          from pathlib import Path  
-          import re  
-          path = Path("KernelSU-Next/kernel/hook/syscall_hook.h")  
-          if not path.exists():  
-              raise SystemExit(0)  
-          content = path.read_text()  
-          typedef = (  
-              "/* syscall_fn_t: Samsung 4.9 BSP compatibility */\n"  
-              "typedef long (*syscall_fn_t)(\n"  
-              "    unsigned long, unsigned long, unsigned long,\n"  
-              "    unsigned long, unsigned long, unsigned long\n"  
-              ");\n\n"  
-          )  
-          pos = 0  
-          for m in re.finditer(r'^#(include|pragma|ifndef|define)[^\n]*\n', content, re.MULTILINE):  
-              pos = m.end()  
-          if "typedef long (*syscall_fn_t)" not in content:  
-              path.write_text(content[:pos] + typedef + content[pos:])  
-              print("OK: syscall_fn_t typedef injected")  
-          else:  
-              print("OK: syscall_fn_t already present")  
-          PYEOF  
+          if [[ -n "$KSU_URL" && -n "$KSU_COMMIT" ]]; then
+            git clone "$KSU_URL" KernelSU-Next
+            git -C KernelSU-Next checkout "$KSU_COMMIT"
+          elif [[ -n "$KSU_URL" ]]; then
+            git clone --depth=1 "$KSU_URL" KernelSU-Next
+          else
+            echo "WARN: no submodule URL found — falling back to gavdoc38 fork"
+            git clone --depth=1 \
+              https://github.com/gavdoc38/KernelSU-Next.git KernelSU-Next
+          fi
 
-      # ── 6. Preflight: detect pre-integrated KSU/SUSFS ───────────────────────  
-      - name: Preflight tree state  
-        working-directory: kernel  
-        run: |  
-          set -Eeuo pipefail  
-          ALREADY_PATCHED=false  
-          if grep -RqsE 'source "drivers/kernelsu/Kconfig"|ksu_handle_faccessat|susfs_task_state' fs include kernel arch/arm64/configs 2>/dev/null; then  
-            ALREADY_PATCHED=true  
-          fi  
-          if [[ "$ALREADY_PATCHED" == "true" && "${{ inputs.force_repatch }}" != "true" ]]; then  
-            echo "SKIP_INTEGRATION=true"  >> "$GITHUB_ENV"  
-          else  
-            echo "SKIP_INTEGRATION=false" >> "$GITHUB_ENV"  
-          fi  
+          test -f KernelSU-Next/kernel/Kconfig \
+            || { echo "ERROR: KernelSU-Next/kernel/Kconfig missing"; exit 1; }
+          git -C KernelSU-Next log --oneline -1 \
+            | tee -a "../$LOG_DIR/ksu-submodule.log"
 
-      # ── 7. Wire KernelSU Kconfig ─────────────────────────────────────────────  
-      - name: Wire KernelSU Kconfig  
-        working-directory: kernel  
-        run: |  
-          set -Eeuo pipefail  
-          sed -i '/source "drivers\/kernelsu\/Kconfig"/d' drivers/Kconfig  
-          if ! grep -q '^endmenu' drivers/Kconfig; then  
-            printf '\nendmenu\n' >> drivers/Kconfig  
-          fi  
-          sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig  
+          ln -s ../KernelSU-Next/kernel drivers/kernelsu
+          test -f drivers/kernelsu/Kconfig \
+            || { echo "ERROR: drivers/kernelsu/Kconfig symlink broken"; exit 1; }
+          echo "OK: KernelSU-Next wired at drivers/kernelsu"
 
-      # ── 8. Apply SUSFS kernel patch ──────────────────────────────────────────  
-      - name: Apply SUSFS kernel patch  
-        if: ${{ env.SKIP_INTEGRATION == 'false' }}  
-        working-directory: kernel  
-        run: |  
-          set -Eeuo pipefail  
-          PATCH="$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.9.patch"  
-          set +e  
-          git apply --reject --whitespace=fix "$PATCH" > "../$LOG_DIR/susfs-apply.log" 2>&1  
-          RC=$?  
-          set -e  
-          if [[ "$RC" -ne 0 ]]; then  
-            echo "WARN: git apply had conflicts (RC=$RC); step 9 will install files directly"  
-          else  
-            echo "OK: SUSFS patch applied cleanly"  
-          fi  
+      # ── 5b. Fix syscall_fn_t typedef (Samsung 4.9 BSP) ──────────────────────
+      - name: Fix syscall_fn_t typedef
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          HOOK_H="KernelSU-Next/kernel/hook/syscall_hook.h"
+          if [[ ! -f "$HOOK_H" ]] || ! grep -q 'syscall_fn_t' "$HOOK_H"; then
+            echo "INFO: syscall_fn_t — nothing to fix"
+            exit 0
+          fi
+          python3 - << 'PYEOF'
+          from pathlib import Path
+          import re
 
-      # ── 9. Guarantee all SUSFS files present ────────────────────────────────  
-      - name: Guarantee SUSFS files present  
-        working-directory: kernel  
-        run: |  
-          set -Eeuo pipefail  
-          SRC="$GITHUB_WORKSPACE/susfs4ksu/kernel_patches"  
-          for pair in "fs/susfs.c:fs/susfs.c" "fs/sus_su.c:fs/sus_su.c"; do  
-            DST="${pair##*:}"; FROM="$SRC/${pair%%:*}"  
-            if [[ ! -f "$DST" ]]; then install -m 0644 "$FROM" "$DST"; fi  
-          done  
-          for hdr in "include/linux/susfs.h" "include/linux/susfs_def.h" "include/linux/sus_su.h"; do  
-            if [[ ! -f "$hdr" && -f "$SRC/$hdr" ]]; then install -m 0644 "$SRC/$hdr" "$hdr"; fi  
-          done  
-          grep -q 'susfs\.o' fs/Makefile || echo 'obj-$(CONFIG_KSU_SUSFS) += susfs.o' >> fs/Makefile  
-          grep -q 'sus_su\.o' fs/Makefile || echo 'obj-$(CONFIG_KSU_SUSFS) += sus_su.o' >> fs/Makefile  
-          sed -i '/ccflags-.*CONFIG_KSU_SUSFS.*selinux/d' fs/Makefile  
-          echo 'ccflags-$(CONFIG_KSU_SUSFS) += -Isecurity/selinux -Isecurity/selinux/include' >> fs/Makefile  
+          path = Path("KernelSU-Next/kernel/hook/syscall_hook.h")
+          if not path.exists():
+              raise SystemExit(0)
 
-      # ── 10. KernelSU-Next kernel_compat.h shim ───────────────────────────────  
-      - name: Create kernel_compat.h shim  
-        working-directory: kernel  
-        run: |  
-          set -Eeuo pipefail  
-          python3 - << 'PYEOF'  
-          from pathlib import Path  
-          base = Path("drivers/kernelsu")  
-          shim = base / "kernel_compat.h"  
-          candidates = [base/"compat"/"kernel_compat.h", base/"hook"/"kernel_compat.h", base/"include"/"kernel_compat.h", base/"ksu"/"kernel_compat.h"]  
-          target = next((c for c in candidates if c.exists()), None)  
-          if target is None: raise SystemExit(0)  
-          rel = target.relative_to(base)  
-          if not shim.exists():  
-              shim.write_text(f"/* Chimera Mk6 Light: kernel_compat.h shim */\n#include \"{rel.as_posix()}\"\n")  
-          PYEOF  
+          content = path.read_text()
+          typedef = (
+              "/* syscall_fn_t: Samsung 4.9 BSP compatibility */\n"
+              "typedef long (*syscall_fn_t)(\n"
+              "    unsigned long, unsigned long, unsigned long,\n"
+              "    unsigned long, unsigned long, unsigned long\n"
+              ");\n\n"
+          )
 
-      # ── 10b. Create core_hook.h shim ───────────────────────────────────────
-      # SUSFS expects drivers/kernelsu/core_hook.h but newer KernelSU-Next
-      # trees may place it in subdirectories. Create a forwarding shim.
+          pos = 0
+          for m in re.finditer(r'^#(include|pragma|ifndef|define)[^\n]*\n', content, re.MULTILINE):
+              pos = m.end()
+
+          if "typedef long (*syscall_fn_t)" not in content:
+              path.write_text(content[:pos] + typedef + content[pos:])
+              print("OK: syscall_fn_t typedef injected")
+          else:
+              print("OK: syscall_fn_t already present")
+          PYEOF
+
+      # ── 6. Preflight: detect pre-integrated KSU/SUSFS ───────────────────────
+      - name: Preflight tree state
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          LOG="../$LOG_DIR/preflight.log"
+          echo "=== Preflight — Chimera Mk6 Light ===" | tee "$LOG"
+          git status --short | tee -a "$LOG"
+
+          echo "=== KSU/SUSFS markers ===" | tee -a "$LOG"
+          grep -RsnE \
+            'KernelSU|kernelsu|CONFIG_KSU|susfs_task_state|ksu_handle_faccessat' \
+            fs include kernel arch/arm64/configs 2>/dev/null \
+            | tee -a "$LOG" || true
+
+          ALREADY_PATCHED=false
+          if grep -RqsE \
+            'source "drivers/kernelsu/Kconfig"|ksu_handle_faccessat|susfs_task_state' \
+            fs include kernel arch/arm64/configs 2>/dev/null; then
+            ALREADY_PATCHED=true
+          fi
+
+          echo "ALREADY_PATCHED=$ALREADY_PATCHED" | tee -a "$LOG"
+          if [[ "$ALREADY_PATCHED" == "true" && \
+                "${{ inputs.force_repatch }}" != "true" ]]; then
+            echo "SKIP_INTEGRATION=true"  >> "$GITHUB_ENV"
+            echo "INFO: tree already has KSU/SUSFS markers — skipping patch application"
+          else
+            echo "SKIP_INTEGRATION=false" >> "$GITHUB_ENV"
+          fi
+
+      # ── 7. Wire KernelSU Kconfig ─────────────────────────────────────────────
+      - name: Wire KernelSU Kconfig
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          sed -i '/source "drivers\/kernelsu\/Kconfig"/d' drivers/Kconfig
+          if ! grep -q '^endmenu' drivers/Kconfig; then
+            printf '\nendmenu\n' >> drivers/Kconfig
+          fi
+          sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+          COUNT="$(grep -c 'drivers/kernelsu/Kconfig' drivers/Kconfig || true)"
+          [[ "$COUNT" -eq 1 ]] \
+            || { echo "ERROR: Expected 1 Kconfig entry, found $COUNT"; exit 1; }
+          echo "OK: KernelSU Kconfig wired (count=$COUNT)"
+
+      # ── 8. Apply SUSFS kernel patch ──────────────────────────────────────────
+      - name: Apply SUSFS kernel patch
+        if: ${{ env.SKIP_INTEGRATION == 'false' }}
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          PATCH="$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.9.patch"
+          set +e
+          git apply --reject --whitespace=fix "$PATCH" \
+            > "../$LOG_DIR/susfs-apply.log" 2>&1
+          RC=$?
+          set -e
+          find . -name '*.rej' -print | sort > "../$LOG_DIR/susfs-rejects.log" || true
+          REJECT_COUNT="$(wc -l < "../$LOG_DIR/susfs-rejects.log" || echo 0)"
+          echo "Apply RC=$RC  Rejects=$REJECT_COUNT" | tee -a "../$LOG_DIR/susfs-apply.log"
+          if [[ "$RC" -ne 0 ]]; then
+            echo "WARN: git apply had conflicts (RC=$RC); step 9 will install files directly"
+          else
+            echo "OK: SUSFS patch applied cleanly"
+          fi
+
+      # ── 9. Guarantee all SUSFS files present ────────────────────────────────
+      - name: Guarantee SUSFS files present
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          LOG="../$LOG_DIR/susfs-guarantee.log"
+          echo "=== SUSFS file guarantee ===" | tee "$LOG"
+          SRC="$GITHUB_WORKSPACE/susfs4ksu/kernel_patches"
+
+          for pair in "fs/susfs.c:fs/susfs.c" "fs/sus_su.c:fs/sus_su.c"; do
+            DST="${pair##*:}"
+            FROM="$SRC/${pair%%:*}"
+            if [[ ! -f "$DST" ]]; then
+              install -m 0644 "$FROM" "$DST"
+              echo "OK: installed $DST" | tee -a "$LOG"
+            else
+              echo "INFO: $DST present ($(wc -l < "$DST") lines) — preserved" | tee -a "$LOG"
+            fi
+          done
+
+          for hdr in \
+            "include/linux/susfs.h" \
+            "include/linux/susfs_def.h" \
+            "include/linux/sus_su.h"; do
+            if [[ ! -f "$hdr" ]]; then
+              PATCH_SRC="$SRC/$hdr"
+              if [[ -f "$PATCH_SRC" ]]; then
+                install -m 0644 "$PATCH_SRC" "$hdr"
+                echo "OK: installed $hdr" | tee -a "$LOG"
+              else
+                echo "FAIL: $hdr missing from patch source — compile will fail" | tee -a "$LOG"
+              fi
+            else
+              echo "INFO: $hdr present ($(wc -l < "$hdr") lines) — preserved" | tee -a "$LOG"
+            fi
+          done
+
+          grep -q 'susfs\.o'  fs/Makefile \
+            || echo 'obj-$(CONFIG_KSU_SUSFS) += susfs.o'  >> fs/Makefile
+          grep -q 'sus_su\.o' fs/Makefile \
+            || echo 'obj-$(CONFIG_KSU_SUSFS) += sus_su.o' >> fs/Makefile
+
+          sed -i '/ccflags-.*CONFIG_KSU_SUSFS.*selinux/d' fs/Makefile
+          echo 'ccflags-$(CONFIG_KSU_SUSFS) += -Isecurity/selinux -Isecurity/selinux/include' \
+            >> fs/Makefile
+          echo "OK: fs/Makefile — obj entries + SELinux include path set" | tee -a "$LOG"
+
+          FAIL=0
+          echo "=== Final file presence ===" | tee -a "$LOG"
+          for f in \
+            fs/susfs.c fs/sus_su.c \
+            include/linux/susfs.h include/linux/susfs_def.h include/linux/sus_su.h; do
+            if [[ -f "$f" ]]; then
+              echo "OK: $f" | tee -a "$LOG"
+            else
+              echo "FAIL: $f MISSING" | tee -a "$LOG"
+              FAIL=1
+            fi
+          done
+          [[ "$FAIL" -eq 0 ]] \
+            || { echo "ERROR: missing SUSFS files — aborting before build"; exit 1; }
+
+      # ── 10. KernelSU-Next kernel_compat.h shim ───────────────────────────────
+      - name: Create kernel_compat.h shim
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          python3 - << 'PYEOF'
+          from pathlib import Path
+
+          base = Path("drivers/kernelsu")
+          shim = base / "kernel_compat.h"
+
+          candidates = [
+              base / "compat/kernel_compat.h",
+              base / "hook/kernel_compat.h",
+              base / "include/kernel_compat.h",
+              base / "ksu/kernel_compat.h",
+          ]
+
+          target = next((c for c in candidates if c.exists()), None)
+
+          if target is None:
+              hits = sorted(base.rglob("kernel_compat.h")) if base.exists() else []
+              target = hits[0] if hits else None
+
+          if target is None:
+              print("INFO: kernel_compat.h not found in tree — shim not needed or missing")
+              raise SystemExit(0)
+
+          rel = target.relative_to(base)
+
+          if shim.exists() and rel.as_posix() in shim.read_text():
+              print(f"OK: shim already points to {rel} (idempotent)")
+              raise SystemExit(0)
+
+          shim.write_text(
+              f"/* Chimera Mk6 Light: kernel_compat.h shim */\n#include \"{rel.as_posix()}\"\n"
+          )
+          print(f"OK: shim created: drivers/kernelsu/kernel_compat.h -> {rel}")
+          PYEOF
+
+      # ── 10b. Create core_hook.h compatibility shim ─────────────────────────
       - name: Create core_hook.h shim
         working-directory: kernel
         run: |
@@ -286,8 +417,9 @@ jobs:
           shim = base / "core_hook.h"
 
           candidates = [
-              base / "core/core_hook.h",
               base / "hook/core_hook.h",
+              base / "core/core_hook.h",
+              base / "ksu/core_hook.h",
               base / "include/core_hook.h",
           ]
 
@@ -298,168 +430,495 @@ jobs:
               target = hits[0] if hits else None
 
           if target is None:
-              print("WARN: core_hook.h not found anywhere in KernelSU-Next")
+              print("INFO: core_hook.h not present in KernelSU tree")
               raise SystemExit(0)
 
           rel = target.relative_to(base)
 
-          if shim.exists():
-              txt = shim.read_text(errors="ignore")
-              if rel.as_posix() in txt:
-                  print(f"OK: core_hook.h shim already points to {rel}")
-                  raise SystemExit(0)
-
           shim.write_text(
-              "/* Chimera Mk6 Light core_hook.h shim */\n"
+              "/* Chimera Mk6 Light compatibility shim */\n"
               f'#include "{rel.as_posix()}"\n'
           )
 
-          print(f"OK: shim created: drivers/kernelsu/core_hook.h -> {rel}")
+          print(f"OK: core_hook.h shim -> {rel}")
           PYEOF
 
-      # ── 11. Inject minimal SUSFS prctl bridge ────────────────────────────────  
-      - name: Inject SUSFS prctl bridge  
-        working-directory: kernel  
-        run: |  
-          set -Eeuo pipefail  
-          python3 - << 'PYEOF'  
-          import re, sys  
-          from pathlib import Path  
-          MARKER = "CHIMERA_MK6LIGHT_SUSFS_PRCTL_BRIDGE"  
-          
-          # Read headers
-          susfs_h = Path("include/linux/susfs.h")  
-          susfs_def = Path("include/linux/susfs_def.h")  
-          if not susfs_h.exists(): sys.exit(1)  
-          scan_src = susfs_def.read_text() if susfs_def.exists() else susfs_h.read_text()  
-          cmd_ids = re.findall(r'#define\s+(CMD_SUSFS_\w+|SUSFS_CMD_\w+)\s+(0x[0-9a-fA-F]+|\d+)', scan_src)  
-          
-          if not cmd_ids: sys.exit(0)  
-          vals = [int(v, 0) for _, v in cmd_ids]  
-          cmd_min, cmd_max = min(vals), max(vals)  
-          show_ver_fn = next((fn for fn in re.findall(r'(?:int|bool|void)\s+(susfs_\w+)\s*\(', susfs_h.read_text()) if 'version' in fn.lower()), None)  
-          show_ver_cmd = next((c for c in cmd_ids if 'SHOW_VERSION' in c[0]), None)  
-          
-          # Inject fs/susfs.c
-          dispatch = f"\tif (option == {show_ver_cmd[1]}) {{\n\t\t{show_ver_fn}((void __user *)arg2); return 0;\n\t}}\n" if (show_ver_cmd and show_ver_fn) else ""  
-          bridge = f"\n/* Bridge ({MARKER}) */\n#ifndef {MARKER}\n#define {MARKER} 1\n#ifdef CONFIG_KSU_SUSFS\nint ksu_susfs_handle_prctl(unsigned long option, unsigned long arg2, unsigned long arg3, unsigned long arg4, unsigned long arg5) {{\n{dispatch}\treturn -EINVAL;\n}}\nEXPORT_SYMBOL_GPL(ksu_susfs_handle_prctl);\n#endif\n#endif\n"  
-          
-          susfs_c = Path("fs/susfs.c")  
-          if susfs_c.exists() and MARKER not in susfs_c.read_text():  
-              susfs_c.write_text(susfs_c.read_text() + bridge)  
-          
-          # Inject kernel/sys.c safely after local declarations (C89 Compliance)
-          sys_c = Path("kernel/sys.c")  
-          if not sys_c.exists(): sys.exit(0)  
-          txt = sys_c.read_text(errors='replace')  
-          if MARKER in txt: sys.exit(0)  
-          
-          m = re.search(r'SYSCALL_DEFINE5\s*\(\s*prctl\b[^{]+\{', txt, re.DOTALL)  
-          if not m: sys.exit(0)  
-          
-          m_switch = re.search(r'switch\s*\(\s*option\s*\)', txt[m.end():])  
-          if not m_switch: sys.exit(0)  
-          
-          insert_pos = m.end() + m_switch.start()  
-          
-          prctl_hook = (  
-              f"\t/* Chimera Mk6 Light SUSFS bridge ({MARKER}) */\n"  
-              f"\t#ifdef CONFIG_KSU_SUSFS\n"  
-              f"\t{{\n"  
-              f"\t\textern int ksu_susfs_handle_prctl(unsigned long, unsigned long, unsigned long, unsigned long, unsigned long);\n"  
-              f"\t\tif (option >= {hex(cmd_min)} && option <= {hex(cmd_max)}) {{\n"  
-              f"\t\t\tint ksu_ret = ksu_susfs_handle_prctl(option, arg2, arg3, arg4, arg5);\n"  
-              f"\t\t\tif (ksu_ret == 0) return 0;\n"  
-              f"\t\t}}\n"  
-              f"\t}}\n"  
-              f"\t#endif\n\t"  
-          )  
-          sys_c.write_text(txt[:insert_pos] + prctl_hook + txt[insert_pos:])  
-          print("OK: prctl dispatch injected securely before switch block")  
-          PYEOF  
+      # ── 11. Inject minimal SUSFS prctl bridge ────────────────────────────────
+      - name: Inject SUSFS prctl bridge
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          python3 - << 'PYEOF'
+          import re, sys
+          from pathlib import Path
 
-      # ── 12. Pre-Compile Stealth Configuration ────────────────────────────────
-      - name: Configure Kernel Flags
+          MARKER = "CHIMERA_MK6LIGHT_SUSFS_PRCTL_BRIDGE"
+
+          susfs_h = Path("include/linux/susfs.h")
+          susfs_def = Path("include/linux/susfs_def.h")
+          if not susfs_h.exists():
+              print("FAIL: include/linux/susfs.h missing")
+              sys.exit(1)
+
+          scan_src = susfs_def.read_text() if susfs_def.exists() else susfs_h.read_text()
+          cmd_ids = re.findall(
+              r'#define\s+(CMD_SUSFS_\w+|SUSFS_CMD_\w+)\s+(0x[0-9a-fA-F]+|\d+)',
+              scan_src
+          )
+          if not cmd_ids:
+              print("WARN: no CMD_SUSFS_* constants found — bridge will not dispatch")
+              sys.exit(0)
+
+          vals = [int(v, 0) for _, v in cmd_ids]
+          cmd_min = min(vals)
+          cmd_max = max(vals)
+
+          show_ver_fn = next(
+              (fn for fn in re.findall(
+                  r'(?:int|bool|void)\s+(susfs_\w+)\s*\(',
+                  susfs_h.read_text()
+              ) if 'version' in fn.lower()),
+              None
+          )
+          show_ver_cmd = next((c for c in cmd_ids if 'SHOW_VERSION' in c[0]), None)
+
+          print(
+              f"INFO: cmd range=[{hex(cmd_min)}, {hex(cmd_max)}] "
+              f"ShowVersion={show_ver_cmd} fn={show_ver_fn}"
+          )
+
+          dispatch = (
+              f"\tif (option == {show_ver_cmd[1]}) {{\n"
+              f"\t\t{show_ver_fn}((void __user *)arg2); return 0;\n\t}}\n"
+              if (show_ver_cmd and show_ver_fn)
+              else "\t/* show_version not resolved */\n"
+          )
+
+          bridge = (
+              f"\n/* Chimera Mk6 Light SUSFS prctl bridge ({MARKER}) */\n"
+              f"#ifndef {MARKER}\n#define {MARKER} 1\n#ifdef CONFIG_KSU_SUSFS\n"
+              "int ksu_susfs_handle_prctl(unsigned long option, unsigned long arg2,\n"
+              "    unsigned long arg3, unsigned long arg4, unsigned long arg5)\n"
+              "{\n" + dispatch + "\treturn -EINVAL;\n}\n"
+              "EXPORT_SYMBOL_GPL(ksu_susfs_handle_prctl);\n"
+              f"#endif\n#endif\n"
+          )
+
+          susfs_c = Path("fs/susfs.c")
+          if susfs_c.exists():
+              txt = susfs_c.read_text()
+              if MARKER not in txt:
+                  susfs_c.write_text(txt + bridge)
+                  print("OK: bridge function appended to fs/susfs.c")
+              else:
+                  print("OK: bridge already present in fs/susfs.c (idempotent)")
+
+          sys_c = Path("kernel/sys.c")
+          if not sys_c.exists():
+              print("WARN: kernel/sys.c not found — prctl injection skipped")
+              sys.exit(0)
+
+          txt = sys_c.read_text(errors='replace')
+          if MARKER in txt:
+              print("OK: sys.c already injected (idempotent)")
+              sys.exit(0)
+
+          m = re.search(r'(SYSCALL_DEFINE5\s*\(\s*prctl\b[^{]+\{)', txt, re.DOTALL)
+          if not m:
+              print("WARN: SYSCALL_DEFINE5(prctl) not found in kernel/sys.c")
+              sys.exit(0)
+
+          insert_after = m.end()
+          logic = re.search(r'\n\s*(error\s*=|switch\s*\(|if\s*\(|return\b)', txt[insert_after:])
+          pos = insert_after + (logic.start() if logic else 0)
+
+          snippet = (
+              f"\n\t/* Chimera Mk6 Light: SUSFS prctl bridge ({MARKER}) */\n"
+              "#ifdef CONFIG_KSU_SUSFS\n"
+              f"\tif ((unsigned long)option >= {hex(cmd_min)}UL &&\n"
+              f"\t    (unsigned long)option <= {hex(cmd_max)}UL) {{\n"
+              "\t\textern int ksu_susfs_handle_prctl(unsigned long, unsigned long,\n"
+              "\t\t    unsigned long, unsigned long, unsigned long);\n"
+              "\t\tint __r = ksu_susfs_handle_prctl(\n"
+              "\t\t    (unsigned long)option, (unsigned long)arg2,\n"
+              "\t\t    (unsigned long)arg3, (unsigned long)arg4,\n"
+              "\t\t    (unsigned long)arg5);\n"
+              "\t\tif (__r != -EINVAL) return (long)__r;\n"
+              "\t}\n#endif\n"
+          )
+
+          sys_c.write_text(txt[:pos] + snippet + txt[pos:])
+          print("OK: SUSFS dispatch injected into kernel/sys.c SYSCALL_DEFINE5(prctl)")
+
+          DECL_MARKER = MARKER + "_DECL"
+          h_text = susfs_h.read_text()
+          if DECL_MARKER not in h_text:
+              susfs_h.write_text(h_text + (
+                  f"\n#ifndef {DECL_MARKER}\n#define {DECL_MARKER} 1\n"
+                  "#ifdef CONFIG_KSU_SUSFS\n"
+                  "extern int ksu_susfs_handle_prctl(unsigned long, unsigned long,\n"
+                  "    unsigned long, unsigned long, unsigned long);\n"
+                  f"#endif\n#endif\n"
+              ))
+              print("OK: extern declaration added to susfs.h")
+
+          print("Bridge injection complete.")
+          PYEOF
+
+      # ── 12. Weak symbol fallbacks for sus_su.c ───────────────────────────────
+      - name: Inject weak symbol fallbacks
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          python3 - << 'PYEOF'
+          from pathlib import Path
+
+          target = Path("fs/sus_su.c")
+          if not target.exists():
+              print("INFO: fs/sus_su.c not found — skipping")
+              raise SystemExit(0)
+
+          content = target.read_text()
+          if "WEAK_SYMBOL_FALLBACK" in content:
+              print("OK: weak fallbacks already present (idempotent)")
+              raise SystemExit(0)
+
+          fallback = (
+              "\n/* === WEAK_SYMBOL_FALLBACK === */\n"
+              "#include <linux/cred.h>\n#include <linux/uidgid.h>\n"
+              "#include <linux/capability.h>\n"
+              "#ifndef cap_set_full\n"
+              "#define cap_set_full(c) do { (c) = CAP_FULL_SET; } while(0)\n#endif\n"
+              "__attribute__((weak)) bool susfs_is_allow_su(void) { return false; }\n"
+              "__attribute__((weak)) void ksu_escape_to_root(void) {\n"
+              "    struct cred *nc = prepare_creds(); if (!nc) return;\n"
+              "    nc->uid = nc->gid = nc->suid = nc->sgid =\n"
+              "    nc->euid = nc->egid = nc->fsuid = nc->fsgid = GLOBAL_ROOT_UID;\n"
+              "    cap_set_full(nc->cap_inheritable); cap_set_full(nc->cap_permitted);\n"
+              "    cap_set_full(nc->cap_effective);   cap_set_full(nc->cap_bset);\n"
+              "    commit_creds(nc);\n}\n/* ========================== */\n"
+          )
+          target.write_text(content + fallback)
+          print("OK: weak symbol fallbacks injected into fs/sus_su.c")
+          PYEOF
+
+      # ── 13. Defconfig tuning ─────────────────────────────────────────────────
+      - name: Apply defconfig tuning
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          test -f "$DEFCONFIG" || { echo "ERROR: $DEFCONFIG not found"; exit 1; }
+
+          set_cfg() {
+            sed -i "/^$1=.*/d;/^# $1 is not set/d" "$DEFCONFIG"
+            echo "$1=$2" >> "$DEFCONFIG"
+          }
+
+          unset_cfg() {
+            sed -i "/^$1=.*/d;/^# $1 is not set/d" "$DEFCONFIG"
+            echo "# $1 is not set" >> "$DEFCONFIG"
+          }
+
+          # ── KernelSU ─────────────────────────────────────────────────────────
+          set_cfg CONFIG_KSU y
+
+          # ── SUSFS minimal feature set ─────────────────────────────────────────
+          set_cfg CONFIG_KSU_SUSFS y
+          set_cfg CONFIG_KSU_SUSFS_SUS_PATH y
+          set_cfg CONFIG_KSU_SUSFS_SUS_KSTAT y
+          set_cfg CONFIG_KSU_SUSFS_TRY_UMOUNT y
+          unset_cfg CONFIG_KSU_SUSFS_OPEN_REDIRECT
+          unset_cfg CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
+          unset_cfg CONFIG_KSU_SUSFS_SUS_MOUNT
+          unset_cfg CONFIG_KSU_SUSFS_SPOOF_UNAME
+
+          for opt in \
+            CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOF \
+            CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOFING \
+            CONFIG_KSU_SUSFS_AVC_LOG_SPOOF \
+            CONFIG_KSU_SUSFS_SELINUX_AVC_HOOK \
+            CONFIG_KSU_SUSFS_SPOOF_SELINUX \
+            CONFIG_KSU_SUSFS_SUS_MAP; do
+            unset_cfg "$opt"
+          done
+
+          # ── SELinux enforcing lock ────────────────────────────────────────────
+          unset_cfg CONFIG_SECURITY_SELINUX_DEVELOP
+          unset_cfg CONFIG_SECURITY_SELINUX_BOOTPARAM
+          unset_cfg CONFIG_SECURITY_SELINUX_DISABLE
+          sed -i 's/androidboot\.selinux=permissive//g; s/\benforcing=0\b//g' "$DEFCONFIG"
+
+          # ── Scheduler / performance ───────────────────────────────────────────
+          set_cfg CONFIG_PREEMPT y
+          unset_cfg CONFIG_PREEMPT_NONE
+          unset_cfg CONFIG_PREEMPT_VOLUNTARY
+          unset_cfg CONFIG_HZ_100
+          unset_cfg CONFIG_HZ_250
+          set_cfg CONFIG_HZ_300 y
+          set_cfg CONFIG_HZ 300
+
+          set_cfg CONFIG_TCP_CONG_ADVANCED y
+          set_cfg CONFIG_TCP_CONG_BBR y
+          set_cfg CONFIG_TCP_CONG_CUBIC y
+          sed -i '/^CONFIG_DEFAULT_TCP_CONG=/d;/^# CONFIG_DEFAULT_TCP_CONG is not set/d' \
+            "$DEFCONFIG"
+          echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> "$DEFCONFIG"
+
+          set_cfg CONFIG_ZRAM y
+          set_cfg CONFIG_ZSMALLOC y
+          set_cfg CONFIG_CRYPTO_LZ4 y
+          set_cfg CONFIG_CRYPTO_LZ4HC y
+
+          unset_cfg CONFIG_LOCALVERSION_AUTO
+
+          echo "OK: defconfig tuning complete" | tee "../$LOG_DIR/defconfig-tuning.log"
+          grep -E \
+            "^(CONFIG_KSU|CONFIG_PREEMPT|CONFIG_HZ|CONFIG_TCP_CONG|CONFIG_DEFAULT_TCP|CONFIG_ZRAM|CONFIG_CRYPTO_LZ4|CONFIG_LOCALVERSION|CONFIG_SECURITY_SELINUX)" \
+            "$DEFCONFIG" | tee -a "../$LOG_DIR/defconfig-tuning.log"
+
+      # ── 14. Branding ─────────────────────────────────────────────────────────
+      - name: Apply Mk6 Light branding
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+
+          sed -i '/^CONFIG_LOCALVERSION=/d;/^CONFIG_DEFAULT_HOSTNAME=/d' "$DEFCONFIG"
+          printf 'CONFIG_LOCALVERSION="%s"\nCONFIG_DEFAULT_HOSTNAME="AegisDevLabs"\n' \
+            "$BRAND" >> "$DEFCONFIG"
+
+          printf '#!/bin/sh\n# Chimera Mk6 Light brand\nprintf "%%s" "%s"\n' \
+            "$BRAND" > scripts/setlocalversion
+          chmod +x scripts/setlocalversion
+
+          echo "$BRAND" > localversion
+          echo "CHIMERA_BRAND=$BRAND" >> "$GITHUB_ENV"
+
+          {
+            echo "BRAND=$BRAND"
+            echo "RUN=${GITHUB_RUN_NUMBER}"
+          } | tee "../$LOG_DIR/branding.env"
+
+          echo "=== setlocalversion ===" | tee "../$LOG_DIR/scm-dirty.log"
+          cat scripts/setlocalversion | tee -a "../$LOG_DIR/scm-dirty.log"
+
+      # ── 15. Pre-build SUSFS sanity check ────────────────────────────────────
+      - name: SUSFS pre-build sanity check
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          LOG="../$LOG_DIR/susfs-sanity.log"
+          echo "=== SUSFS pre-build sanity — Chimera Mk6 Light ===" | tee "$LOG"
+          FAIL=0
+
+          for f in \
+            fs/susfs.c fs/sus_su.c \
+            include/linux/susfs.h include/linux/susfs_def.h include/linux/sus_su.h; do
+            if [[ -f "$f" ]]; then
+              LINES="$(wc -l < "$f")"
+              echo "OK: $f ($LINES lines)" | tee -a "$LOG"
+            else
+              echo "FAIL: $f MISSING" | tee -a "$LOG"
+              FAIL=1
+            fi
+          done
+
+          VER="$(grep -oP 'SUSFS_VERSION\s+"\K[^"]+' include/linux/susfs.h 2>/dev/null || echo 'unknown')"
+          echo "SUSFS_VERSION_IN_TREE=$VER" | tee -a "$LOG"
+
+          if grep -q 'CHIMERA_MK6LIGHT_SUSFS_PRCTL_BRIDGE' kernel/sys.c 2>/dev/null; then
+            echo "OK: prctl bridge present in kernel/sys.c" | tee -a "$LOG"
+          else
+            echo "WARN: prctl bridge not found in kernel/sys.c" | tee -a "$LOG"
+          fi
+
+          if grep -q "^# CONFIG_SECURITY_SELINUX_DEVELOP is not set" "$DEFCONFIG"; then
+            echo "OK: SELinux DEVELOP unset — enforcing locked" | tee -a "$LOG"
+          else
+            echo "WARN: CONFIG_SECURITY_SELINUX_DEVELOP still set" | tee -a "$LOG"
+          fi
+
+          MK="$(cat fs/Makefile)"
+          [[ "$MK" == *"susfs.o"*  ]] && echo "OK: fs/Makefile has susfs.o"  | tee -a "$LOG" \
+                                       || { echo "FAIL: fs/Makefile missing susfs.o"  | tee -a "$LOG"; FAIL=1; }
+          [[ "$MK" == *"sus_su.o"* ]] && echo "OK: fs/Makefile has sus_su.o" | tee -a "$LOG" \
+                                       || { echo "FAIL: fs/Makefile missing sus_su.o" | tee -a "$LOG"; FAIL=1; }
+
+          [[ "$FAIL" -eq 0 ]] || { echo "ERROR: sanity check failed — aborting"; exit 1; }
+          echo "=== Sanity check PASSED ===" | tee -a "$LOG"
+
+      # ── 16. Dry run gate ─────────────────────────────────────────────────────
+      - name: Dry run complete
+        if: ${{ inputs.dry_run == true }}
+        run: |
+          echo "========================================"
+          echo "  Chimera Mk6 Light — dry run PASSED"
+          echo "========================================"
+          echo "All patches applied. Sanity checks passed."
+          echo "Re-run with dry_run=false to compile and package."
+
+      # ── 17. Build kernel ─────────────────────────────────────────────────────
+      - name: Build kernel
         if: ${{ inputs.dry_run == false }}
         working-directory: kernel
         run: |
-          set -Eeuo pipefail  
-          # Enforce lightweight stealth profile directly in defconfig
-          cat << 'EOF' >> "$DEFCONFIG"
-          CONFIG_KSU=y
-          CONFIG_KSU_NEXT=y
-          CONFIG_KSU_SUSFS=y
-          CONFIG_SUSFS_KSTAT_HOOK=y
-          CONFIG_OVERLAY_FS=y
-          # CONFIG_SUSFS_OPEN_REDIRECT is not set
-          # CONFIG_SUSFS_SUS_MOUNT is not set
-          # CONFIG_SUSFS_SPOOF_SELINUX is not set
-          # CONFIG_SUSFS_SPOOF_UNAME is not set
-          # Hard Lock SELinux Security Framework
-          # CONFIG_SECURITY_SELINUX_DEVELOP is not set
-          # CONFIG_SECURITY_SELINUX_BOOTPARAM is not set
-          EOF
-          
-      # ── 13. Compile the Kernel ───────────────────────────────────────────────
-      - name: Compile Exynos9810 Kernel
-        if: ${{ inputs.dry_run == false }}
-        working-directory: kernel
-        run: |
-          set -Eeuo pipefail  
-          export ARCH=arm64
-          export SUBARCH=arm64
-          export PATH="$GITHUB_WORKSPACE/neutron-clang/bin:$PATH"
-          export CROSS_COMPILE="aarch64-linux-gnu-"
-          export CROSS_COMPILE_ARM32="arm-linux-gnueabi-"
-          export CC="clang"
-          export KCFLAGS="-fcommon"
-          
-          make O=../$OUT_DIR clean
-          
-          echo "=== Applying Defconfig with Cross-Compiler Variables ==="
-          make O=../$OUT_DIR \
-               ARCH=arm64 \
-               SUBARCH=arm64 \
-               CC="clang" \
-               CROSS_COMPILE="aarch64-linux-gnu-" \
-               CROSS_COMPILE_ARM32="arm-linux-gnueabi-" \
-               ${DEFCONFIG##*/}
-               
-          echo "=== Starting Kernel Compilation ==="
-          make O=../$OUT_DIR -j$(nproc --all) \
-               ARCH=arm64 \
-               SUBARCH=arm64 \
-               CC="clang" \
-               CROSS_COMPILE="aarch64-linux-gnu-" \
-               CROSS_COMPILE_ARM32="arm-linux-gnueabi-"
+          set -Eeuo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/$OUT_DIR"
 
-      # ── 14. Package via AnyKernel3 ───────────────────────────────────────────
-      - name: Package with AnyKernel3
+          export KBUILD_BUILD_USER="X"
+          export KBUILD_BUILD_HOST="AegisDevLabs"
+          export KBUILD_BUILD_VERSION="${GITHUB_RUN_NUMBER:-1}"
+
+          MAKE=(
+            make -j"$(nproc)"
+            O="$GITHUB_WORKSPACE/$OUT_DIR"
+            ARCH=arm64
+            SUBARCH=arm64
+            CC=clang
+            CLANG_TRIPLE=aarch64-linux-gnu-
+            CROSS_COMPILE=aarch64-linux-gnu-
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+            LD="$GITHUB_WORKSPACE/neutron-clang/bin/ld.lld"
+            AR=llvm-ar
+            NM=llvm-nm
+            OBJCOPY=llvm-objcopy
+            OBJDUMP=llvm-objdump
+            STRIP=llvm-strip
+            KCFLAGS="-fcommon -Wno-implicit-function-declaration -Wno-implicit-int -Wno-return-type"
+            LOCALVERSION="$BRAND"
+            KBUILD_BUILD_USER="X"
+            KBUILD_BUILD_HOST="AegisDevLabs"
+          )
+
+          echo "=== Applying defconfig ==="
+          "${MAKE[@]}" exynos9810-star2lte_defconfig
+          cp "$GITHUB_WORKSPACE/$OUT_DIR/.config" "$GITHUB_WORKSPACE/$LOG_DIR/final.config"
+
+          echo "=== Post-merge config verification ==="
+          grep -E "CONFIG_KSU|CONFIG_SECURITY_SELINUX_DEVELOP|LOCALVERSION" \
+            "$GITHUB_WORKSPACE/$OUT_DIR/.config" | tee "$GITHUB_WORKSPACE/$LOG_DIR/config-verify.log"
+
+          echo "=== Building Image + DTBs ==="
+          "${MAKE[@]}" Image dtbs 2>&1 | tee build.log
+
+          IMAGE="$GITHUB_WORKSPACE/$OUT_DIR/arch/arm64/boot/Image"
+          test -f "$IMAGE" || { echo "ERROR: Image not produced — check build.log"; exit 1; }
+          du -h "$IMAGE" | tee "$GITHUB_WORKSPACE/$LOG_DIR/image-size.log"
+
+          echo "=== uname string verification ==="
+          strings "$IMAGE" | grep -E "Linux version 4\.9\." | head -3 \
+            | tee "$GITHUB_WORKSPACE/$LOG_DIR/uname-verify.log" || true
+
+      # ── 18. Package AnyKernel3 flashable zip ────────────────────────────────
+      - name: Package flashable zip
         if: ${{ inputs.dry_run == false }}
         run: |
-          set -Eeuo pipefail  
-          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel
-          
-          # Transfer the raw boot image payload
-          cp $OUT_DIR/arch/arm64/boot/Image.gz-dtb AnyKernel/Image.gz-dtb
-          
-          # Adjust AnyKernel3 variables for Samsung S9+ Exynos9810 (Raw Target Configuration)
-          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel/anykernel.sh
-          sed -i 's|^block=.*|block=/dev/block/platform/11120000.ufs/by-name/boot;|g' AnyKernel/anykernel.sh
-          sed -i 's/is_slot_device=0;/is_slot_device=0;/g' AnyKernel/anykernel.sh
-          sed -i 's/keep_fragments=false/keep_fragments=true/g' AnyKernel/anykernel.sh
-          
-          # Force AnyKernel3 into Split/Raw flashing execution mode for Samsung ramdisk handling
-          sed -i 's/dump_boot;/split_boot;/g' AnyKernel/anykernel.sh
-          sed -i 's/write_boot;/flash_boot;/g' AnyKernel/anykernel.sh
-          
-          cd AnyKernel
-          zip -r9 ../Chimera-Stealth-star2lte${BRAND}.zip *
-          
-      # ── 15. Upload Final Artifacts ───────────────────────────────────────────
-      - name: Upload Kernel Zip
+          set -Eeuo pipefail
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AnyKernel3
+
+          python3 - << 'PYEOF'
+          from pathlib import Path
+
+          content = "\n".join([
+              "properties() { '",
+              "kernel.string=Project Chimera Mk6 Light - Exynos9810 / star2lte",
+              "do.devicecheck=1",
+              "do.modules=0",
+              "do.cleanup=1",
+              "do.cleanuponabort=0",
+              "device.name1=star2lte",
+              "device.name2=SM-G965F",
+              "device.name3=SM-G965U",
+              "device.name4=SM-G965N",
+              "device.name5=SM-G9650",
+              "'; }",
+              "",
+              "block=boot;",
+              "is_slot_device=0;",
+              "ramdisk_compression=auto;",
+              "patch_vbmeta_flag=auto;",
+              "",
+              ". tools/ak3-core.sh;",
+              "",
+              "dump_boot;",
+              "write_boot;",
+          ]) + "\n"
+
+          Path("AnyKernel3/anykernel.sh").write_text(content)
+          print("OK: anykernel.sh written")
+          PYEOF
+
+          cp "$OUT_DIR/arch/arm64/boot/Image" AnyKernel3/
+          find "$OUT_DIR/arch/arm64/boot/dts/exynos" -name '*star2lte*.dtb' \
+            -exec cp {} AnyKernel3/ \; 2>/dev/null || echo "INFO: no star2lte DTBs found"
+
+          ZIP="chimera-mk6light-lineage23.2-$(date +%Y%m%d-%H%M)-r${GITHUB_RUN_NUMBER}.zip"
+          ( cd AnyKernel3 && zip -r9 "../$ZIP" . -x '*.git*' )
+          test -f "$ZIP" || { echo "ERROR: zip not produced"; exit 1; }
+          echo "ZIP=$ZIP" >> "$LOG_DIR/branding.env"
+          echo "OK: flashable zip: $ZIP"
+          du -h "$ZIP"
+
+      # ── 19. Upload logs ──────────────────────────────────────────────────────
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chimera-mk6light-logs-${{ github.run_number }}
+          path: |
+            logs/
+            kernel/build.log
+            kernel-out/.config
+          if-no-files-found: ignore
+          retention-days: 14
+
+      # ── 20. Upload flashable zip ─────────────────────────────────────────────
+      - name: Upload flashable zip
         if: ${{ inputs.dry_run == false }}
         uses: actions/upload-artifact@v4
         with:
-          name: Chimera-Stealth-Kernel-star2lte
-          path: Chimera-Stealth-star2lte${BRAND}.zip
+          name: chimera-mk6light-${{ github.run_number }}
+          path: chimera-mk6light-*.zip
+          if-no-files-found: error
+          retention-days: 30
+
+      # ── 21. Create GitHub Release ────────────────────────────────────────────
+      - name: Create GitHub Release
+        if: ${{ inputs.dry_run == false && inputs.do_release == true }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: chimera-mk6light-${{ github.run_number }}
+          name: "Project Chimera Mk6 Light — Lineage 23.2 Build #${{ github.run_number }}"
+          body: |
+            ## Project Chimera Mk6 Light — Exynos 9810 / star2lte
+            **Base:** `royd-jpg/Project_Chimera @ chimera-mk6l`
+            **SUSFS:** `simonpunk/susfs4ksu @ kernel-4.9` (targets v1.5.12)
+            **Toolchain:** Neutron Clang 10-03-2024
+
+            ### SUSFS feature set (minimal / AVC-safe)
+            | Feature | State |
+            |---|---|
+            | SUS_PATH | ✅ enabled |
+            | SUS_KSTAT | ✅ enabled |
+            | TRY_UMOUNT | ✅ enabled |
+            | OPEN_REDIRECT | ❌ disabled |
+            | HIDE_KSU_SUSFS_SYMBOLS | ❌ disabled |
+            | SUS_MOUNT | ❌ disabled |
+            | SPOOF_UNAME | ❌ disabled |
+            | All AVC/SELinux spoof options | ❌ disabled |
+
+            ### SELinux
+            **Enforcing locked** — `CONFIG_SECURITY_SELINUX_DEVELOP` removed.
+            `setenforce 0` returns `EPERM` at the kernel level.
+
+            ### Kernel identity
+            ```
+            Linux version 4.9.x-CM6L (X@AegisDevLabs)
+            ```
+
+            ### Flash order
+            1. Flash LineageOS 23.2 base + recovery
+            2. Sideload this zip via recovery
+            3. Install KernelSU Next manager APK
+            4. Install SUSFS module via KSU manager
+            5. Reboot
+          files: chimera-mk6light-*.zip
