@@ -13856,7 +13856,7 @@
 
 	bluetooth {
 		compatible = "samsung,bcm43xx";
-t	bt_addr_path = "/efs/bluetooth/bt_addr";
+	bt_addr_path = "/efs/bluetooth/bt_addr";
 		gpios = <76 7 0 127 0 0 130 3 15>;
 		pinctrl-names = "default";
 		pinctrl-0 = <410 411>;
