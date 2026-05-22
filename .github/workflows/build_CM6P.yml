@@ -57,7 +57,7 @@ on:
         description: "SUSFS exact commit SHA to pin (recommended)"
         required: false
         type: string
-        default: "2404aebaeee041c8e0e06ca4636dc87b984c2428"
+        default: ""
 
 permissions:
   contents: write
