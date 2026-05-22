@@ -691,53 +691,56 @@ static int __init init_ufc_table_dt(struct exynos_cpufreq_domain *domain,
 
 static int __init exynos_ufc_init(void)
 {
-	struct device_node *dn = NULL;
-	return 0; /* Short-Circuit applied */ 
-	const char *buf;
-	struct exynos_cpufreq_domain *domain;
-	int ret = 0;
+    /* 1. ALL variable declarations MUST go here at the top */
+    struct device_node *dn = NULL;
+    const char *buf;
+    struct exynos_cpufreq_domain *domain;
+    int ret = 0;
+    struct cpumask shared_mask;
 
-	pm_qos_add_request(&cpu_online_max_qos_req, PM_QOS_CPU_ONLINE_MAX,
-					PM_QOS_CPU_ONLINE_MAX_DEFAULT_VALUE);
+    /* 2. Now you can safely use code (the short-circuit) */
+    return 0; /* Short-Circuit applied */
 
-	while((dn = of_find_node_by_type(dn, "cpufreq-userctrl"))) {
-		struct cpumask shared_mask;
+    /* * Everything below this is unreachable (which is what we want),
+     * but the compiler is now happy because the declarations 
+     * are strictly at the top.
+     */
+    pm_qos_add_request(&cpu_online_max_qos_req, PM_QOS_CPU_ONLINE_MAX,
+                    PM_QOS_CPU_ONLINE_MAX_DEFAULT_VALUE);
 
-		ret = of_property_read_string(dn, "shared-cpus", &buf);
-		if (ret) {
-			pr_err("failed to get shared-cpus for ufc\n");
-			goto exit;
-		}
+    while((dn = of_find_node_by_type(dn, "cpufreq-userctrl"))) {
+        ret = of_property_read_string(dn, "shared-cpus", &buf);
+        if (ret) {
+            pr_err("failed to get shared-cpus for ufc\n");
+            goto exit;
+        }
 
-		cpulist_parse(buf, &shared_mask);
-		domain = find_domain_cpumask(&shared_mask);
-		if (!domain) {
-			pr_err("Can't found domain for ufc!\n");
-			goto exit;
-		}
+        cpulist_parse(buf, &shared_mask);
+        domain = find_domain_cpumask(&shared_mask);
+        if (!domain) {
+            pr_err("Can't found domain for ufc!\n");
+            goto exit;
+        }
 
-		/* Initialize user control information from dt */
-		ret = parse_ufc_ctrl_info(domain, dn);
-		if (ret) {
-			pr_err("failed to get ufc ctrl info\n");
-			goto exit;
-		}
+        ret = parse_ufc_ctrl_info(domain, dn);
+        if (ret) {
+            pr_err("failed to get ufc ctrl info\n");
+            goto exit;
+        }
 
-		/* Parse user frequency ctrl table info from dt */
-		ret = init_ufc_table_dt(domain, dn);
-		if (ret) {
-			pr_err("failed to parse frequency table for ufc ctrl\n");
-			goto exit;
-		}
-		/* Initialize PM QoS */
-		init_pm_qos(domain);
-		pr_info("Complete to initialize domain%d\n",domain->id);
-	}
+        ret = init_ufc_table_dt(domain, dn);
+        if (ret) {
+            pr_err("failed to parse frequency table for ufc ctrl\n");
+            goto exit;
+        }
+        init_pm_qos(domain);
+        pr_info("Complete to initialize domain%d\n",domain->id);
+    }
 
-	init_sysfs();
+    init_sysfs();
 
-	pr_info("Initialized Exynos UFC(User-Frequency-Ctrl) driver\n");
+    pr_info("Initialized Exynos UFC(User-Frequency-Ctrl) driver\n");
 exit:
-	return 0;
+    return 0;
 }
 late_initcall(exynos_ufc_init);
