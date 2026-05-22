@@ -3,7 +3,7 @@
 # ───────────────────────────────────────────────────────────────────────────────
 # Base   : royd-jpg/Project_Chimera @ chimera-mk6l
 # KSU    : gavdoc38/KernelSU-Next (pinned submodule)
-# SUSFS  : simonpunk/susfs4ksu @ kernel-4.9 (targets v1.5.12)
+# SUSFS  : simonpunk/susfs4ksu @ kernel-4.9 (targets v2.1.0)
 # Clang  : Neutron Clang 10-03-2024 (pinned)
 # Target : LineageOS 23.2 · Android 16 · AVC-safe · SELinux enforcing-locked
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -78,7 +78,7 @@ jobs:
       KERNEL_BRANCH: "chimera-mk6l"
       SUSFS_REPO:    "https://gitlab.com/simonpunk/susfs4ksu.git"
       SUSFS_BRANCH:  "kernel-4.9"
-      SUSFS_TARGET_VERSION: "v1.5.5"
+      SUSFS_TARGET_VERSION: "v2.1.0"
       KERNEL_DIR:    "kernel"
       OUT_DIR:       "kernel-out"
       LOG_DIR:       "logs"
@@ -826,7 +826,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           LOG="../$LOG_DIR/susfs-sanity.log"
-          echo "=== SUSFS pre-build sanity — Chimera Mk6 Light ===" | tee "$LOG"
+          echo "=== SUSFS pre-build sanity — Chimera Mk6 Plus ===" | tee "$LOG"
           FAIL=0
           for f in \
             fs/susfs.c fs/sus_su.c \
@@ -902,7 +902,7 @@ jobs:
             STRIP=llvm-strip
             KCFLAGS="-fcommon -Wno-implicit-function-declaration -Wno-implicit-int -Wno-return-type"
             LOCALVERSION="$BRAND"
-            KBUILD_BUILD_USER="rec"
+            KBUILD_BUILD_USER="REC"
             KBUILD_BUILD_HOST="${BUILD_HOST}"
           )
 
@@ -948,7 +948,7 @@ jobs:
               "device.name5=SM-G9650",
               "'; }",
               "",
-              "block=boot;",
+              "block=/dev/block/platform/11120000.ufs/by-name/BOOT;",
               "is_slot_device=0;",
               "ramdisk_compression=auto;",
               "patch_vbmeta_flag=auto;",
@@ -1010,7 +1010,7 @@ jobs:
           body: |
             ## Project Chimera Mk6 Plus — Exynos 9810 / star2lte
             **Base:** `royd-jpg/Project_Chimera @ chimera-mk6l`
-            **SUSFS:** `simonpunk/susfs4ksu @ kernel-4.9` (targets v1.5.12)
+            **SUSFS:** `simonpunk/susfs4ksu @ kernel-4.9` (targets v2.1.0)
             **Toolchain:** Neutron Clang 10-03-2024
 
             ### SUSFS feature set (minimal / AVC-safe)
@@ -1026,8 +1026,4 @@ jobs:
             **Enforcing locked** — `CONFIG_SECURITY_SELINUX_DEVELOP` removed.
             `setenforce 0` returns `EPERM` at the kernel level.
 
-            ### Kernel identity
-            ```
-            Linux version 4.9.x-Chimera_Mk6Plus (X@AegisDevLabs)
-            ```
           files: chimera-mk6plus-*.zip
