@@ -4,7 +4,7 @@
 # Integrated KernelSU-Next (Legacy SUSFS)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-name: Project Chimera Mk6 Plus — Lineage 23.2 Build - GEMINI BETA
+name: Project Chimera Mk6 Plus — Lineage 23.2 Build
 
 on:
   workflow_dispatch:
@@ -85,14 +85,18 @@ jobs:
           sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
           grep -q 'obj-y += kernelsu/' drivers/Makefile || echo 'obj-y += kernelsu/' >> drivers/Makefile
 
-      # ── Emergency Surgery (4.9 Kernel Compatibility) ──────────────────────
-      - name: Emergency Surgery (VFS & Syscall Fix)
+      # ── Emergency Surgery (4.9 Kernel Compatibility & Build Fixes) ────────
+      - name: Emergency Surgery (Compatibility Patches)
         working-directory: kernel
         run: |
+          # Fix pointer format mismatch in process.c
+          sed -i 's/printk("\\n%s: %pS:\\n", name, addr);/printk("\\n%s: %pS:\\n", name, (void *)addr);/g' arch/arm64/kernel/process.c
+          
           # Namei Compatibility Fix
           if [[ -f fs/namei.c ]]; then
             sed -i '/struct nameidata {/i #define ND_FLAGS_LOOKUP_LAST (1 << 30)\n#define ND_STATE_LOOKUP_LAST (1 << 30)\n#define ND_STATE_OPEN_LAST (1 << 30)\n' fs/namei.c
           fi
+          
           # Syscall Fix
           HOOK_H="KernelSU-Next/kernel/hook/syscall_hook.h"
           if [[ -f "$HOOK_H" ]] && ! grep -q 'syscall_fn_t' "$HOOK_H"; then
