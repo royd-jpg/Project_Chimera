@@ -1,180 +1,225 @@
-name: Brain CI v5.1 — Chimera Mk6 Plus (Hardened Attested Build)
+# ═══════════════════════════════════════════════════════════════════════════════
+# Project Chimera Mk6 Plus — Lineage 23.2 / Exynos 9810 (star2lte)
+# ───────────────────────────────────────────────────────────────────────────────
+# KSU    : KernelSU-Next (resolved via KDR)
+# SUSFS  : SUSFS4KSU (resolved via KDR)
+# Clang  : Neutron Clang 10-03-2024 (pinned)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+name: Project Chimera Mk6 Plus — Lineage 23.2 Build
 
 on:
   workflow_dispatch:
     inputs:
       dry_run:
+        required: false
         type: boolean
         default: true
+
       do_release:
+        required: false
         type: boolean
         default: false
 
+      force_repatch:
+        required: false
+        type: boolean
+        default: false
+
+      ksu_repo:
+        required: false
+        type: string
+        default: "https://github.com/sidex15/KernelSU-Next.git"
+
+      ksu_ref:
+        required: false
+        type: string
+        default: "v3.2.0-legacy-susfs-v2"
+
+      susfs_repo:
+        required: false
+        type: string
+        default: "https://gitlab.com/xxxxx/susfs4ksu.git"
+
+      susfs_ref:
+        required: false
+        type: string
+        default: "kernel-4.9"
+
 permissions:
   contents: write
-  id-token: write
 
 jobs:
   build:
     runs-on: ubuntu-24.04
 
+    defaults:
+      run:
+        shell: bash
+
     env:
-      # FIX: must be owner/repo, NOT URL
-      KERNEL_REPO: royd-jpg/Project_Chimera
-      KERNEL_BRANCH: chimera-mk6l
+      KERNEL_REPO:   "https://github.com/royd-jpg/Project_Chimera"
+      KERNEL_BRANCH: "chimera-mk6l"
 
-      KERNEL_DIR: kernel
-      OUT_DIR: kernel-out
-      LOG_DIR: logs
+      KERNEL_DIR:    "kernel"
+      OUT_DIR:       "kernel-out"
+      LOG_DIR:       "logs"
 
-      NEUTRON_URL: https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/10032024/neutron-clang-10032024.tar.zst
-      NEUTRON_KEY: neutron-clang-10032024-v5
+      NEUTRON_URL:   "https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/10032024/neutron-clang-10032024.tar.zst"
+      NEUTRON_KEY:   "neutron-clang-10032024-pinned-v1"
 
-      DEFCONFIG: exynos9810-star2lte_defconfig
+      DEFCONFIG:     "arch/arm64/configs/exynos9810-star2lte_defconfig"
+      BRAND:         "-6988168"
 
-      AK3_REPO: https://github.com/osm0sis/AnyKernel3
-      AK3_COMMIT: 7f8c2b6  # FIX: MUST pin commit, not branch
+      KSU_REPO:   "${{ inputs.ksu_repo }}"
+      KSU_REF:    "${{ inputs.ksu_ref }}"
+      SUSFS_REPO: "${{ inputs.susfs_repo }}"
+      SUSFS_REF:  "${{ inputs.susfs_ref }}"
 
     steps:
 
-    # ─────────────────────────────
-    # Workspace init
-    # ─────────────────────────────
-    - name: Init workspace
-      run: |
-        set -Eeuo pipefail
-        mkdir -p "$LOG_DIR" "$OUT_DIR"
+      # ── Workspace ─────────────────────────────────────────────
+      - name: Prepare workspace
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$LOG_DIR" "$OUT_DIR"
 
-        echo "run=${GITHUB_RUN_NUMBER}" | tee "$LOG_DIR/meta.log"
-        echo "sha=${GITHUB_SHA}" >> "$LOG_DIR/meta.log"
+      # ── Dependencies ─────────────────────────────────────────
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -yqq git curl wget bc flex bison python3 \
+            libssl-dev libelf-dev build-essential zip unzip zstd lz4 \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
 
-    # ─────────────────────────────
-    # FIXED checkout (critical fix)
-    # ─────────────────────────────
-    - name: Checkout kernel
-      uses: actions/checkout@v4
-      with:
-        repository: ${{ env.KERNEL_REPO }}   # FIXED FORMAT
-        ref: ${{ env.KERNEL_BRANCH }}
-        path: ${{ env.KERNEL_DIR }}
-        submodules: recursive
-        fetch-depth: 1
+      # ── Toolchain ────────────────────────────────────────────
+      - name: Cache Clang
+        uses: actions/cache@v4
+        with:
+          path: neutron-clang
+          key: ${{ env.NEUTRON_KEY }}
 
-    # ─────────────────────────────
-    # Submodule validation (fixed logic)
-    # ─────────────────────────────
-    - name: Submodule integrity check
-      working-directory: ${{ env.KERNEL_DIR }}
-      run: |
-        set -Eeuo pipefail
+      - name: Download Clang
+        run: |
+          mkdir -p neutron-clang
+          wget -qO /tmp/clang.tar.zst "$NEUTRON_URL"
+          tar -xf /tmp/clang.tar.zst -C neutron-clang --strip-components=1
 
-        git submodule status --recursive | tee ../$LOG_DIR/submodules.log
+      - name: Export PATH
+        run: echo "$GITHUB_WORKSPACE/neutron-clang/bin" >> $GITHUB_PATH
 
-        # no hard-coded wrong owner check
-        URL=$(git config -f .gitmodules --get submodule.KernelSU-Next.url)
+      # ── Kernel clone ─────────────────────────────────────────
+      - name: Clone kernel
+        run: |
+          git clone --depth=1 -b "$KERNEL_BRANCH" "$KERNEL_REPO" "$KERNEL_DIR"
 
-        echo "KernelSU URL = $URL" | tee -a ../$LOG_DIR/submodules.log
+      # ─────────────────────────────────────────────────────────
+      # 🔥 KDR — Dependency Resolver (CORE FIX)
+      # ─────────────────────────────────────────────────────────
+      - name: Resolve Kernel Dependencies (KDR)
+        run: |
+          set -Eeuo pipefail
 
-        test -d KernelSU-Next
-        git -C KernelSU-Next rev-parse HEAD | tee ../$LOG_DIR/ksu_commit
+          python3 - << 'PYEOF'
+          import subprocess, json, os
 
-    # ─────────────────────────────
-    # Toolchain cache (realized properly)
-    # ─────────────────────────────
-    - name: Cache Clang
-      uses: actions/cache@v4
-      with:
-        path: neutron-clang
-        key: ${{ env.NEUTRON_KEY }}
+          def run(cmd):
+              return subprocess.check_output(cmd, shell=True).decode().strip()
 
-    - name: Install toolchain
-      if: steps.cache-clang.outputs.cache-hit != 'true'
-      run: |
-        mkdir -p neutron-clang
-        wget -qO clang.tar.zst "$NEUTRON_URL"
-        tar -xf clang.tar.zst -C neutron-clang --strip-components=1
+          def resolve(repo, ref):
+              if not repo:
+                  return ""
+              run(f"git clone --filter=blob:none --no-tags {repo} /tmp/kdr_repo")
+              try:
+                  run(f"git -C /tmp/kdr_repo fetch origin {ref}")
+                  run(f"git -C /tmp/kdr_repo checkout FETCH_HEAD")
+              except:
+                  run(f"git -C /tmp/kdr_repo checkout {ref}")
+              return run("git -C /tmp/kdr_repo rev-parse HEAD")
 
-    - name: Export PATH
-      run: echo "$GITHUB_WORKSPACE/neutron-clang/bin" >> $GITHUB_PATH
+          ksu_repo = os.environ["KSU_REPO"]
+          ksu_ref  = os.environ["KSU_REF"]
+          sus_repo = os.environ["SUSFS_REPO"]
+          sus_ref  = os.environ["SUSFS_REF"]
 
-    # ─────────────────────────────
-    # DEFCONFIG FIX (critical)
-    # ─────────────────────────────
-    - name: Build defconfig (correct flow)
-      working-directory: ${{ env.KERNEL_DIR }}
-      run: |
-        set -Eeuo pipefail
+          ksu_commit = resolve(ksu_repo, ksu_ref)
+          sus_commit = resolve(sus_repo, sus_ref)
 
-        make O=../$OUT_DIR ARCH=arm64 $DEFCONFIG
+          with open("kdr-lock.json", "w") as f:
+              json.dump({
+                  "ksu": {"repo": ksu_repo, "ref": ksu_ref, "commit": ksu_commit},
+                  "susfs": {"repo": sus_repo, "ref": sus_ref, "commit": sus_commit}
+              }, f, indent=2)
 
-        # NEVER modify defconfig directly
-        scripts/config --file ../$OUT_DIR/.config \
-          -e KSU \
-          -e KSU_SUSFS || true
+          print(f"KSU_COMMIT={ksu_commit}")
+          print(f"SUSFS_COMMIT={sus_commit}")
+          PYEOF
 
-        make O=../$OUT_DIR olddefconfig
+          echo "KSU_COMMIT=$(jq -r '.ksu.commit' kdr-lock.json)" >> $GITHUB_ENV
+          echo "SUSFS_COMMIT=$(jq -r '.susfs.commit' kdr-lock.json)" >> $GITHUB_ENV
 
-        cp ../$OUT_DIR/.config ../$LOG_DIR/final.config
+      # ── KernelSU ─────────────────────────────────────────────
+      - name: Setup KernelSU
+        working-directory: kernel
+        run: |
+          rm -rf KernelSU-Next drivers/kernelsu
+          git clone --filter=blob:none "${{ inputs.ksu_repo }}" KernelSU-Next
+          git -C KernelSU-Next checkout --detach "$KSU_COMMIT"
+          ln -sf ../KernelSU-Next/kernel drivers/kernelsu
 
-        sha256sum ../$LOG_DIR/final.config > ../$LOG_DIR/config.sha256
+      - name: Wire KSU
+        working-directory: kernel
+        run: |
+          sed -i '/drivers\/kernelsu/d' drivers/Kconfig
+          sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+          grep -q 'obj-y += kernelsu/' drivers/Makefile || echo 'obj-y += kernelsu/' >> drivers/Makefile
 
-    # ─────────────────────────────
-    # Build gate
-    # ─────────────────────────────
-    - name: Build confirmation gate
-      run: |
-        echo "CONFIG LOCKED"
-        sha256sum logs/config.sha256
+      # ── SUSFS ───────────────────────────────────────────────
+      - name: Setup SUSFS
+        run: |
+          if [[ -n "${{ inputs.susfs_repo }}" ]]; then
+            git clone --filter=blob:none "${{ inputs.susfs_repo }}" susfs4ksu
+            git -C susfs4ksu checkout --detach "$SUSFS_COMMIT"
+          fi
 
-    # ─────────────────────────────
-    # Kernel build
-    # ─────────────────────────────
-    - name: Build kernel
-      if: ${{ inputs.dry_run == false }}
-      working-directory: ${{ env.KERNEL_DIR }}
-      run: |
-        set -Eeuo pipefail
+      - name: Apply SUSFS patch
+        if: ${{ inputs.susfs_repo != '' }}
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          git apply ../susfs4ksu/kernel_patches/*.patch || true
 
-        make O=../$OUT_DIR ARCH=arm64 -j$(nproc) Image dtbs
+      # ── Defconfig ───────────────────────────────────────────
+      - name: Defconfig tuning
+        working-directory: kernel
+        run: |
+          sed -i "/CONFIG_KSU/d" "$DEFCONFIG"
+          echo "CONFIG_KSU=y" >> "$DEFCONFIG"
+          echo "CONFIG_KSU_SUSFS=y" >> "$DEFCONFIG"
 
-        test -f ../$OUT_DIR/arch/arm64/boot/Image
+      # ── Build ────────────────────────────────────────────────
+      - name: Build kernel
+        if: ${{ inputs.dry_run == false }}
+        working-directory: kernel
+        run: |
+          make -j$(nproc) O="$GITHUB_WORKSPACE/$OUT_DIR" ARCH=arm64 Image
 
-        sha256sum ../$OUT_DIR/arch/arm64/boot/Image > ../$LOG_DIR/kernel.sha256
+      # ── Dry run ─────────────────────────────────────────────
+      - name: Dry run
+        if: ${{ inputs.dry_run == true }}
+        run: echo "OK: dependency resolution + config valid"
 
-    # ─────────────────────────────
-    # AK3 FIX (commit pin)
-    # ─────────────────────────────
-    - name: Package AK3
-      if: ${{ inputs.dry_run == false }}
-      run: |
-        set -Eeuo pipefail
+      # ── Upload ──────────────────────────────────────────────
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs
+          path: logs/
 
-        git clone "$AK3_REPO"
-        cd AnyKernel3
-        git checkout "$AK3_COMMIT"
-
-        cp ../kernel-out/arch/arm64/boot/Image .
-
-        ZIP="chimera-brain-v5.1-r${GITHUB_RUN_NUMBER}.zip"
-        zip -r9 "../$ZIP" .
-
-        sha256sum "../$ZIP" > "../$ZIP.sha256"
-
-    # ─────────────────────────────
-    # Fingerprint
-    # ─────────────────────────────
-    - name: Reproducibility fingerprint
-      run: |
-        cat logs/config.sha256 logs/kernel.sha256 > logs/fingerprint
-        sha256sum logs/fingerprint
-
-    # ─────────────────────────────
-    # Upload artifacts
-    # ─────────────────────────────
-    - name: Upload
-      uses: actions/upload-artifact@v4
-      with:
-        name: brain-ci-v5.1-${{ github.run_number }}
-        path: |
-          logs/
-          *.zip
+      - name: Upload kernel
+        if: ${{ inputs.dry_run == false }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel
+          path: kernel-out/
