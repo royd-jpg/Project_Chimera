@@ -779,7 +779,8 @@ jobs:
           sed -i '/^CONFIG_DEFAULT_TCP_CONG=/d;/^# CONFIG_DEFAULT_TCP_CONG is not set/d' \
             "$DEFCONFIG"
           echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> "$DEFCONFIG"
-          
+
+          set_cfg CONFIG_SCHED_DEBUG   y
           set_cfg CONFIG_ZRAM          y
           set_cfg CONFIG_ZSMALLOC      y
           set_cfg CONFIG_CRYPTO_LZ4    y
