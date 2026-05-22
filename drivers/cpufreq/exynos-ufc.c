@@ -691,6 +691,13 @@ static int __init init_ufc_table_dt(struct exynos_cpufreq_domain *domain,
 
 static int __init exynos_ufc_init(void)
 {
+/* SHORT-CIRCUIT: Disable UFC to prevent frequency interference.
+     * The kernel will treat this as a successful init, but skip all hardware setup.
+     */
+    return 0;
+
+    /* Original code remains below but is unreachable */
+	
 	struct device_node *dn = NULL;
 	const char *buf;
 	struct exynos_cpufreq_domain *domain;
