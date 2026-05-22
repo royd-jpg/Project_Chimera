@@ -348,12 +348,21 @@ jobs:
           #
           # SUSFS
           #
-
+    
           set_cfg CONFIG_KSU_SUSFS y
           set_cfg CONFIG_KSU_SUSFS_SUS_PATH y
           set_cfg CONFIG_KSU_SUSFS_SUS_KSTAT y
           set_cfg CONFIG_KSU_SUSFS_TRY_UMOUNT y
           set_cfg CONFIG_KSU_SUSFS_SUS_MAP y
+    
+          #
+          # Disable unstable / incomplete SUSFS features
+          #
+    
+          unset_cfg CONFIG_KSU_SUSFS_OPEN_REDIRECT
+          unset_cfg CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
+          unset_cfg CONFIG_KSU_SUSFS_SPOOF_UNAME
+          unset_cfg CONFIG_KSU_SUSFS_SUS_MOUNT
 
           #
           # Stable options
