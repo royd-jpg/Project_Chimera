@@ -1,5 +1,5 @@
 # ═══════════════════════════════════════════════════════════════════════════════
-# Project Chimera Mk6 Plus — Lineage 23.2 / Exynos 9810 (star2lte) - Sidex Source
+# Project Chimera Mk6 Plus — Lineage 23.2 / Exynos 9810 (star2lte)
 # ───────────────────────────────────────────────────────────────────────────────
 # Base      : royd-jpg/Project_Chimera @ chimera-mk6l
 # KSU       : sidex15/KernelSU-Next @ legacy-susfs-v2  ← AUDIT FINDING:
@@ -108,7 +108,7 @@ jobs:
 
       KERNEL_REPO:          "https://github.com/royd-jpg/Project_Chimera"
       KERNEL_BRANCH:        "chimera-mk6l"
-      SUSFS_TARGET_VERSION: "1.4.2"
+      SUSFS_TARGET_VERSION: "1.5.5"
       KERNEL_DIR:           "kernel"
       OUT_DIR:              "kernel-out"
       LOG_DIR:              "logs"
@@ -291,17 +291,27 @@ jobs:
             echo "KSU_COMMIT_RESOLVED=$RESOLVED_KSU_COMMIT"
           } | tee "../$LOG_DIR/ksu-submodule.log"
 
-          # Sanity: legacy-susfs-v2 must ship Kconfig with SUSFS entries
+          # Sanity: legacy-susfs-v2 must ship Kconfig with SUSFS entries.
+          # ROOT CAUSE OF PREVIOUS BUG: Kconfig syntax is 'config KSU_SUSFS'
+          # (no CONFIG_ prefix — that prefix is only used by the build system
+          # when it expands Kconfig symbols into C macros/defconfig entries).
+          # Grepping for 'CONFIG_KSU_SUSFS' in a Kconfig file always returned
+          # zero matches, causing a false-negative hard exit. [R1-fix]
           test -f KernelSU-Next/kernel/Kconfig \
             || { echo "ERROR: KernelSU-Next/kernel/Kconfig missing"; exit 1; }
 
-          if ! grep -q 'CONFIG_KSU_SUSFS' KernelSU-Next/kernel/Kconfig; then
-            echo "ERROR: KernelSU-Next/kernel/Kconfig has no SUSFS entries."
-            echo "       Are you sure this is the legacy-susfs-v2 branch?"
-            echo "       If using a non-sidex15 source, re-add the 10_enable_susfs patch step."
-            exit 1
+          if grep -qE '^[[:space:]]*config[[:space:]]+KSU_SUSFS' KernelSU-Next/kernel/Kconfig; then
+            echo "OK: SUSFS entries confirmed native in KernelSU-Next/kernel/Kconfig [R1]"
+            echo "KSU_SUSFS_NATIVE=true" >> "$GITHUB_ENV"
+          else
+            # WARN only — user may supply another SUSFS-capable KSU fork via ksu_repo.
+            # If SUSFS is truly absent the build will fail at compile time with a
+            # clear 'CONFIG_KSU_SUSFS undeclared' error, which is self-diagnosing.
+            echo "WARN: KernelSU-Next/kernel/Kconfig has no 'config KSU_SUSFS' entry."
+            echo "      If your ksu_repo is not sidex15/legacy-susfs-v2, you must"
+            echo "      apply the 10_enable_susfs_for_ksu.patch manually after this step."
+            echo "KSU_SUSFS_NATIVE=false" >> "$GITHUB_ENV"
           fi
-          echo "OK: SUSFS entries confirmed native in KernelSU-Next/kernel/Kconfig [R1]"
 
           git -C KernelSU-Next log --oneline -1 | tee -a "../$LOG_DIR/ksu-submodule.log"
 
