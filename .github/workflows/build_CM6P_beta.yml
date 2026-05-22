@@ -24,10 +24,10 @@ on:
         type: string
         default: "https://github.com/sidex15/KernelSU-Next.git"
       ksu_ref: "legacy-susfs-v2"
-        description: "KernelSU branch/tag/ref (used if ksu_commit is empty)"
-        required: false
-        type: string
-        default: ""
+      description: "KernelSU branch/tag/ref (used if ksu_commit is empty)"
+      required: false
+      type: string
+      default: ""
       ksu_commit:
         description: "KernelSU exact commit SHA to pin (recommended)"
         required: false
