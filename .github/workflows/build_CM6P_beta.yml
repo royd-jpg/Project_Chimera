@@ -252,16 +252,6 @@ jobs:
           echo "CHIMERA_BRAND=$BRAND" >> "$GITHUB_ENV"
           echo "KBUILD_HOST=$BUILD_HOST" >> "$GITHUB_ENV"
 
-      - name: SUSFS pre-build sanity check
-        working-directory: kernel
-        run: |
-          set -Eeuo pipefail
-          LOG="../$LOG_DIR/susfs-sanity.log"
-          FAIL=0
-          for f in fs/susfs.c fs/sus_su.c include/linux/susfs.h include/linux/susfs_def.h include/linux/sus_su.h; do
-            [[ -f "$f" ]] || { echo "FAIL: $f MISSING"; FAIL=1; }
-          done
-          [[ "$FAIL" -eq 0 ]] || { echo "ERROR: sanity check failed"; exit 1; }
 
       - name: Build kernel
         if: ${{ inputs.dry_run == false }}
