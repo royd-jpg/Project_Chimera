@@ -1,4 +1,4 @@
-name: Project Chimera Mk6 Plus — Lineage 23.2 Build
+name: Project Chimera Mk6 Plus — Lineage 23.2 Build - beta
 
 on:
   workflow_dispatch:
@@ -8,49 +8,41 @@ on:
         required: false
         type: boolean
         default: true
-
       do_release:
         description: "Create a GitHub Release after successful build"
         required: false
         type: boolean
         default: false
-
       force_repatch:
         description: "Force re-apply KSU/SUSFS even if already present in tree"
         required: false
         type: boolean
         default: false
-
       ksu_repo:
         description: "KernelSU git URL (https only)"
         required: false
         type: string
         default: "https://github.com/sidex15/KernelSU-Next.git"
-
       ksu_ref:
         description: "KernelSU branch/tag/ref (used if ksu_commit is empty)"
         required: false
         type: string
         default: "legacy-susfs-v2"
-
       ksu_commit:
         description: "KernelSU exact commit SHA to pin (recommended)"
         required: false
         type: string
         default: ""
-
       susfs_repo:
         description: "SUSFS git URL (https only)"
         required: false
         type: string
         default: "https://gitlab.com/simonpunk/susfs4ksu.git"
-
       susfs_ref:
         description: "SUSFS branch/tag/ref (used if susfs_commit is empty)"
         required: false
         type: string
         default: "kernel-4.9"
-
       susfs_commit:
         description: "SUSFS exact commit SHA to pin (recommended)"
         required: false
@@ -64,38 +56,28 @@ jobs:
   build:
     name: Build Exynos9810 Kernel — Chimera Mk6 Plus
     runs-on: ubuntu-24.04
-
     defaults:
       run:
         shell: bash
-
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-
       KERNEL_REPO: "https://github.com/royd-jpg/Project_Chimera"
       KERNEL_BRANCH: "chimera-mk6l"
-
-      KERNEL_DIR: kernel
-      OUT_DIR: kernel-out
-      LOG_DIR: logs
-
+      KERNEL_DIR: "kernel"
+      OUT_DIR: "kernel-out"
+      LOG_DIR: "logs"
       NEUTRON_URL: "https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/10032024/neutron-clang-10032024.tar.zst"
-      NEUTRON_KEY: neutron-clang-10032024
-
-      DEFCONFIG: arch/arm64/configs/exynos9810-star2lte_defconfig
-
+      NEUTRON_KEY: "neutron-clang-10032024"
+      DEFCONFIG: "arch/arm64/configs/exynos9810-star2lte_defconfig"
       BRAND: "-6988168"
       SUSFS_TARGET_VERSION: "1.5.5"
 
     steps:
-
       - name: Prepare workspace
         run: |
           set -Eeuo pipefail
           trap 'echo "[ERR] ${BASH_SOURCE[0]}:${LINENO} command failed: ${BASH_COMMAND}" >&2' ERR
-
           mkdir -p "$LOG_DIR" "$OUT_DIR"
-
           {
             echo "build_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             echo "run_number=${GITHUB_RUN_NUMBER}"
@@ -107,89 +89,208 @@ jobs:
       - name: Install build dependencies
         run: |
           set -Eeuo pipefail
-          trap 'echo "[ERR] ${LINENO}: ${BASH_COMMAND}" >&2' ERR
-
           sudo apt-get update -qq
-
-          sudo apt-get install -yqq \
-            git curl wget bc flex bison python3 \
-            libssl-dev libelf-dev build-essential \
-            zip unzip zstd lz4 \
-            gcc-aarch64-linux-gnu \
-            gcc-arm-linux-gnueabi
+          sudo apt-get install -yqq git curl wget bc flex bison python3 libssl-dev libelf-dev build-essential zip unzip zstd lz4 gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
 
       - name: Cache Neutron Clang
         id: cache-neutron
         uses: actions/cache@v4
         with:
           path: neutron-clang
-          key: "${{ runner.os }}-${{ env.NEUTRON_KEY }}-${{ env.NEUTRON_URL }}"
+          key: ${{ runner.os }}-${{ env.NEUTRON_KEY }}-${{ env.NEUTRON_URL }}
 
       - name: Download Neutron Clang
         if: steps.cache-neutron.outputs.cache-hit != 'true'
         run: |
           set -Eeuo pipefail
-          trap 'echo "[ERR] ${LINENO}: ${BASH_COMMAND}" >&2' ERR
-
           rm -rf neutron-clang
           mkdir -p neutron-clang
-
           wget -qO /tmp/neutron.tar.zst "$NEUTRON_URL"
-
-          tar -xf /tmp/neutron.tar.zst \
-            -C neutron-clang \
-            --strip-components=1
-
+          tar -xf /tmp/neutron.tar.zst -C neutron-clang --strip-components=1
           test -x neutron-clang/bin/clang
-
           neutron-clang/bin/clang --version | tee "$LOG_DIR/toolchain.log"
 
       - name: Export toolchain PATH
-        run: |
-          set -Eeuo pipefail
-          echo "$GITHUB_WORKSPACE/neutron-clang/bin" >> "$GITHUB_PATH"
+        run: echo "$GITHUB_WORKSPACE/neutron-clang/bin" >> "$GITHUB_PATH"
 
       - name: Clone kernel tree
         run: |
           set -Eeuo pipefail
-          trap 'echo "[ERR] ${LINENO}: ${BASH_COMMAND}" >&2' ERR
-
           rm -rf "$KERNEL_DIR"
-
-          git clone \
-            --depth=1 \
-            -b "$KERNEL_BRANCH" \
-            "$KERNEL_REPO" \
-            "$KERNEL_DIR"
-
-          git -C "$KERNEL_DIR" log --oneline -5 \
-            | tee "$LOG_DIR/kernel-revision.log"
+          git clone --depth=1 -b "$KERNEL_BRANCH" "$KERNEL_REPO" "$KERNEL_DIR"
+          git -C "$KERNEL_DIR" log --oneline -5 | tee "$LOG_DIR/kernel-revision.log"
 
       - name: Preflight tree state
         working-directory: kernel
         run: |
           set -Eeuo pipefail
-          trap 'echo "[ERR] ${LINENO}: ${BASH_COMMAND}" >&2' ERR
-
           LOG="../$LOG_DIR/preflight.log"
-
-          grep -RsnE \
-            'source "drivers/kernelsu/Kconfig"|susfs_task_state|ksu_handle_faccessat' \
-            fs include kernel arch/arm64/configs \
-            2>/dev/null | tee -a "$LOG" || true
-
+          grep -RsnE 'source "drivers/kernelsu/Kconfig"|susfs_task_state|ksu_handle_faccessat' fs include kernel arch/arm64/configs 2>/dev/null | tee -a "$LOG" || true
           ALREADY_PATCHED=false
-
-          if grep -RqsE \
-            'source "drivers/kernelsu/Kconfig"|susfs_task_state|ksu_handle_faccessat' \
-            fs include kernel arch/arm64/configs 2>/dev/null; then
+          if grep -RqsE 'source "drivers/kernelsu/Kconfig"|susfs_task_state|ksu_handle_faccessat' fs include kernel arch/arm64/configs 2>/dev/null; then
             ALREADY_PATCHED=true
           fi
-
           echo "ALREADY_PATCHED=$ALREADY_PATCHED" | tee -a "$LOG"
+          echo "SKIP_INTEGRATION=$([[ "$ALREADY_PATCHED" == "true" && "${{ inputs.force_repatch }}" != "true" ]] && echo "true" || echo "false")" >> "$GITHUB_ENV"
 
-          if [[ "$ALREADY_PATCHED" == "true" && "${{ inputs.force_repatch }}" != "true" ]]; then
-            echo "SKIP_INTEGRATION=true" >> "$GITHUB_ENV"
+      - name: Set up KernelSU-Next (pinned)
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          rm -rf KernelSU-Next drivers/kernelsu .git/modules/KernelSU-Next
+          KSU_URL="${{ inputs.ksu_repo }}"
+          KSU_REF="${{ inputs.ksu_ref }}"
+          KSU_COMMIT="${{ inputs.ksu_commit }}"
+          [[ "$KSU_URL" =~ ^https:// ]] || { echo "KSU URL must be https://"; exit 1; }
+          [[ -n "$KSU_REF" ]] || KSU_REF="main"
+          git clone --filter=blob:none --no-tags "$KSU_URL" KernelSU-Next
+          if [[ -n "$KSU_COMMIT" ]]; then
+            git -C KernelSU-Next fetch --depth=1 origin "$KSU_COMMIT"
+            git -C KernelSU-Next checkout --detach "$KSU_COMMIT"
           else
-            echo "SKIP_INTEGRATION=false" >> "$GITHUB_ENV"
+            git -C KernelSU-Next fetch --depth=1 origin "$KSU_REF"
+            git -C KernelSU-Next checkout --detach FETCH_HEAD
           fi
+          ln -sfn ../KernelSU-Next/kernel drivers/kernelsu
+          test -f drivers/kernelsu/Kconfig
+
+      - name: Clone & pin SUSFS only when integration is needed
+        if: ${{ env.SKIP_INTEGRATION == 'false' }}
+        run: |
+          set -Eeuo pipefail
+          SUSFS_URL="${{ inputs.susfs_repo }}"
+          SUSFS_REF="${{ inputs.susfs_ref }}"
+          SUSFS_COMMIT="${{ inputs.susfs_commit }}"
+          [[ "$SUSFS_URL" =~ ^https:// ]] || { echo "SUSFS URL must be https://"; exit 1; }
+          [[ -n "$SUSFS_REF" ]] || SUSFS_REF="kernel-4.9"
+          rm -rf susfs4ksu
+          git clone --filter=blob:none --no-tags "$SUSFS_URL" susfs4ksu
+          if [[ -n "$SUSFS_COMMIT" ]]; then
+            git -C susfs4ksu fetch --depth=1 origin "$SUSFS_COMMIT"
+            git -C susfs4ksu checkout --detach "$SUSFS_COMMIT"
+          else
+            git -C susfs4ksu fetch --depth=1 origin "$SUSFS_REF"
+            git -C susfs4ksu checkout --detach FETCH_HEAD
+          fi
+
+      - name: Wire KernelSU Kconfig
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          sed -i '/source "drivers\/kernelsu\/Kconfig"/d' drivers/Kconfig
+          grep -q '^endmenu' drivers/Kconfig || printf '\nendmenu\n' >> drivers/Kconfig
+          sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+          grep -q 'obj-y += kernelsu/' drivers/Makefile || echo 'obj-y += kernelsu/' >> drivers/Makefile
+
+      - name: Apply SUSFS + Emergency Surgery
+        if: ${{ env.SKIP_INTEGRATION == 'false' }}
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          apply_susfs_files() {
+            local src="$GITHUB_WORKSPACE/susfs4ksu/kernel_patches"
+            local patch="$src/50_add_susfs_in_kernel-4.9.patch"
+            git apply --reject --whitespace=fix "$patch" > "../$LOG_DIR/susfs-apply.log" 2>&1 || true
+            install -D -m 0644 "$src/fs/susfs.c" fs/susfs.c
+            install -D -m 0644 "$src/fs/sus_su.c" fs/sus_su.c
+            install -D -m 0644 "$src/include/linux/susfs.h" include/linux/susfs.h
+            install -D -m 0644 "$src/include/linux/susfs_def.h" include/linux/susfs_def.h
+            install -D -m 0644 "$src/include/linux/sus_su.h" include/linux/sus_su.h
+            grep -q 'susfs\.o' fs/Makefile || echo 'obj-$(CONFIG_KSU_SUSFS) += susfs.o' >> fs/Makefile
+            grep -q 'sus_su\.o' fs/Makefile || echo 'obj-$(CONFIG_KSU_SUSFS) += sus_su.o' >> fs/Makefile
+          }
+          apply_emergency_surgery() {
+            python3 - <<'PYEOF'
+          from pathlib import Path
+          import re
+          p = Path("KernelSU-Next/kernel/hook/syscall_hook.h")
+          if p.exists():
+              s = p.read_text()
+              if "typedef long (*syscall_fn_t)" not in s:
+                  ins = ("typedef long (*syscall_fn_t)(unsigned long, unsigned long, unsigned long, "
+                         "unsigned long, unsigned long, unsigned long);\n")
+                  m = re.search(r'(#include[^\n]*\n)+', s)
+                  at = m.end() if m else 0
+                  p.write_text(s[:at] + ins + s[at:])
+          PYEOF
+            mkdir -p include/kernelsu
+            find include fs -type f \( -name '*.h' -o -name '*.c' \) -exec \
+              sed -i 's|#include \"\.\./\.\./drivers/kernelsu/\(.*\)\"|#include <kernelsu/\1>|g; s|#include \"\.\./drivers/kernelsu/\(.*\)\"|#include <kernelsu/\1>|g' {} +
+          }
+          apply_susfs_files
+          apply_emergency_surgery
+
+      - name: Apply defconfig tuning
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          test -f "$DEFCONFIG"
+          set_cfg(){ sed -i "/^$1=.*/d;/^# $1 is not set/d" "$DEFCONFIG"; echo "$1=$2" >> "$DEFCONFIG"; }
+          unset_cfg(){ sed -i "/^$1=.*/d;/^# $1 is not set/d" "$DEFCONFIG"; echo "# $1 is not set" >> "$DEFCONFIG"; }
+          set_cfg CONFIG_KSU y
+          set_cfg CONFIG_KSU_SUSFS y
+          set_cfg CONFIG_KSU_SUSFS_SUS_PATH y
+          set_cfg CONFIG_KSU_SUSFS_SUS_KSTAT y
+          set_cfg CONFIG_KSU_SUSFS_TRY_UMOUNT y
+          set_cfg CONFIG_KSU_SUSFS_SUS_MAP y
+          unset_cfg CONFIG_KSU_SUSFS_OPEN_REDIRECT
+          unset_cfg CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
+          unset_cfg CONFIG_KSU_SUSFS_SUS_MOUNT
+          unset_cfg CONFIG_KSU_SUSFS_SPOOF_UNAME
+
+      - name: Apply Mk6 Plus branding
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          BUILD_NUM_PAD="$(printf '%04d' "$((10#${GITHUB_RUN_NUMBER:-1} % 10000))")"
+          BUILD_HOST="CM6P${BUILD_NUM_PAD}"
+          sed -i '/^CONFIG_LOCALVERSION=/d;/^CONFIG_DEFAULT_HOSTNAME=/d' "$DEFCONFIG"
+          printf 'CONFIG_LOCALVERSION="%s"\nCONFIG_DEFAULT_HOSTNAME="%s"\n' "$BRAND" "$BUILD_HOST" >> "$DEFCONFIG"
+          printf '#!/bin/sh\nprintf "%%s" "%s"\n' "$BRAND" > scripts/setlocalversion
+          chmod +x scripts/setlocalversion
+          echo "$BRAND" > localversion
+          echo "CHIMERA_BRAND=$BRAND" >> "$GITHUB_ENV"
+          echo "KBUILD_HOST=$BUILD_HOST" >> "$GITHUB_ENV"
+
+      - name: SUSFS pre-build sanity check
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          LOG="../$LOG_DIR/susfs-sanity.log"
+          FAIL=0
+          for f in fs/susfs.c fs/sus_su.c include/linux/susfs.h include/linux/susfs_def.h include/linux/sus_su.h; do
+            [[ -f "$f" ]] || { echo "FAIL: $f MISSING"; FAIL=1; }
+          done
+          [[ "$FAIL" -eq 0 ]] || { echo "ERROR: sanity check failed"; exit 1; }
+
+      - name: Build kernel
+        if: ${{ inputs.dry_run == false }}
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          export KBUILD_BUILD_USER="REC"
+          export KBUILD_BUILD_HOST="${KBUILD_HOST:-CM6L}"
+          export KBUILD_BUILD_VERSION="${GITHUB_RUN_NUMBER:-1}"
+          MAKE_CMD=(make -j"$(nproc)" O="$GITHUB_WORKSPACE/$OUT_DIR" ARCH=arm64 CC=clang LD="$GITHUB_WORKSPACE/neutron-clang/bin/ld.lld" KCFLAGS="-fcommon -Wno-implicit-function-declaration -Wno-implicit-int -Wno-return-type")
+          "${MAKE_CMD[@]}" exynos9810-star2lte_defconfig
+          "${MAKE_CMD[@]}" Image dtbs
+
+      - name: Package flashable zip
+        if: ${{ inputs.dry_run == false }}
+        run: |
+          set -Eeuo pipefail
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AnyKernel3
+          cp "$OUT_DIR/arch/arm64/boot/Image" AnyKernel3/
+          find "$OUT_DIR/arch/arm64/boot/dts/exynos" -name '*star2lte*.dtb' -exec cp {} AnyKernel3/ \; 2>/dev/null || true
+          ZIP="chimera-mk6plus-$(date +%Y%m%d-%H%M)-r${GITHUB_RUN_NUMBER}.zip"
+          ( cd AnyKernel3 && zip -r9 "../$ZIP" . )
+          echo "ZIP=$ZIP" >> "$LOG_DIR/branding.env"
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chimera-mk6plus-build-${{ github.run_number }}
+          path: |
+            logs/
+            chimera-mk6plus-*.zip
