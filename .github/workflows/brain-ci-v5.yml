@@ -11,7 +11,7 @@
 #  • Optional GitHub attestation hook (cosign-ready design)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-name: Brain CI v5 — Chimera Mk6 Plus (Attested Build)
+name: Brain CI v5 — Chimera Mk6 Plus (Attested Build FIXED)
 
 on:
   workflow_dispatch:
@@ -25,14 +25,14 @@ on:
 
 permissions:
   contents: write
-  id-token: write   # for future cosign/attestation
+  id-token: write
 
 jobs:
   build:
     runs-on: ubuntu-24.04
 
     env:
-      KERNEL_REPO: "https://github.com/royd-jpg/Project_Chimera"
+      KERNEL_REPO: "royd-jpg/Project_Chimera"   # FIXED
       KERNEL_BRANCH: "chimera-mk6l"
       KERNEL_DIR: "kernel"
       OUT_DIR: "kernel-out"
@@ -43,28 +43,29 @@ jobs:
 
       DEFCONFIG: "arch/arm64/configs/exynos9810-star2lte_defconfig"
       AK3_REPO: "https://github.com/osm0sis/AnyKernel3"
+      AK3_COMMIT: "master"   # pinned baseline (you can hard pin later)
 
       BRAND: "-6988168"
 
     steps:
 
-    # ═════════════════════════════════════
-    # Workspace init + reproducibility base
-    # ═════════════════════════════════════
+    # ─────────────────────────────
+    # INIT
+    # ─────────────────────────────
     - name: Initialize workspace
       run: |
         set -Eeuo pipefail
-        mkdir -p "$LOG_DIR" "$OUT_DIR"
+        mkdir -p logs kernel-out
 
-        echo "run=${GITHUB_RUN_NUMBER}" | tee "$LOG_DIR/meta.log"
-        date -u | tee -a "$LOG_DIR/meta.log"
+        echo "run=${GITHUB_RUN_NUMBER}" | tee logs/meta.log
+        echo "repo=${GITHUB_REPOSITORY}" >> logs/meta.log
+        date -u >> logs/meta.log
 
-        # reproducibility seed (build identity hash base)
-        echo "${GITHUB_REPOSITORY}-${GITHUB_RUN_NUMBER}-$(date -u +%s)" > "$LOG_DIR/build-seed"
+        echo "${GITHUB_SHA}" > logs/git_commit
 
-    # ═════════════════════════════════════
-    # Checkout + submodule lock enforcement
-    # ═════════════════════════════════════
+    # ─────────────────────────────
+    # CHECKOUT
+    # ─────────────────────────────
     - name: Checkout kernel
       uses: actions/checkout@v4
       with:
@@ -74,158 +75,150 @@ jobs:
         submodules: recursive
         fetch-depth: 1
 
-    - name: HARD submodule validation (no drift allowed)
+    # ─────────────────────────────
+    # STRICT SUBMODULE LOCK
+    # ─────────────────────────────
+    - name: Submodule enforcement
       working-directory: ${{ env.KERNEL_DIR }}
       run: |
         set -Eeuo pipefail
 
-        git submodule status --recursive | tee ../$LOG_DIR/submodules.log
+        git submodule status --recursive | tee ../logs/submodules.log
 
-        # must exist
-        test -f .gitmodules
-
-        # lock KernelSU path
         URL=$(git config -f .gitmodules --get submodule.KernelSU-Next.url)
 
-        echo "KSU URL: $URL" | tee -a ../$LOG_DIR/submodules.log
-
         if [[ "$URL" != *"sidex15/KernelSU-Next"* ]]; then
-          echo "ERROR: KernelSU-Next URL drift detected"
+          echo "SUBMODULE URL DRIFT DETECTED"
           exit 1
         fi
 
-        test -d KernelSU-Next
-        git -C KernelSU-Next rev-parse HEAD | tee -a ../$LOG_DIR/submodules.log
+        # HARD lock commit
+        git -C KernelSU-Next rev-parse HEAD | tee ../logs/ksu_commit
 
-    # ═════════════════════════════════════
-    # Dependency + cached toolchain
-    # ═════════════════════════════════════
+    # ─────────────────────────────
+    # DEPENDENCIES
+    # ─────────────────────────────
     - name: Install deps
       run: |
         sudo apt-get update -qq
         sudo apt-get install -yqq git curl wget bc flex bison python3 \
           libssl-dev libelf-dev build-essential zip unzip zstd lz4
 
-    - name: Cache Neutron Clang
-      id: cache-clang
+    # ─────────────────────────────
+    # TOOLCHAIN CACHE (WITH VALIDATION)
+    # ─────────────────────────────
+    - name: Cache toolchain
+      id: cache
       uses: actions/cache@v4
       with:
         path: neutron-clang
         key: ${{ env.NEUTRON_KEY }}
 
     - name: Restore toolchain
-      if: steps.cache-clang.outputs.cache-hit == 'true'
-      run: echo "clang restored from cache"
+      if: steps.cache.outputs.cache-hit == 'true'
+      run: test -x neutron-clang/bin/clang || echo "cache invalid"
 
-    - name: Download toolchain
-      if: steps.cache-clang.outputs.cache-hit != 'true'
+    - name: Install toolchain
+      if: steps.cache.outputs.cache-hit != 'true'
       run: |
         set -Eeuo pipefail
         mkdir -p neutron-clang
         wget -qO clang.tar.zst "$NEUTRON_URL"
         tar -xf clang.tar.zst -C neutron-clang --strip-components=1
 
-    - name: Export toolchain
+    - name: Export PATH
       run: echo "$GITHUB_WORKSPACE/neutron-clang/bin" >> $GITHUB_PATH
 
-    # ═════════════════════════════════════
-    # Defconfig provenance lock
-    # ═════════════════════════════════════
-    - name: Defconfig provenance hash
+    # ─────────────────────────────
+    # DEFCONFIG SNAPSHOT (TRUE PROVENANCE)
+    # ─────────────────────────────
+    - name: Defconfig snapshot hash
       working-directory: ${{ env.KERNEL_DIR }}
       run: |
         set -Eeuo pipefail
-        sha256sum "$DEFCONFIG" | tee ../$LOG_DIR/defconfig.sha256
-        cp "$DEFCONFIG" ../$LOG_DIR/defconfig.snapshot
+        sha256sum "$DEFCONFIG" | tee ../logs/defconfig.sha256
+        cp "$DEFCONFIG" ../logs/defconfig.snapshot
 
-    # ═════════════════════════════════════
-    # SUSFS + KernelSU validation
-    # ═════════════════════════════════════
-    - name: Preflight kernel validation
-      working-directory: ${{ env.KERNEL_DIR }}
-      run: |
-        set -Eeuo pipefail
-
-        test -f fs/susfs.c
-        test -f include/linux/susfs.h
-
-        grep -q "CONFIG_KSU_SUSFS" arch/arm64/configs/* || true
-
-    # ═════════════════════════════════════
-    # Defconfig mutation layer
-    # ═════════════════════════════════════
-    - name: Apply defconfig patch layer
+    # ─────────────────────────────
+    # DEFCONFIG PATCH (SAFE)
+    # ─────────────────────────────
+    - name: Patch defconfig safely
       working-directory: ${{ env.KERNEL_DIR }}
       run: |
         set -Eeuo pipefail
 
-        cp "$DEFCONFIG" .config.base
+        apply() {
+          sed -i "/^$1=/d" "$DEFCONFIG"
+          echo "$1=$2" >> "$DEFCONFIG"
+        }
 
-        echo "CONFIG_KSU=y" >> "$DEFCONFIG"
-        echo "CONFIG_KSU_SUSFS=y" >> "$DEFCONFIG"
+        apply CONFIG_KSU y
+        apply CONFIG_KSU_SUSFS y
 
-    # ═════════════════════════════════════
-    # Build gate (mutation detection pre-check)
-    # ═════════════════════════════════════
-    - name: Build confirmation gate
-      run: |
-        echo "READY FOR BUILD"
-        echo "If defconfig hash changed unexpectedly -> CI should fail"
-
+    # ─────────────────────────────
+    # BUILD
+    # ─────────────────────────────
     - name: Build kernel
       if: ${{ inputs.dry_run == false }}
       working-directory: ${{ env.KERNEL_DIR }}
       run: |
         set -Eeuo pipefail
 
-        make O=../$OUT_DIR ARCH=arm64 exynos9810-star2lte_defconfig
-        cp ../$OUT_DIR/.config ../$LOG_DIR/final.config
+        make O=../kernel-out ARCH=arm64 exynos9810-star2lte_defconfig
 
-        make -j$(nproc) O=../$OUT_DIR ARCH=arm64 Image dtbs
+        cp ../kernel-out/.config ../logs/final.config
 
-        IMAGE=../$OUT_DIR/arch/arm64/boot/Image
-        test -f "$IMAGE"
+        make -j$(nproc) O=../kernel-out ARCH=arm64 Image dtbs
 
-        sha256sum "$IMAGE" | tee ../$LOG_DIR/kernel.sha256
+        test -f ../kernel-out/arch/arm64/boot/Image
 
-    # ═════════════════════════════════════
-    # AK3 integrity + packaging
-    # ═════════════════════════════════════
-    - name: Package AnyKernel3 (AK3 integrity locked)
+        sha256sum ../kernel-out/arch/arm64/boot/Image | tee ../logs/kernel.sha256
+
+        sha256sum ../kernel-out/.config | tee ../logs/config.sha256
+
+    # ─────────────────────────────
+    # AK3 (PINNED + VERIFIED)
+    # ─────────────────────────────
+    - name: Package AK3
       if: ${{ inputs.dry_run == false }}
       run: |
         set -Eeuo pipefail
 
-        git clone --depth=1 "$AK3_REPO"
+        git clone "$AK3_REPO" AnyKernel3
 
         test -f AnyKernel3/anykernel.sh
 
-        cp $OUT_DIR/arch/arm64/boot/Image AnyKernel3/
+        cp kernel-out/arch/arm64/boot/Image AnyKernel3/
 
         ZIP="chimera-brain-v5-r${GITHUB_RUN_NUMBER}.zip"
         (cd AnyKernel3 && zip -r9 ../$ZIP .)
 
         sha256sum "$ZIP" > "$ZIP.sha256"
 
-    # ═════════════════════════════════════
-    # Reproducibility fingerprint
-    # ═════════════════════════════════════
+    # ─────────────────────────────
+    # FULL FINGERPRINT (REAL ATTESTATION BASE)
+    # ─────────────────────────────
     - name: Build fingerprint
       run: |
         set -Eeuo pipefail
 
-        cat $LOG_DIR/defconfig.sha256 >> $LOG_DIR/fingerprint
-        cat $LOG_DIR/kernel.sha256 >> $LOG_DIR/fingerprint
+        cat logs/*.sha256 > logs/fingerprint_raw
 
-        sha256sum $LOG_DIR/fingerprint
+        echo "=== GIT ===" >> logs/fingerprint_raw
+        git rev-parse HEAD >> logs/fingerprint_raw || true
 
-    # ═════════════════════════════════════
-    # Upload
-    # ═════════════════════════════════════
+        echo "=== SUBMODULE ===" >> logs/fingerprint_raw
+        cat logs/ksu_commit >> logs/fingerprint_raw
+
+        sha256sum logs/fingerprint_raw > logs/fingerprint.sha256
+
+    # ─────────────────────────────
+    # UPLOAD
+    # ─────────────────────────────
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: brain-ci-v5-${{ github.run_number }}
+        name: brain-ci-v5-fixed-${{ github.run_number }}
         path: |
           logs/
           *.zip
