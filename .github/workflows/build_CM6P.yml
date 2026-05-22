@@ -32,17 +32,17 @@ on:
         description: "KernelSU git URL (https only)"
         required: false
         type: string
-        default: "https://github.com/gavdoc38/KernelSU-Next.git"
+        default: "https://github.com/sidex15/KernelSU-Next.git"
       ksu_ref:
         description: "KernelSU branch/tag/ref (used if ksu_commit is empty)"
         required: false
         type: string
-        default: ""
+        default: "legacy-susfs-v2"
       ksu_commit:
         description: "KernelSU exact commit SHA to pin (recommended)"
         required: false
         type: string
-        default: "ab58ab85229e51b7f2f8c490ef3cb3c23fa69556"
+        default: "56812013f98c5e294e93deb22cefc39121d9d292"
       susfs_repo:
         description: "SUSFS git URL (https only)"
         required: false
