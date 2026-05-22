@@ -3,7 +3,7 @@
 # ───────────────────────────────────────────────────────────────────────────────
 # Base   : royd-jpg/Project_Chimera @ chimera-mk6l
 # KSU    : gavdoc38/KernelSU-Next (pinned submodule)
-# SUSFS  : simonpunk/susfs4ksu @ kernel-4.9 (targets v2.1.0)
+# SUSFS  : simonpunk/susfs4ksu @ kernel-4.9 (targets v1.4.2)
 # Clang  : Neutron Clang 10-03-2024 (pinned)
 # Target : LineageOS 23.2 · Android 16 · AVC-safe · SELinux enforcing-locked
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -57,7 +57,7 @@ on:
         description: "SUSFS exact commit SHA to pin (recommended)"
         required: false
         type: string
-        default: ""
+        default: "2404aebaeee041c8e0e06ca4636dc87b984c2428"
 
 permissions:
   contents: write
@@ -78,7 +78,7 @@ jobs:
       KERNEL_BRANCH: "chimera-mk6l"
       SUSFS_REPO:    "https://gitlab.com/simonpunk/susfs4ksu.git"
       SUSFS_BRANCH:  "kernel-4.9"
-      SUSFS_TARGET_VERSION: "v2.1.0"
+      SUSFS_TARGET_VERSION: "1.4.2"
       KERNEL_DIR:    "kernel"
       OUT_DIR:       "kernel-out"
       LOG_DIR:       "logs"
