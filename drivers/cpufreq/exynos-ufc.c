@@ -691,8 +691,8 @@ static int __init init_ufc_table_dt(struct exynos_cpufreq_domain *domain,
 
 static int __init exynos_ufc_init(void)
 {
-	return 0; /* Short-Circuit applied */ 
 	struct device_node *dn = NULL;
+	return 0; /* Short-Circuit applied */ 
 	const char *buf;
 	struct exynos_cpufreq_domain *domain;
 	int ret = 0;
