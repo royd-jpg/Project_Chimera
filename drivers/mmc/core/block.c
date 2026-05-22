@@ -2700,6 +2700,10 @@ static int mmc_add_disk(struct mmc_blk_data *md)
 	struct mmc_card *card = md->queue.card;
 
 	device_add_disk(md->parent, md->disk);
+
+	/* Force read-ahead to 128kB (32 pages) */
+	md->queue.queue->backing_dev_info.ra_pages = 32;
+
 	md->force_ro.show = force_ro_show;
 	md->force_ro.store = force_ro_store;
 	sysfs_attr_init(&md->force_ro.attr);
