@@ -691,9 +691,52 @@ static int __init init_ufc_table_dt(struct exynos_cpufreq_domain *domain,
 
 static int __init exynos_ufc_init(void)
 {
-/* SHORT-CIRCUIT: Disable UFC to prevent frequency interference. */
-    pr_info("exynos-ufc: manually short-circuited/disabled for performance stability.\n");
-    return 0;
-    
-    // ... backup saved in a .bak.
+	struct device_node *dn = NULL;
+	const char *buf;
+	struct exynos_cpufreq_domain *domain;
+	int ret = 0;
+
+	pm_qos_add_request(&cpu_online_max_qos_req, PM_QOS_CPU_ONLINE_MAX,
+					PM_QOS_CPU_ONLINE_MAX_DEFAULT_VALUE);
+
+	while((dn = of_find_node_by_type(dn, "cpufreq-userctrl"))) {
+		struct cpumask shared_mask;
+
+		ret = of_property_read_string(dn, "shared-cpus", &buf);
+		if (ret) {
+			pr_err("failed to get shared-cpus for ufc\n");
+			goto exit;
+		}
+
+		cpulist_parse(buf, &shared_mask);
+		domain = find_domain_cpumask(&shared_mask);
+		if (!domain) {
+			pr_err("Can't found domain for ufc!\n");
+			goto exit;
+		}
+
+		/* Initialize user control information from dt */
+		ret = parse_ufc_ctrl_info(domain, dn);
+		if (ret) {
+			pr_err("failed to get ufc ctrl info\n");
+			goto exit;
+		}
+
+		/* Parse user frequency ctrl table info from dt */
+		ret = init_ufc_table_dt(domain, dn);
+		if (ret) {
+			pr_err("failed to parse frequency table for ufc ctrl\n");
+			goto exit;
+		}
+		/* Initialize PM QoS */
+		init_pm_qos(domain);
+		pr_info("Complete to initialize domain%d\n",domain->id);
+	}
+
+	init_sysfs();
+
+	pr_info("Initialized Exynos UFC(User-Frequency-Ctrl) driver\n");
+exit:
+	return 0;
 }
+late_initcall(exynos_ufc_init);
