@@ -810,6 +810,7 @@ jobs:
           unset_cfg CONFIG_KSU_SUSFS_OPEN_REDIRECT
           unset_cfg CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
           unset_cfg CONFIG_KSU_SUSFS_SUS_MOUNT
+          unset_cfg CONFIG_KSU_SUSFS_SPOOF_UNAME
 
           # ── AVC/SELinux spoof — ALL disabled for AVC-safe enforcing build ───
           # [R9] Disabling all AVC spoof options ensures SELinux enforcing mode
