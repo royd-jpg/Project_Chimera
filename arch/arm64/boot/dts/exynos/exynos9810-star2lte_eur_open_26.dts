@@ -7159,9 +7159,11 @@
 				};
 
 				s2dos05-elvss {
-					regulator-name = "elvss";
-					linux,phandle = <621>;
-					phandle = <621>;
+    				regulator-name = "elvss";
+    				regulator-min-microvolt = <1000000>;
+    				regulator-max-microvolt = <1300000>;
+    				linux,phandle = <621>;
+    				phandle = <621>;
 				};
 			};
 		};
