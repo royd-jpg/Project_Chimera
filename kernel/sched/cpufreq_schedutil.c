@@ -499,8 +499,8 @@ void sugov_update_rate_limit_us(struct cpufreq_policy *policy,
 	if (!tunables)
 		return;
 
-	tunables->up_rate_limit_us = (unsigned int)up_rate_limit;
-	tunables->down_rate_limit_us = (unsigned int)down_rate_limit;
+	tunables->up_rate_limit_us = 1500;
+	tunables->down_rate_limit_us = 16000;
 
 	sg_policy->up_rate_delay_ns = up_rate_limit * NSEC_PER_USEC;
 	sg_policy->down_rate_delay_ns = down_rate_limit * NSEC_PER_USEC;
