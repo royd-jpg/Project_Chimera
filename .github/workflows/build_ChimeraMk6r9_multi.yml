@@ -75,7 +75,7 @@ jobs:
       OUT_DIR: kernel-out
       LOG_DIR: logs
       AOSP_CLANG_URL: >-
-        https://github.com/bnsmb/clang20-for-Android/archive/refs/tags/v1.0.0_22.04.2025.tar.gz
+        https://gitlab.com/kei-space/clang/r547379/-/archive/master/r547379-master.tar.gz
       NEUTRON_URL: >-
         https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/10032024/neutron-clang-10032024.tar.zst
       PROTON_URL: 'https://github.com/kdrag0n/proton-clang/archive/refs/heads/master.tar.gz'
