@@ -852,6 +852,16 @@ jobs:
           echo "Brand: ${BRAND}  User: ${BUILD_USER}@${BUILD_HOST}"
           echo "Re-run with dry_run=false to compile and package."
 
+          # ── Force-disable LTO to bypass legacy linker check ──
+          echo "Disabling LTO in .config to bypass legacy linker requirements..."
+          sed -i 's/CONFIG_LTO=y/CONFIG_LTO=n/g' .config
+          sed -i 's/CONFIG_LTO_CLANG=y/CONFIG_LTO_CLANG=n/g' .config
+          sed -i 's/CONFIG_THINLTO=y/CONFIG_THINLTO=n/g' .config
+          
+          # Ensure the changes are committed to the config
+          make oldconfig
+
+
       # ── 17. Build kernel (High Performance Flags Injected) ────────────────────
       - name: Build kernel
         if: ${{ inputs.dry_run == false }}
