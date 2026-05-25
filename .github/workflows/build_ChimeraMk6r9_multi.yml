@@ -138,7 +138,16 @@ jobs:
             zip unzip zstd lz4 \
             gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
 
-# ── 2. Select Compiler Toolchain ──────────────────────────────────────────
+# ── 2. Select Compiler Toolchain (With High-Speed Caching) ──────────────
+      - name: Cache AOSP Clang
+        id: cache-aosp
+        if: github.event.inputs.compiler == 'aosp'
+        uses: actions/cache@v4
+        with:
+          path: toolchain/clang
+          # If you ever need to force a fresh download, change 'v1' to 'v2'
+          key: aosp-clang-r584948b-v1
+
       - name: Select compiler toolchain
         run: |
           set -Eeuo pipefail
@@ -149,14 +158,17 @@ jobs:
 
           case "$COMPILER" in
             aosp)
-              echo "Using AOSP Clang (Git Sparse-Checkout to preserve symlinks)"
-              # Clone the repo structure without downloading the heavy files
-              git clone --depth=1 --filter=blob:none --sparse https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 aosp-clang
-              # Fetch ONLY the specific Clang 20.1 folder we need
-              git -C aosp-clang sparse-checkout set clang-r584948b
-              # Move it into place and clean up
-              mv aosp-clang/clang-r584948b clang
-              rm -rf aosp-clang
+              echo "Using AOSP Clang"
+              # Check if the cache successfully restored the bin folder
+              if [ -x "clang/bin/clang" ]; then
+                echo "✅ AOSP Clang restored from cache in seconds! Skipping Git."
+              else
+                echo "Fetching via Git Sparse-Checkout (this will take a minute)..."
+                git clone --depth=1 --filter=blob:none --sparse https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 aosp-clang
+                git -C aosp-clang sparse-checkout set clang-r584948b
+                mv aosp-clang/clang-r584948b clang
+                rm -rf aosp-clang
+              fi
               ;;
             neutron)
               echo "Using Neutron Clang"
@@ -179,6 +191,11 @@ jobs:
           esac
 
           echo "$GITHUB_WORKSPACE/toolchain/clang/bin" >> "$GITHUB_PATH"
+
+      - name: Verify compiler
+        run: |
+          clang --version
+          ld.lld --version
 
       - name: Verify compiler
         run: |
@@ -726,10 +743,6 @@ jobs:
           unset_cfg CONFIG_HZ_250
           set_cfg   CONFIG_HZ_300          y
           set_cfg   CONFIG_HZ              300
-          
-          # Force LTO for maximum compiler optimization passes
-          set_cfg   CONFIG_LTO_CLANG       y
-          set_cfg   CONFIG_THINLTO         y
 
           set_cfg CONFIG_TCP_CONG_ADVANCED y
           set_cfg CONFIG_TCP_CONG_BBR      y
@@ -880,7 +893,7 @@ jobs:
           cp "$GITHUB_WORKSPACE/$OUT_DIR/.config" "$GITHUB_WORKSPACE/$LOG_DIR/final.config"
 
           echo "=== Post-merge config verification ==="
-          grep -E "CONFIG_KSU|CONFIG_KSU_SUSFS|CONFIG_SECURITY_SELINUX_DEVELOP|LOCALVERSION|CONFIG_THINLTO" \
+          grep -E "CONFIG_KSU|CONFIG_KSU_SUSFS|CONFIG_SECURITY_SELINUX_DEVELOP|LOCALVERSION" \
             "$GITHUB_WORKSPACE/$OUT_DIR/.config" \
             | tee "$GITHUB_WORKSPACE/$LOG_DIR/config-verify.log"
 
