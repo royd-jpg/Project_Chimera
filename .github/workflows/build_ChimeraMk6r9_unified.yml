@@ -168,7 +168,7 @@ jobs:
               echo "TOOLCHAIN_CACHE_KEY=neutron-clang-10032024-ubuntu-24.04-v1" >> "$GITHUB_ENV"
               ;;
             "Zyc")
-              echo "TOOLCHAIN_URL=https://github.com/ZyCromerZ/Clang/releases/latest/download/Clang-20.tar.gz" >> "$GITHUB_ENV"
+              echo "TOOLCHAIN_URL=https://github.com/ZyCromerZ/Clang/releases/download/16.0.6-20260510-release/Clang-16.0.6-20260510.tar.gz" >> "$GITHUB_ENV"
               echo "TOOLCHAIN_ARCHIVE=/tmp/compiler.tar.gz" >> "$GITHUB_ENV"
               echo "TOOLCHAIN_DIR=zyc-clang" >> "$GITHUB_ENV"
               echo "TOOLCHAIN_CACHE_KEY=zyc-clang20-latest-ubuntu-24.04-v1" >> "$GITHUB_ENV"
