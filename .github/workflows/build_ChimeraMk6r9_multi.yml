@@ -115,10 +115,8 @@ jobs:
       ZYC_URL:          "https://github.com/ZyCromerZ/Clang/archive/refs/heads/main.tar.gz"
 
       DEFCONFIG: "arch/arm64/configs/exynos9810-star2lte_defconfig"
-
-
-
-    steps:
+      
+steps:
       - name: Select compiler toolchain
         run: |
           mkdir -p "$GITHUB_WORKSPACE/toolchain"
