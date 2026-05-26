@@ -828,8 +828,8 @@ CONFIG_MEMCG_SWAP=y
 CONFIG_SECCOMP=y
 CONFIG_SECCOMP_FILTER=y
 CONFIG_SECURITY_SELINUX=y
-CONFIG_KPROBES=y
-CONFIG_HAVE_KPROBES=y
+# CONFIG_KPROBES is not set
+# CONFIG_HAVE_KPROBES is not set
 
 # ====================================================================
 # Security Log Exposure & Debug Stripping (Prevents Panics)
