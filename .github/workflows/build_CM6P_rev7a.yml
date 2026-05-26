@@ -648,7 +648,8 @@ jobs:
             OBJCOPY=llvm-objcopy
             OBJDUMP=llvm-objdump
             STRIP=llvm-strip
-            KCFLAGS="-O2 -fno-semantic-interposition -fomit-frame-pointer -fcommon -Wno-implicit-function-declaration -Wno-implicit-int -Wno-return-type -Wno-default-const-init-field-unsafe"            KCPPFLAGS="-O2"
+            KCFLAGS="-O2 -fno-semantic-interposition -fomit-frame-pointer -fcommon -Wno-implicit-function-declaration -Wno-implicit-int -Wno-return-type -Wno-default-const-init-field-unsafe"
+            KCPPFLAGS="-O2"
             LOCALVERSION="$BRAND"
             KBUILD_BUILD_USER="REC"
             KBUILD_BUILD_HOST="${BUILD_HOST}"
