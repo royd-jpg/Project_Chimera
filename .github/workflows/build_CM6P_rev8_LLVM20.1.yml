@@ -169,7 +169,7 @@ jobs:
 
       - name: Export Clang 20 PATH
         run: echo "$GITHUB_WORKSPACE/clang-20/bin" >> "$GITHUB_PATH"
-
+        
       # ── 3. Clone kernel tree ──────────────────────────────────────────────────
       - name: Clone kernel tree
         run: |
