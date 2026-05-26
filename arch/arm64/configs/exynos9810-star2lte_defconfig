@@ -769,3 +769,79 @@ CONFIG_TCP_CONG_BBR=y
 CONFIG_TCP_CONG_CUBIC=y
 CONFIG_DEFAULT_TCP_CONG="bbr"
 CONFIG_CRC32_ARMV8_CRC=y
+
+# ====================================================================
+# KernelSU-Next & SuSFS Core (Legacy 4.9 Core Hooks)
+# ====================================================================
+CONFIG_KSU=y
+CONFIG_KSU_NEXT=y
+CONFIG_KSU_SUSFS=y
+CONFIG_KSU_SUSFS_HAS_BOOL_STRIP_USERMODEHELPER=y
+CONFIG_KSU_SUSFS_SUS_PATH=y
+CONFIG_KSU_SUSFS_SUS_MOUNT=y
+CONFIG_KSU_SUSFS_SUS_KSTAT=y
+
+# ====================================================================
+# Advanced SuSFS Hiding, Syscall Masking & Uname Spoofing
+# ====================================================================
+CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+CONFIG_KSU_SUSFS_HIDE_KSU_VERSION=y
+CONFIG_KSU_SUSFS_SUS_IOCTL=y
+CONFIG_KSU_SUSFS_SUS_OPEN=y
+CONFIG_KSU_SUSFS_SUS_READLINK=y
+CONFIG_KSU_SUSFS_SUS_STATFS=y
+CONFIG_KSU_SUSFS_TRY_UMOUNT=y
+CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y
+CONFIG_KSU_NEXT_ALLOW_BYPASS=y
+CONFIG_KSU_NEXT_HIDE_MANAGER=y
+
+# ====================================================================
+# Android 16 Storage, Sandboxing & Vold Isolation
+# ====================================================================
+CONFIG_OVERLAY_FS=y
+CONFIG_DEVTMPFS=y
+CONFIG_DEVTMPFS_MOUNT=y
+CONFIG_FHANDLE=y
+
+# ====================================================================
+# Android 16 Mandatory Networking & eBPF Engine
+# ====================================================================
+CONFIG_BPF=y
+CONFIG_BPF_SYSCALL=y
+CONFIG_NET_CLS_ACT=y
+CONFIG_NET_CLS_BPF=y
+CONFIG_NET_ACT_BPF=y
+CONFIG_CGROUP_BPF=y
+
+# ====================================================================
+# Process Containerization, Namespaces & Intercepts
+# ====================================================================
+CONFIG_NAMESPACES=y
+CONFIG_USER_NS=y
+CONFIG_PID_NS=y
+CONFIG_NET_NS=y
+CONFIG_CGROUPS=y
+CONFIG_CGROUP_FREEZER=y
+CONFIG_CGROUP_CPUACCT=y
+CONFIG_MEMCG=y
+CONFIG_MEMCG_SWAP=y
+CONFIG_SECCOMP=y
+CONFIG_SECCOMP_FILTER=y
+CONFIG_SECURITY_SELINUX=y
+CONFIG_KPROBES=y
+CONFIG_HAVE_KPROBES=y
+
+# ====================================================================
+# Security Log Exposure & Debug Stripping (Prevents Panics)
+# ====================================================================
+CONFIG_KSU_DEBUG=n
+# CONFIG_DEBUG_PREEMPT is not set
+# CONFIG_PROVE_LOCKING is not set
+# CONFIG_LOCKDEP is not set
+
+# ====================================================================
+# Knox & Samsung Heavy Restrictions (Must Be Off)
+# ====================================================================
+CONFIG_SECURITY_DEFEX=n
+# CONFIG_TIMA is not set
+# CONFIG_KNOX_KAP is not set
