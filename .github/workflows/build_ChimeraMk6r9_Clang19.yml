@@ -664,27 +664,25 @@ jobs:
           set -Eeuo pipefail
           echo "=== Configuring Defconfig Flags ==="
           
-          # Initialize baseline defconfig output file inside our staging out directory
-          DEFCONFIG_NAME=$(basename $DEFCONFIG)
-          make O=../$OUT_DIR ARCH=arm64 $DEFCONFIG_NAME
+          # 1. Generate clean base
+          DEFCONFIG_NAME=$(basename "$DEFCONFIG")
+          make O=../$OUT_DIR ARCH=arm64 "$DEFCONFIG_NAME"
 
-          # Safely append configuration parameters directly into target tree
-          {
-            echo "CONFIG_KSU=y"
-            echo "CONFIG_KSU_SUSFS=y"
-            echo "CONFIG_KSU_SUSFS_SUS_PATH=y"
-            echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y"
-            echo "CONFIG_KSU_SUSFS_TRY_UMOUNT=y"
-            echo "CONFIG_KSU_SUSFS_SUS_MAP=y"
-            
-            # Explicitly remove development debug nodes to freeze SELinux structure
-            echo "# CONFIG_SECURITY_SELINUX_DEVELOP is not set"
-          } >> "../$OUT_DIR/.config"
+          # 2. Append flags to the OUT_DIR config ONLY
+          cat >> "../$OUT_DIR/.config" <<EOF
+          CONFIG_KSU=y
+          CONFIG_KSU_SUSFS=y
+          CONFIG_KSU_SUSFS_SUS_PATH=y
+          CONFIG_KSU_SUSFS_SUS_KSTAT=y
+          CONFIG_KSU_SUSFS_TRY_UMOUNT=y
+          CONFIG_KSU_SUSFS_SUS_MAP=y
+          # CONFIG_SECURITY_SELINUX_DEVELOP is not set
+          EOF
 
-          # Re-verify and sync dependencies over the configured layout
+          # 3. Synchronize dependencies using the updated out-of-tree config
           make O=../$OUT_DIR ARCH=arm64 olddefconfig
-          cp "../$OUT_DIR/.config" "$DEFCONFIG"
-          echo "✅ Target defconfig finalized and synchronized."
+          
+          echo "✅ Target defconfig finalized in $OUT_DIR"
 
       # ── 14. Compile Kernel via AOSP Clang 19 ─────────────────────────────────
       - name: Build Kernel Image
