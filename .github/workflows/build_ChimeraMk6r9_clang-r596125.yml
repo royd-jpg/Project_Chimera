@@ -684,8 +684,6 @@ jobs:
           python3 /tmp/inject_weak_fallbacks.py
 
       # ── 13. Defconfig tuning — ALL SUSFS features [Δ2] ───────────────────────
-      # Every CONFIG_KSU_SUSFS_* symbol is enabled. Options that may not exist
-      # in the kernel-4.9 Kconfig are silently ignored by 'make *_defconfig'.
       - name: Apply defconfig tuning (ALL SUSFS features)
         working-directory: kernel
         run: |
@@ -696,84 +694,93 @@ jobs:
             sed -i "/^$1=.*/d;/^# $1 is not set/d" "$DEFCONFIG"
             echo "$1=$2" >> "$DEFCONFIG"
           }
+
           unset_cfg() {
             sed -i "/^$1=.*/d;/^# $1 is not set/d" "$DEFCONFIG"
             echo "# $1 is not set" >> "$DEFCONFIG"
           }
 
           # ── KernelSU core ───────────────────────────────────────────────────
-          set_cfg CONFIG_KSU              y
-          set_cfg CONFIG_KSU_MANUAL_HOOKS y
+          set_cfg CONFIG_KSU y
+          set_cfg CONFIG_KSU_MANUAL_HOOK y
 
-          # ── SUSFS — ALL features enabled [Δ2] ──────────────────────────────
-          # Core
-          set_cfg CONFIG_KSU_SUSFS                         y
-          # Path / filesystem hiding
-          set_cfg CONFIG_KSU_SUSFS_SUS_PATH                y
-          set_cfg CONFIG_KSU_SUSFS_SUS_MOUNT               y
-          set_cfg CONFIG_KSU_SUSFS_SUS_KSTAT               y
-          set_cfg CONFIG_KSU_SUSFS_SUS_MAP                 y
-          set_cfg CONFIG_KSU_SUSFS_SUS_UNAME               y
-          # Unmounting
-          set_cfg CONFIG_KSU_SUSFS_TRY_UMOUNT              y
-          # Spoofing / hiding
-          set_cfg CONFIG_KSU_SUSFS_SPOOF_UNAME             y
+          # ── SUSFS — ALL features enabled ───────────────────────────────────
+          set_cfg CONFIG_KSU_SUSFS y
+          set_cfg CONFIG_KSU_SUSFS_SUS_PATH y
+          set_cfg CONFIG_KSU_SUSFS_SUS_MOUNT y
+          set_cfg CONFIG_KSU_SUSFS_SUS_KSTAT y
+          set_cfg CONFIG_KSU_SUSFS_SUS_MAP y
+          set_cfg CONFIG_KSU_SUSFS_SUS_UNAME y
+          set_cfg CONFIG_KSU_SUSFS_TRY_UMOUNT y
+          set_cfg CONFIG_KSU_SUSFS_SPOOF_UNAME y
           set_cfg CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG y
-          set_cfg CONFIG_KSU_SUSFS_OPEN_REDIRECT           y
-          set_cfg CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS  y
-          set_cfg CONFIG_KSU_SUSFS_HIDE_KSU_DIR            y
-          set_cfg CONFIG_KSU_SUSFS_HIDE_MAGISK_EVIL        y
-          # Logging
-          set_cfg CONFIG_KSU_SUSFS_ENABLE_LOG              y
-          # AVC / SELinux spoof — all variants (no-op if not in Kconfig)
-          set_cfg CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOF      y
-          set_cfg CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOFING   y
-          set_cfg CONFIG_KSU_SUSFS_AVC_LOG_SPOOF             y
-          set_cfg CONFIG_KSU_SUSFS_SELINUX_AVC_HOOK          y
-          set_cfg CONFIG_KSU_SUSFS_SPOOF_SELINUX             y
+          set_cfg CONFIG_KSU_SUSFS_OPEN_REDIRECT y
+          set_cfg CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS y
+          set_cfg CONFIG_KSU_SUSFS_HIDE_KSU_DIR y
+          set_cfg CONFIG_KSU_SUSFS_HIDE_MAGISK_EVIL y
+          set_cfg CONFIG_KSU_SUSFS_ENABLE_LOG y
+
+          # Optional SUSFS symbols
+          set_cfg CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOF y
+          set_cfg CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOFING y
+          set_cfg CONFIG_KSU_SUSFS_AVC_LOG_SPOOF y
+          set_cfg CONFIG_KSU_SUSFS_SELINUX_AVC_HOOK y
+          set_cfg CONFIG_KSU_SUSFS_SPOOF_SELINUX y
 
           # ── SELinux enforcing-locked ────────────────────────────────────────
-          # SUSFS spoofs userspace SELinux checks; kernel enforcement stays ON.
           unset_cfg CONFIG_SECURITY_SELINUX_DEVELOP
           unset_cfg CONFIG_SECURITY_SELINUX_BOOTPARAM
           unset_cfg CONFIG_SECURITY_SELINUX_DISABLE
-          sed -i 's/androidboot\.selinux=permissive//g; s/\benforcing=0\b//g' "$DEFCONFIG"
+
+          sed -i \
+            's/androidboot\.selinux=permissive//g; s/\benforcing=0\b//g' \
+            "$DEFCONFIG"
 
           # ── Scheduler tuning ────────────────────────────────────────────────
-          set_cfg   CONFIG_PREEMPT         y
+          set_cfg CONFIG_PREEMPT y
           unset_cfg CONFIG_PREEMPT_NONE
           unset_cfg CONFIG_PREEMPT_VOLUNTARY
+
           unset_cfg CONFIG_HZ_100
           unset_cfg CONFIG_HZ_250
-          set_cfg   CONFIG_HZ_300          y
-          set_cfg   CONFIG_HZ              300
+          set_cfg CONFIG_HZ_300 y
+          set_cfg CONFIG_HZ 300
 
           # ── TCP congestion control ──────────────────────────────────────────
           set_cfg CONFIG_TCP_CONG_ADVANCED y
-          set_cfg CONFIG_TCP_CONG_BBR      y
-          set_cfg CONFIG_TCP_CONG_CUBIC    y
-          sed -i '/^CONFIG_DEFAULT_TCP_CONG=/d;/^# CONFIG_DEFAULT_TCP_CONG is not set/d' \
+          set_cfg CONFIG_TCP_CONG_BBR y
+          set_cfg CONFIG_TCP_CONG_CUBIC y
+
+          sed -i \
+            '/^CONFIG_DEFAULT_TCP_CONG=/d;/^# CONFIG_DEFAULT_TCP_CONG is not set/d' \
             "$DEFCONFIG"
+
           echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> "$DEFCONFIG"
 
           # ── Memory / compression ────────────────────────────────────────────
-          set_cfg CONFIG_SCHED_DEBUG   y
-          set_cfg CONFIG_ZRAM          y
-          set_cfg CONFIG_ZSMALLOC      y
-          set_cfg CONFIG_CRYPTO_LZ4    y
-          set_cfg CONFIG_CRYPTO_LZ4HC  y
+          set_cfg CONFIG_SCHED_DEBUG y
+          set_cfg CONFIG_ZRAM y
+          set_cfg CONFIG_ZSMALLOC y
+          set_cfg CONFIG_CRYPTO_LZ4 y
+          set_cfg CONFIG_CRYPTO_LZ4HC y
 
-          # ── Stack protector ───────────────────────────────────────────────────────
+          # ── Clang r596125 compatibility ────────────────────────────────────
+          # Samsung 4.9 BSP compiler probes are incompatible with modern
+          # Android clang stack protector detection.
           unset_cfg CONFIG_CC_STACKPROTECTOR_STRONG
-          unset_cfg CONFIG_CC_STACKPROTECTOR_NONE
-          set_cfg CONFIG_CC_STACKPROTECTOR_REGULAR y
+          unset_cfg CONFIG_CC_STACKPROTECTOR_REGULAR
+          set_cfg CONFIG_CC_STACKPROTECTOR_NONE y
 
+          # ── Branding consistency ────────────────────────────────────────────
           unset_cfg CONFIG_LOCALVERSION_AUTO
 
-          echo "OK: defconfig tuning complete (ALL SUSFS)" | tee "../$LOG_DIR/defconfig-tuning.log"
+          echo "OK: defconfig tuning complete" \
+            | tee "../$LOG_DIR/defconfig-tuning.log"
+
           grep -E \
             "^(CONFIG_KSU|CONFIG_PREEMPT|CONFIG_HZ|CONFIG_TCP_CONG|CONFIG_DEFAULT_TCP|CONFIG_ZRAM|CONFIG_CRYPTO_LZ4|CONFIG_LOCALVERSION|CONFIG_SECURITY_SELINUX|CONFIG_CC_STACKPROTECTOR)" \
-            "$DEFCONFIG" | tee -a "../$LOG_DIR/defconfig-tuning.log"
+            "$DEFCONFIG" \
+            | tee -a "../$LOG_DIR/defconfig-tuning.log"
 
       # ── 14. Branding [Δ3][Δ4] ────────────────────────────────────────────────
       # uname: Linux version 4.9.337-Chimera_Mk6r9 (X@AegisDevLabs)
@@ -871,9 +878,11 @@ jobs:
         working-directory: kernel
         run: |
           set -Eeuo pipefail
+
           mkdir -p "$GITHUB_WORKSPACE/$OUT_DIR"
 
           export PATH="$GITHUB_WORKSPACE/aosp-clang/bin:$PATH"
+
           export KBUILD_BUILD_USER="$BUILD_USER"
           export KBUILD_BUILD_HOST="$BUILD_HOST"
           export KBUILD_BUILD_VERSION="${GITHUB_RUN_NUMBER:-1}"
@@ -889,66 +898,93 @@ jobs:
           echo "=== Toolchain sanity ==="
           which clang || true
           "$CLANG_BIN" --version
-          "$CLANG_BIN" -fstack-protector-strong -x c -c -o /tmp/cc-test.o /dev/null
 
           MAKE=(
             make -j"$(nproc)"
             O="$GITHUB_WORKSPACE/$OUT_DIR"
             ARCH=arm64
             SUBARCH=arm64
+
             CC="$CLANG_BIN"
+
             HOSTCC=gcc
             HOSTCXX=g++
+
             LLVM=1
             LLVM_IAS=0
+
             CLANG_TRIPLE=aarch64-linux-gnu-
             CROSS_COMPILE=aarch64-linux-gnu-
             CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+
             LD="$LD_BIN"
             AR="$AR_BIN"
             NM="$NM_BIN"
             OBJCOPY="$OBJCOPY_BIN"
             OBJDUMP="$OBJDUMP_BIN"
             STRIP="$STRIP_BIN"
+
             KCFLAGS="-Wno-error -fno-strict-flex-arrays"
+
             LOCALVERSION="$BRAND"
+
             KBUILD_BUILD_USER="$BUILD_USER"
             KBUILD_BUILD_HOST="$BUILD_HOST"
           )
 
           echo "=== Applying defconfig ==="
           "${MAKE[@]}" exynos9810-star2lte_defconfig
-          cp "$GITHUB_WORKSPACE/$OUT_DIR/.config" "$GITHUB_WORKSPACE/$LOG_DIR/final.config"
+
+          cp \
+            "$GITHUB_WORKSPACE/$OUT_DIR/.config" \
+            "$GITHUB_WORKSPACE/$LOG_DIR/final.config"
 
           echo "=== Stack protector verification ==="
+
           grep -E '^CONFIG_CC_STACKPROTECTOR' \
             "$GITHUB_WORKSPACE/$OUT_DIR/.config" \
             | tee "$GITHUB_WORKSPACE/$LOG_DIR/config-verify.log"
 
-          if grep -q '^CONFIG_CC_STACKPROTECTOR_REGULAR=y' \
+          if grep -q '^CONFIG_CC_STACKPROTECTOR_NONE=y' \
             "$GITHUB_WORKSPACE/$OUT_DIR/.config"; then
-            echo "OK: stack protector set to REGULAR" \
+
+            echo "OK: stack protector disabled for clang compatibility" \
               | tee -a "$GITHUB_WORKSPACE/$LOG_DIR/config-verify.log"
+
           else
-            echo "ERROR: stack protector mode not REGULAR" \
+
+            echo "ERROR: stack protector mode not NONE" \
               | tee -a "$GITHUB_WORKSPACE/$LOG_DIR/config-verify.log"
+
             exit 1
           fi
 
           echo "=== Post-merge config verification ==="
-          grep -E "CONFIG_KSU|CONFIG_KSU_SUSFS|CONFIG_SECURITY_SELINUX_DEVELOP|LOCALVERSION" \
+
+          grep -E \
+            "CONFIG_KSU|CONFIG_KSU_SUSFS|CONFIG_SECURITY_SELINUX_DEVELOP|LOCALVERSION" \
             "$GITHUB_WORKSPACE/$OUT_DIR/.config" \
             | tee -a "$GITHUB_WORKSPACE/$LOG_DIR/config-verify.log"
 
           echo "=== Building Image + DTBs ==="
+
           "${MAKE[@]}" Image dtbs 2>&1 | tee build.log
 
           IMAGE="$GITHUB_WORKSPACE/$OUT_DIR/arch/arm64/boot/Image"
-          test -f "$IMAGE" || { echo "ERROR: Image not produced — check build.log"; exit 1; }
-          du -h "$IMAGE" | tee "$GITHUB_WORKSPACE/$LOG_DIR/image-size.log"
+
+          test -f "$IMAGE" || {
+            echo "ERROR: Image not produced — check build.log"
+            exit 1
+          }
+
+          du -h "$IMAGE" \
+            | tee "$GITHUB_WORKSPACE/$LOG_DIR/image-size.log"
 
           echo "=== uname string verification ==="
-          strings "$IMAGE" | grep -E "Linux version 4\.9\." | head -3 \
+
+          strings "$IMAGE" \
+            | grep -E "Linux version 4\.9\." \
+            | head -3 \
             | tee "$GITHUB_WORKSPACE/$LOG_DIR/uname-verify.log" || true
 
       # ── 18. Package AnyKernel3 flashable zip ─────────────────────────────────
