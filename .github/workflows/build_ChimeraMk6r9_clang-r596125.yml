@@ -763,11 +763,16 @@ jobs:
           set_cfg CONFIG_CRYPTO_LZ4    y
           set_cfg CONFIG_CRYPTO_LZ4HC  y
 
+          # ── Stack protector ───────────────────────────────────────────────────────
+          unset_cfg CONFIG_CC_STACKPROTECTOR_STRONG
+          unset_cfg CONFIG_CC_STACKPROTECTOR_NONE
+          set_cfg CONFIG_CC_STACKPROTECTOR_REGULAR y
+
           unset_cfg CONFIG_LOCALVERSION_AUTO
 
           echo "OK: defconfig tuning complete (ALL SUSFS)" | tee "../$LOG_DIR/defconfig-tuning.log"
           grep -E \
-            "^(CONFIG_KSU|CONFIG_PREEMPT|CONFIG_HZ|CONFIG_TCP_CONG|CONFIG_DEFAULT_TCP|CONFIG_ZRAM|CONFIG_CRYPTO_LZ4|CONFIG_LOCALVERSION|CONFIG_SECURITY_SELINUX)" \
+            "^(CONFIG_KSU|CONFIG_PREEMPT|CONFIG_HZ|CONFIG_TCP_CONG|CONFIG_DEFAULT_TCP|CONFIG_ZRAM|CONFIG_CRYPTO_LZ4|CONFIG_LOCALVERSION|CONFIG_SECURITY_SELINUX|CONFIG_CC_STACKPROTECTOR)" \
             "$DEFCONFIG" | tee -a "../$LOG_DIR/defconfig-tuning.log"
 
       # ── 14. Branding [Δ3][Δ4] ────────────────────────────────────────────────
@@ -915,10 +920,25 @@ jobs:
           "${MAKE[@]}" exynos9810-star2lte_defconfig
           cp "$GITHUB_WORKSPACE/$OUT_DIR/.config" "$GITHUB_WORKSPACE/$LOG_DIR/final.config"
 
+          echo "=== Stack protector verification ==="
+          grep -E '^CONFIG_CC_STACKPROTECTOR' \
+            "$GITHUB_WORKSPACE/$OUT_DIR/.config" \
+            | tee "$GITHUB_WORKSPACE/$LOG_DIR/config-verify.log"
+
+          if grep -q '^CONFIG_CC_STACKPROTECTOR_REGULAR=y' \
+            "$GITHUB_WORKSPACE/$OUT_DIR/.config"; then
+            echo "OK: stack protector set to REGULAR" \
+              | tee -a "$GITHUB_WORKSPACE/$LOG_DIR/config-verify.log"
+          else
+            echo "ERROR: stack protector mode not REGULAR" \
+              | tee -a "$GITHUB_WORKSPACE/$LOG_DIR/config-verify.log"
+            exit 1
+          fi
+
           echo "=== Post-merge config verification ==="
           grep -E "CONFIG_KSU|CONFIG_KSU_SUSFS|CONFIG_SECURITY_SELINUX_DEVELOP|LOCALVERSION" \
             "$GITHUB_WORKSPACE/$OUT_DIR/.config" \
-            | tee "$GITHUB_WORKSPACE/$LOG_DIR/config-verify.log"
+            | tee -a "$GITHUB_WORKSPACE/$LOG_DIR/config-verify.log"
 
           echo "=== Building Image + DTBs ==="
           "${MAKE[@]}" Image dtbs 2>&1 | tee build.log
