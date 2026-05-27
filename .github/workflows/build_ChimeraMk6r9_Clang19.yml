@@ -145,11 +145,11 @@ jobs:
           echo "=== Fetching AOSP Clang via Git Sparse-Checkout ==="
           git clone --depth=1 -b android-15.0.0_r10 --filter=blob:none --sparse \
             https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 aosp-repo
-          
+
           git -C aosp-repo sparse-checkout set clang-r536225
           mv aosp-repo/clang-r536225 aosp-clang
           rm -rf aosp-repo
-          
+
           test -x aosp-clang/bin/clang \
             || { echo "ERROR: clang binary missing after extract"; exit 1; }
           aosp-clang/bin/clang --version | tee -a "$LOG_DIR/toolchain.log"
@@ -177,16 +177,13 @@ jobs:
           SUSFS_URL="${{ inputs.susfs_repo }}"
           SUSFS_REF="${{ inputs.susfs_ref }}"
           SUSFS_COMMIT="${{ inputs.susfs_commit }}"
-
           [[ "$SUSFS_URL" =~ ^https:// ]] \
             || { echo "ERROR: SUSFS URL must use https://"; exit 1; }
           [[ "$SUSFS_URL" =~ [[:space:]] ]] \
             && { echo "ERROR: SUSFS URL contains whitespace"; exit 1; }
-
           if [[ -n "$SUSFS_COMMIT" && ! "$SUSFS_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]; then
             echo "ERROR: susfs_commit must be a full 40-char SHA"; exit 1
           fi
-
           git clone --filter=blob:none --no-tags "$SUSFS_URL" susfs4ksu
           if [[ -n "$SUSFS_COMMIT" ]]; then
             git -C susfs4ksu fetch --depth=1 origin "$SUSFS_COMMIT"
@@ -195,7 +192,6 @@ jobs:
             git -C susfs4ksu fetch --depth=1 origin "$SUSFS_REF"
             git -C susfs4ksu checkout --detach FETCH_HEAD
           fi
-
           RESOLVED="$(git -C susfs4ksu rev-parse HEAD)"
           {
             echo "SUSFS_URL=$SUSFS_URL"
@@ -203,7 +199,6 @@ jobs:
             echo "SUSFS_COMMIT_INPUT=${SUSFS_COMMIT:-none}"
             echo "SUSFS_COMMIT_RESOLVED=$RESOLVED"
           } | tee "$LOG_DIR/susfs-revision.log"
-
           MISSING=0
           for f in \
             "kernel_patches/50_add_susfs_in_kernel-4.9.patch" \
@@ -216,7 +211,6 @@ jobs:
           done
           [[ "$MISSING" -eq 0 ]] || { echo "Aborting: required SUSFS files absent"; exit 1; }
           echo "OK: all required SUSFS kernel-tree files present"
-
           ACTUAL_VER="$(grep -oP 'SUSFS_VERSION\s+"\K[^"]+' \
             susfs4ksu/kernel_patches/include/linux/susfs.h 2>/dev/null || echo 'unknown')"
           echo "SUSFS_ACTUAL_VERSION=$ACTUAL_VER" | tee -a "$LOG_DIR/susfs-revision.log"
@@ -233,21 +227,17 @@ jobs:
           set -Eeuo pipefail
           git rm -r --cached KernelSU-Next 2>/dev/null || true
           rm -rf .git/modules/KernelSU-Next KernelSU-Next drivers/kernelsu
-
           KSU_URL="${{ inputs.ksu_repo }}"
           KSU_REF="${{ inputs.ksu_ref }}"
           KSU_COMMIT="${{ inputs.ksu_commit }}"
-
           [[ "$KSU_URL" =~ ^https:// ]] \
             || { echo "ERROR: KSU URL must use https://"; exit 1; }
           [[ "$KSU_URL" =~ [[:space:]] ]] \
             && { echo "ERROR: KSU URL contains whitespace"; exit 1; }
           [[ -n "$KSU_REF" ]] || KSU_REF="legacy-susfs-v2"
-
           if [[ -n "$KSU_COMMIT" && ! "$KSU_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]; then
             echo "ERROR: ksu_commit must be a full 40-char SHA"; exit 1
           fi
-
           git clone --filter=blob:none --no-tags "$KSU_URL" KernelSU-Next
           if [[ -n "$KSU_COMMIT" ]]; then
             git -C KernelSU-Next fetch --depth=1 origin "$KSU_COMMIT"
@@ -256,7 +246,6 @@ jobs:
             git -C KernelSU-Next fetch --depth=1 origin "$KSU_REF"
             git -C KernelSU-Next checkout --detach FETCH_HEAD
           fi
-
           RESOLVED_KSU_COMMIT="$(git -C KernelSU-Next rev-parse HEAD)"
           {
             echo "KSU_URL=$KSU_URL"
@@ -264,10 +253,8 @@ jobs:
             echo "KSU_COMMIT_INPUT=${KSU_COMMIT:-none}"
             echo "KSU_COMMIT_RESOLVED=$RESOLVED_KSU_COMMIT"
           } | tee "../$LOG_DIR/ksu-submodule.log"
-
           test -f KernelSU-Next/kernel/Kconfig \
             || { echo "ERROR: KernelSU-Next/kernel/Kconfig missing"; exit 1; }
-
           # Kconfig uses 'config KSU_SUSFS'
           if grep -qE '^[[:space:]]*config[[:space:]]+KSU_SUSFS' KernelSU-Next/kernel/Kconfig; then
             echo "OK: SUSFS confirmed native in KernelSU-Next/kernel/Kconfig"
@@ -276,9 +263,7 @@ jobs:
             echo "WARN: KernelSU-Next/kernel/Kconfig has no 'config KSU_SUSFS' entry."
             echo "KSU_SUSFS_NATIVE=false" >> "$GITHUB_ENV"
           fi
-
           git -C KernelSU-Next log --oneline -1 | tee -a "../$LOG_DIR/ksu-submodule.log"
-
           ln -sf ../KernelSU-Next/kernel drivers/kernelsu
           test -f drivers/kernelsu/Kconfig \
             || { echo "ERROR: drivers/kernelsu/Kconfig symlink broken"; exit 1; }
@@ -325,20 +310,17 @@ jobs:
           LOG="../$LOG_DIR/preflight.log"
           echo "=== Preflight — Chimera Mk6r9 ===" | tee "$LOG"
           git status --short | tee -a "$LOG"
-
           echo "=== KSU/SUSFS markers ===" | tee -a "$LOG"
           grep -RsnE \
             'KernelSU|kernelsu|CONFIG_KSU|susfs_task_state|ksu_handle_faccessat' \
             fs include kernel arch/arm64/configs 2>/dev/null \
             | tee -a "$LOG" || true
-
           ALREADY_PATCHED=false
           if grep -RqsE \
             'source "drivers/kernelsu/Kconfig"|ksu_handle_faccessat|susfs_task_state' \
             fs include kernel arch/arm64/configs 2>/dev/null; then
             ALREADY_PATCHED=true
           fi
-
           echo "ALREADY_PATCHED=$ALREADY_PATCHED" | tee -a "$LOG"
           if [[ "$ALREADY_PATCHED" == "true" && \
                 "${{ inputs.force_repatch }}" != "true" ]]; then
@@ -391,7 +373,6 @@ jobs:
           LOG="../$LOG_DIR/susfs-guarantee.log"
           echo "=== SUSFS file guarantee ===" | tee "$LOG"
           SRC="$GITHUB_WORKSPACE/susfs4ksu/kernel_patches"
-
           for pair in "fs/susfs.c:fs/susfs.c" "fs/sus_su.c:fs/sus_su.c"; do
             DST="${pair##*:}"; FROM="$SRC/${pair%%:*}"
             if [[ ! -f "$DST" ]]; then
@@ -401,7 +382,6 @@ jobs:
               echo "INFO: $DST present ($(wc -l < "$DST") lines) — preserved" | tee -a "$LOG"
             fi
           done
-
           for hdr in \
             "include/linux/susfs.h" \
             "include/linux/susfs_def.h" \
@@ -418,7 +398,6 @@ jobs:
               echo "INFO: $hdr present ($(wc -l < "$hdr") lines) — preserved" | tee -a "$LOG"
             fi
           done
-
           grep -q 'susfs\.o'  fs/Makefile \
             || echo 'obj-$(CONFIG_KSU_SUSFS) += susfs.o'  >> fs/Makefile
           grep -q 'sus_su\.o' fs/Makefile \
@@ -427,7 +406,6 @@ jobs:
           echo 'ccflags-$(CONFIG_KSU_SUSFS) += -Isecurity/selinux -Isecurity/selinux/include' \
             >> fs/Makefile
           echo "OK: fs/Makefile wired" | tee -a "$LOG"
-
           FAIL=0
           for f in \
             fs/susfs.c fs/sus_su.c \
@@ -445,7 +423,6 @@ jobs:
         run: |
           set -Eeuo pipefail
           mkdir -p include/kernelsu
-
           # Surgery A — normalize SUSFS include paths
           find include fs -type f \( -name '*.h' -o -name '*.c' \) \
             -exec sed -i \
@@ -453,7 +430,6 @@ jobs:
               -e 's|#include "../drivers/kernelsu/\(.*\)"|#include <kernelsu/\1>|g' \
             {} +
           echo "OK [Surgery A]: SUSFS include namespace normalized"
-
           # Surgery B — export real KernelSU public headers
           printf '%s\n' \
             'import sys' \
@@ -480,7 +456,6 @@ jobs:
             '    export_header(h)' \
             > /tmp/export_headers.py
           python3 /tmp/export_headers.py
-
           # Surgery C — kernel-safe ksu.h shim
           printf '%s\n' \
             '#pragma once' \
@@ -493,7 +468,6 @@ jobs:
             'extern const struct cred *ksu_cred;' \
             > include/kernelsu/ksu.h
           echo "OK [Surgery C]: kernel-safe ksu.h installed"
-
           # Surgery D — ksu_cred extern in shared headers
           for hdr in \
             include/kernelsu/core_hook.h \
@@ -503,7 +477,6 @@ jobs:
               echo "OK [Surgery D]: ksu_cred added to $hdr"
             fi
           done
-
           # Validation
           FAIL=0
           for f in \
@@ -657,13 +630,13 @@ jobs:
             > /tmp/inject_weak_fallbacks.py
           python3 /tmp/inject_weak_fallbacks.py
 
-      # ── 13. Defconfig Tuning (-O2 Low Latency Layout) ────────────────────────
+      # ── 13. Defconfig Tuning ──────────────────────────────────────────────────
       - name: Configure Kernel Defconfig
         working-directory: kernel
         run: |
           set -Eeuo pipefail
           echo "=== Configuring Defconfig Flags ==="
-          
+
           # 1. Generate clean base
           DEFCONFIG_NAME=$(basename "$DEFCONFIG")
           make O=../$OUT_DIR ARCH=arm64 "$DEFCONFIG_NAME"
@@ -681,7 +654,7 @@ jobs:
 
           # 3. Synchronize dependencies using the updated out-of-tree config
           make O=../$OUT_DIR ARCH=arm64 olddefconfig
-          
+
           echo "✅ Target defconfig finalized in $OUT_DIR"
 
       # ── 14. Compile Kernel via AOSP Clang 19 ─────────────────────────────────
@@ -690,7 +663,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           echo "=== Starting AOSP Clang 19 Compilation Loop ==="
-          
+
           make -j$(nproc --all) O=../$OUT_DIR ARCH=arm64 \
             CC=clang \
             CLANG_TRIPLE=aarch64-linux-gnu- \
@@ -707,7 +680,53 @@ jobs:
             KBUILD_BUILD_HOST=$BUILD_HOST \
             2>&1 | tee ../$LOG_DIR/kernel-build.log
 
-      # ── 15. Verify Target Output ─────────────────────────────────────────────
+      # ── 15. Concatenate DTB → Image.gz-dtb ───────────────────────────────────
+      # The Exynos 9810 BSP does not auto-produce a combined Image.gz-dtb target;
+      # AnyKernel3 for Samsung devices expects a single concatenated blob, so we
+      # produce it here by appending the device-specific DTB to the compressed image.
+      - name: Concatenate DTB to produce Image.gz-dtb
+        run: |
+          set -Eeuo pipefail
+
+          IMAGE_GZ="$OUT_DIR/arch/arm64/boot/Image.gz"
+          DTB_DIR="$OUT_DIR/arch/arm64/boot/dts/exynos"
+
+          # Verify Image.gz was actually produced by the build
+          [[ -f "$IMAGE_GZ" ]] \
+            || { echo "❌ ERROR: Image.gz missing — build likely failed"; exit 1; }
+
+          # Locate the star2lte DTB (eur_open rev26 is the canonical variant)
+          DTB_FILE=""
+          for candidate in \
+            "$DTB_DIR/exynos9810-star2lte_eur_open_26.dtb" \
+            "$DTB_DIR/exynos9810-star2lte_eur_open_25.dtb" \
+            "$DTB_DIR/exynos9810-star2lte_eur_open_24.dtb"; do
+            if [[ -f "$candidate" ]]; then
+              DTB_FILE="$candidate"
+              break
+            fi
+          done
+
+          # Fall back to any star2lte DTB if the preferred variants are absent
+          if [[ -z "$DTB_FILE" ]]; then
+            DTB_FILE="$(find "$DTB_DIR" -name 'exynos9810-star2lte*.dtb' \
+              | sort | head -n1)"
+          fi
+
+          if [[ -z "$DTB_FILE" ]]; then
+            echo "❌ ERROR: No star2lte DTB found under $DTB_DIR"
+            echo "Available DTBs:"
+            find "$OUT_DIR/arch/arm64/boot/dts" -name '*.dtb' | sort
+            exit 1
+          fi
+
+          echo "Using DTB: $DTB_FILE"
+          cat "$IMAGE_GZ" "$DTB_FILE" > "$OUT_DIR/arch/arm64/boot/Image.gz-dtb"
+          echo "✅ Image.gz-dtb created \
+            ($(stat -c%s "$OUT_DIR/arch/arm64/boot/Image.gz-dtb") bytes)"
+          echo "DTB_FILE=$DTB_FILE" | tee -a "$LOG_DIR/build-inputs.log"
+
+      # ── 16. Verify Target Output ──────────────────────────────────────────────
       - name: Verify Build Deliverables
         run: |
           set -Eeuo pipefail
@@ -716,35 +735,61 @@ jobs:
             echo "✅ Kernel built successfully at $TARGET_IMAGE"
             echo "IMAGE_SIZE=$(stat -c%s "$TARGET_IMAGE") bytes"
           else
-            echo "❌ ERROR: Target kernel binary output completely missing!"
+            echo "❌ ERROR: Image.gz-dtb missing after concatenation step"
             exit 1
           fi
 
-      # ── 16. Package Flashable AnyKernel3 Distribution Zip ────────────────────
+      # ── 17. Package Flashable AnyKernel3 Distribution Zip ────────────────────
       - name: Package Delivery Zip (AnyKernel3)
         if: ${{ inputs.dry_run == false }}
         run: |
           set -Eeuo pipefail
           echo "=== Staging AnyKernel3 Package Environment ==="
+
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git packaging
           rm -rf packaging/.git
-          
-          # Move built Kernel Binary into flashable directory tree
+
+          # ── Copy kernel binary ───────────────────────────────────────────────
           cp "$OUT_DIR/arch/arm64/boot/Image.gz-dtb" packaging/Image.gz-dtb
 
-          # Adjust configuration script for custom device layout mapping
-          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' packaging/anykernel.sh
-          sed -i 's/device.name1=./device.name1=star2lte/g' packaging/anykernel.sh
-          
-          cd packaging
-          ZIP_NAME="Chimera_Mk6r9-EvolutionX-star2lte-Build${GITHUB_RUN_NUMBER}.zip"
-          zip -r9 "../$ZIP_NAME" *
-          cd ..
-          
-          echo "ZIP_PATH=$GITHUB_WORKSPACE/$ZIP_NAME" >> "$GITHUB_ENV"
-          echo "✅ Distribution engine successfully built payload: $ZIP_NAME"
+          # ── Configure anykernel.sh for star2lte ──────────────────────────────
+          # device.name1=star2lte  (Galaxy S9+)
+          # device.name2=star2qltechn (CN variant)
+          # block=/dev/block/platform/11120000.ufs/by-name/boot
+          # is_slot_device=0  (A/B-less Samsung layout)
+          # do.devicecheck=1  (enforce device match at flash time)
+          AK="packaging/anykernel.sh"
 
-      # ── 17. Save Generated Logs and Build Artifacts ──────────────────────────
+          sed -i \
+            -e 's|^kernel\.string=.*|kernel.string=Chimera Mk6r9 — KernelSU-Next + SUSFS by AegisDevLabs|' \
+            -e 's|^do\.devicecheck=.*|do.devicecheck=1|' \
+            -e 's|^do\.modules=.*|do.modules=0|' \
+            -e 's|^do\.systemless=.*|do.systemless=1|' \
+            -e 's|^do\.cleanup=.*|do.cleanup=1|' \
+            -e 's|^do\.cleanuponabort=.*|do.cleanuponabort=0|' \
+            -e 's|^device\.name1=.*|device.name1=star2lte|' \
+            -e 's|^device\.name2=.*|device.name2=star2qltechn|' \
+            -e '/^device\.name[3-9]=/d' \
+            -e 's|^block=.*|block=/dev/block/platform/11120000.ufs/by-name/boot;|' \
+            -e 's|^is_slot_device=.*|is_slot_device=0|' \
+            "$AK"
+
+          # Add device names if the template did not already contain them
+          grep -q '^device\.name1=' "$AK" \
+            || sed -i '/^do\.devicecheck=/a device.name1=star2lte\ndevice.name2=star2qltechn' "$AK"
+
+          echo "=== anykernel.sh device block (post-patch) ==="
+          grep -E '^(kernel\.string|do\.|device\.|block=|is_slot)' "$AK"
+
+          # ── Build zip ────────────────────────────────────────────────────────
+          ZIP_NAME="Chimera_Mk6r9-EvolutionX-star2lte-Build${GITHUB_RUN_NUMBER}.zip"
+          ( cd packaging && zip -r9 "../$ZIP_NAME" . )
+
+          echo "ZIP_PATH=$GITHUB_WORKSPACE/$ZIP_NAME" >> "$GITHUB_ENV"
+          echo "✅ AnyKernel3 zip ready: $ZIP_NAME \
+            ($(stat -c%s "$GITHUB_WORKSPACE/$ZIP_NAME") bytes)"
+
+      # ── 18. Save Generated Logs and Build Artifacts ──────────────────────────
       - name: Archive Workflow Output Logs
         uses: actions/upload-artifact@v4
         with:
@@ -758,7 +803,7 @@ jobs:
           name: Chimera-Mk6r9-FlashableZip
           path: ${{ env.ZIP_PATH }}
 
-      # ── 18. Generate Production GitHub Release Tag ────────────────────────────
+      # ── 19. Generate Production GitHub Release Tag ────────────────────────────
       - name: Perform Production Pipeline Release
         if: ${{ inputs.do_release == true && inputs.dry_run == false }}
         uses: softprops/action-gh-release@v2
@@ -771,15 +816,14 @@ jobs:
             **Kernel Source Base:** `royd-jpg/Project_Chimera @ chimera-mk6l`
             **Toolchain Engine:** Stable AOSP Clang 19 (`r536225`) Unified Architecture
             **Optimization Tuning Matrix:** Low-Latency `-O2` Native Bounds Handling
-
             ### Feature Framework Set
             | Security Node Feature | Status Config |
             |---|---|
             | **KernelSU-Next Core Engine** | ✅ `sidex15/legacy-susfs-v2` |
             | **SUSFS VFS Guard Layer** | ✅ Native Tree Hook v${{ env.SUSFS_TARGET_VERSION }} |
-            | **SELinux State Engine** | 🔒 **Enforcing Locked Check** (`setenforce` bypassed via structural limits) |
-            | **Monet Palette Fluidity** | 🚀 Unlocked Frame Pacing Loops |
-
-            ### Verification Diagnostics Log
-            * Compiled using standard Android OS platform structural toolchains to avoid micro-stutter anomalies during dynamic wallpaper layout accent switches.
+            | **SELinux State Engine** | 🔒 **Enforcing Locked** |
+            ### Flash Instructions
+            1. Boot into custom recovery (TWRP / OrangeFox)
+            2. Flash zip — device check enforces `star2lte` / `star2qltechn`
+            3. Wipe cache + dalvik, reboot
           files: ${{ env.ZIP_PATH }}
