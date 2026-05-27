@@ -904,30 +904,22 @@ jobs:
             O="$GITHUB_WORKSPACE/$OUT_DIR"
             ARCH=arm64
             SUBARCH=arm64
-
             CC="$CLANG_BIN"
-
             HOSTCC=gcc
             HOSTCXX=g++
-
             LLVM=1
             LLVM_IAS=0
-
             CLANG_TRIPLE=aarch64-linux-gnu-
             CROSS_COMPILE=aarch64-linux-gnu-
             CROSS_COMPILE_ARM32=arm-linux-gnueabi-
-
             LD="$LD_BIN"
             AR="$AR_BIN"
             NM="$NM_BIN"
             OBJCOPY="$OBJCOPY_BIN"
             OBJDUMP="$OBJDUMP_BIN"
             STRIP="$STRIP_BIN"
-
-            KCFLAGS="-Wno-error -fno-strict-flex-arrays"
-
+            KCFLAGS="-Wno-error"
             LOCALVERSION="$BRAND"
-
             KBUILD_BUILD_USER="$BUILD_USER"
             KBUILD_BUILD_HOST="$BUILD_HOST"
           )
