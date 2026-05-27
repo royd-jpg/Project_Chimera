@@ -861,7 +861,7 @@ jobs:
           echo "Re-run with dry_run=false to compile and package."
 
       # ── 17. Build kernel ──────────────────────────────────────────────────────
-- name: Build kernel
+      - name: Build kernel
         if: ${{ inputs.dry_run == false }}
         working-directory: kernel
         run: |
