@@ -665,7 +665,8 @@ jobs:
           echo "=== Configuring Defconfig Flags ==="
           
           # Initialize baseline defconfig output file inside our staging out directory
-          make O=../$OUT_DIR ARCH=arm64 $DEFCONFIG
+          DEFCONFIG_NAME=$(basename $DEFCONFIG)
+          make O=../$OUT_DIR ARCH=arm64 $DEFCONFIG_NAME
 
           # Safely append configuration parameters directly into target tree
           {
