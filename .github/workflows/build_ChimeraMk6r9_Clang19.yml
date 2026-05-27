@@ -680,62 +680,18 @@ jobs:
             KBUILD_BUILD_HOST=$BUILD_HOST \
             2>&1 | tee ../$LOG_DIR/kernel-build.log
 
-      # ── 15. Concatenate DTB → Image.gz-dtb ───────────────────────────────────
-      # The Exynos 9810 BSP does not auto-produce a combined Image.gz-dtb target;
-      # AnyKernel3 for Samsung devices expects a single concatenated blob, so we
-      # produce it here by appending the device-specific DTB to the compressed image.
-      - name: Concatenate DTB to produce Image.gz-dtb
-        run: |
-          set -Eeuo pipefail
-
-          IMAGE_GZ="$OUT_DIR/arch/arm64/boot/Image.gz"
-          DTB_DIR="$OUT_DIR/arch/arm64/boot/dts/exynos"
-
-          # Verify Image.gz was actually produced by the build
-          [[ -f "$IMAGE_GZ" ]] \
-            || { echo "❌ ERROR: Image.gz missing — build likely failed"; exit 1; }
-
-          # Locate the star2lte DTB (eur_open rev26 is the canonical variant)
-          DTB_FILE=""
-          for candidate in \
-            "$DTB_DIR/exynos9810-star2lte_eur_open_26.dtb" \
-            "$DTB_DIR/exynos9810-star2lte_eur_open_25.dtb" \
-            "$DTB_DIR/exynos9810-star2lte_eur_open_24.dtb"; do
-            if [[ -f "$candidate" ]]; then
-              DTB_FILE="$candidate"
-              break
-            fi
-          done
-
-          # Fall back to any star2lte DTB if the preferred variants are absent
-          if [[ -z "$DTB_FILE" ]]; then
-            DTB_FILE="$(find "$DTB_DIR" -name 'exynos9810-star2lte*.dtb' \
-              | sort | head -n1)"
-          fi
-
-          if [[ -z "$DTB_FILE" ]]; then
-            echo "❌ ERROR: No star2lte DTB found under $DTB_DIR"
-            echo "Available DTBs:"
-            find "$OUT_DIR/arch/arm64/boot/dts" -name '*.dtb' | sort
-            exit 1
-          fi
-
-          echo "Using DTB: $DTB_FILE"
-          cat "$IMAGE_GZ" "$DTB_FILE" > "$OUT_DIR/arch/arm64/boot/Image.gz-dtb"
-          echo "✅ Image.gz-dtb created \
-            ($(stat -c%s "$OUT_DIR/arch/arm64/boot/Image.gz-dtb") bytes)"
-          echo "DTB_FILE=$DTB_FILE" | tee -a "$LOG_DIR/build-inputs.log"
-
-      # ── 16. Verify Target Output ──────────────────────────────────────────────
+      # ── 15. Verify Target Output ──────────────────────────────────────────────
+      # AK3 with dump_boot/write_boot repacks the existing boot image in-place,
+      # so Image.gz and the DTB must remain separate — do NOT concatenate them.
       - name: Verify Build Deliverables
         run: |
           set -Eeuo pipefail
-          TARGET_IMAGE="$OUT_DIR/arch/arm64/boot/Image.gz-dtb"
+          TARGET_IMAGE="$OUT_DIR/arch/arm64/boot/Image.gz"
           if [[ -f "$TARGET_IMAGE" ]]; then
             echo "✅ Kernel built successfully at $TARGET_IMAGE"
             echo "IMAGE_SIZE=$(stat -c%s "$TARGET_IMAGE") bytes"
           else
-            echo "❌ ERROR: Image.gz-dtb missing after concatenation step"
+            echo "❌ ERROR: Image.gz missing — build failed"
             exit 1
           fi
 
