@@ -143,7 +143,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           echo "=== Fetching AOSP Clang via Git Sparse-Checkout ==="
-          git clone --depth=1 --filter=blob:none --sparse/git clone --depth=1 -b android-15.0.0_r10 --filter=blob:none --sparse \
+          git clone --depth=1 -b android-15.0.0_r10 --filter=blob:none --sparse \
             https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 aosp-repo
           
           git -C aosp-repo sparse-checkout set clang-r536225
