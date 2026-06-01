@@ -682,8 +682,6 @@ jobs:
           set_cfg CONFIG_KSU_SUSFS_SPOOF_SELINUX             y
           # ── SELinux enforcing-locked ────────────────────────────────────────
           # SUSFS spoofs userspace SELinux checks; kernel enforcement stays ON.
-          unset_cfg CONFIG_SECURITY_SELINUX_DEVELOP
-          unset_cfg CONFIG_SECURITY_SELINUX_BOOTPARAM
           unset_cfg CONFIG_SECURITY_SELINUX_DISABLE
           sed -i 's/androidboot\.selinux=permissive//g; s/\benforcing=0\b//g' "$DEFCONFIG"
           # ── Scheduler tuning ────────────────────────────────────────────────
@@ -826,7 +824,7 @@ jobs:
           
           echo "=== Post-merge config verification ==="
           # Added '|| true' so the build doesn't instantly crash if pipefail catches an empty grep result
-          grep -E "CONFIG_KSU|CONFIG_KSU_SUSFS|CONFIG_SECURITY_SELINUX_DEVELOP|LOCALVERSION" \
+          grep -E "CONFIG_KSU|CONFIG_KSU_SUSFS|LOCALVERSION" \
             "$GITHUB_WORKSPACE/$OUT_DIR/.config" \
             | tee "$GITHUB_WORKSPACE/$LOG_DIR/config-verify.log" || true
             
@@ -925,7 +923,6 @@ jobs:
             |---|---|
             | **KernelSU-Next Core Engine** | ✅ `sidex15/legacy-susfs-v2` |
             | **SUSFS VFS Guard Layer** | ✅ Native Tree Hook v${{ env.SUSFS_TARGET_VERSION }} |
-            | **SELinux State Engine** | 🔒 **Enforcing Locked** |
             ### Flash Instructions
             1. Boot into custom recovery (TWRP / OrangeFox)
             2. Flash zip — device check enforces `star2lte` / `star2qltechn`
