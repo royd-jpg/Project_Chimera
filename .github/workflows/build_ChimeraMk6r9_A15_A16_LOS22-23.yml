@@ -90,7 +90,7 @@ jobs:
       run:
         shell: bash
 
-env:
+    env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
       KERNEL_REPO:          "https://github.com/royd-jpg/Project_Chimera"
