@@ -901,7 +901,7 @@ jobs:
           cp "$GITHUB_WORKSPACE/kernel/scripts/chimera_ems_tune.sh" \
             "AnyKernel3/ramdisk/overlay/system/etc/init.d/99chimera_ems" 2>/dev/null \
             || echo "INFO: EMS script not staged — skipping"
-          ZIP="chimera-mk6r9-evox10.9-$(date +%Y%m%d-%H%M)-r${GITHUB_RUN_NUMBER}.zip"
+          ZIP="chimera-mk6r9-AOSPClang19-$(date +%Y%m%d-%H%M)-r${GITHUB_RUN_NUMBER}.zip"
           ( cd AnyKernel3 && zip -r9 "../$ZIP" . -x '*.git*' )
           test -f "$ZIP" || { echo "ERROR: zip not produced"; exit 1; }
           echo "ZIP=$ZIP" >> "$LOG_DIR/branding.env"
@@ -925,8 +925,8 @@ jobs:
         if: ${{ inputs.dry_run == false }}
         uses: actions/upload-artifact@v4
         with:
-          name: chimera-mk6r9-evox10.9-${{ github.run_number }}
-          path: chimera-mk6r9-evox10.9-*.zip
+          name: chimera-mk6r9-AOSPClang19-${{ github.run_number }}
+          path: chimera-mk6r9-AOSPClang19-*.zip
           if-no-files-found: error
           retention-days: 30
 
@@ -936,10 +936,10 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: chimera-mk6r9-${{ github.run_number }}
-          name: "Project Chimera Mk6r9 — EvolutionX 10.9 Build #${{ github.run_number }}"
+          name: "Project Chimera Mk6r9 — LOS/AOSP Android 15/16 Build #${{ github.run_number }}"
           body: |
             ## Project Chimera Mk6r9 — Exynos 9810 / star2lte
-            **Base ROM compatibility:** `EvolutionX 10.9 / Android 15`
+            **Base ROM compatibility:** `LOS/AOSP Android 15/16 (QPR 1&2) ROMs`
             **Kernel Source Base:** `royd-jpg/Project_Chimera @ chimera-mk6l`
             **Toolchain Engine:** AOSP Clang 19 (`r596125`) with conservative 4.9 hardening
             **Optimization Tuning Matrix:** Low-Latency `-O2` Native Bounds Handling
