@@ -858,8 +858,8 @@ jobs:
           fi
           echo "=== Post-merge config verification ==="
           grep -E \
-          grep -E "CONFIG_KSU|CONFIG_KSU_SUSFS|LOCALVERSION" \
-          "$GITHUB_WORKSPACE/$OUT_DIR/.config" \
+            "CONFIG_KSU|CONFIG_KSU_SUSFS|CONFIG_SECURITY_SELINUX_DEVELOP|LOCALVERSION" \
+            "$GITHUB_WORKSPACE/$OUT_DIR/.config" \
             | tee -a "$GITHUB_WORKSPACE/$LOG_DIR/config-verify.log"
           echo "=== Building Image + DTBs ==="
           "${MAKE[@]}" Image dtbs 2>&1 | tee build.log
