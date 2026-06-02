@@ -791,40 +791,27 @@ jobs:
         run: |
           set -Eeuo pipefail
           mkdir -p "$GITHUB_WORKSPACE/$OUT_DIR"
-          export PATH="$GITHUB_WORKSPACE/aosp-clang/bin:$PATH"
+
           export KBUILD_BUILD_USER="$BUILD_USER"
           export KBUILD_BUILD_HOST="$BUILD_HOST"
           export KBUILD_BUILD_VERSION="${GITHUB_RUN_NUMBER:-1}"
-          CLANG_BIN="$GITHUB_WORKSPACE/aosp-clang/bin/clang"
-          LD_BIN="$GITHUB_WORKSPACE/aosp-clang/bin/ld.lld"
-          AR_BIN="$GITHUB_WORKSPACE/aosp-clang/bin/llvm-ar"
-          NM_BIN="$GITHUB_WORKSPACE/aosp-clang/bin/llvm-nm"
-          OBJCOPY_BIN="$GITHUB_WORKSPACE/aosp-clang/bin/llvm-objcopy"
-          OBJDUMP_BIN="$GITHUB_WORKSPACE/aosp-clang/bin/llvm-objdump"
-          STRIP_BIN="$GITHUB_WORKSPACE/aosp-clang/bin/llvm-strip"
-          echo "=== Toolchain sanity ==="
-          which clang || true
-          "$CLANG_BIN" --version
+
           MAKE=(
             make -j"$(nproc)"
             O="$GITHUB_WORKSPACE/$OUT_DIR"
             ARCH=arm64
             SUBARCH=arm64
-            CC="$CLANG_BIN"
-            HOSTCC=gcc
-            HOSTCXX=g++
-            LLVM=1
-            LLVM_IAS=0
+            CC=clang
             CLANG_TRIPLE=aarch64-linux-gnu-
             CROSS_COMPILE=aarch64-linux-gnu-
             CROSS_COMPILE_ARM32=arm-linux-gnueabi-
-            LD="$LD_BIN"
-            AR="$AR_BIN"
-            NM="$NM_BIN"
-            OBJCOPY="$OBJCOPY_BIN"
-            OBJDUMP="$OBJDUMP_BIN"
-            STRIP="$STRIP_BIN"
-            KCFLAGS="-Wno-error"
+            LD="$GITHUB_WORKSPACE/neutron-clang/bin/ld.lld"
+            AR=llvm-ar
+            NM=llvm-nm
+            OBJCOPY=llvm-objcopy
+            OBJDUMP=llvm-objdump
+            STRIP=llvm-strip
+            KCFLAGS="-fcommon -Wno-implicit-function-declaration -Wno-implicit-int -Wno-return-type"
             LOCALVERSION="$BRAND"
             KBUILD_BUILD_USER="$BUILD_USER"
             KBUILD_BUILD_HOST="$BUILD_HOST"
