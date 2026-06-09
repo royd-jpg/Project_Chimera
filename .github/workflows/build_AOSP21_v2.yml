@@ -919,7 +919,7 @@ jobs:
           cp "$GITHUB_WORKSPACE/kernel/scripts/chimera_ems_tune.sh" \
             "AnyKernel3/ramdisk/overlay/system/etc/init.d/99chimera_ems" 2>/dev/null \
             || echo "INFO: EMS script not staged — skipping"
-          ZIP="chimera-mk6r9-AOSPClang21-$(date +%Y%m%d-%H%M)-r${GITHUB_RUN_NUMBER}.zip"
+          ZIP="chimera-mk6r9-AOSPClang21.0-$(date +%Y%m%d-%H%M)-r${GITHUB_RUN_NUMBER}.zip"
           ( cd AnyKernel3 && zip -r9 "../$ZIP" . -x '*.git*' )
           test -f "$ZIP" || { echo "ERROR: zip not produced"; exit 1; }
           echo "ZIP=$ZIP" >> "$LOG_DIR/branding.env"
