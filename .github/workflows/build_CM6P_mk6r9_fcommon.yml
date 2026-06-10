@@ -850,7 +850,6 @@ jobs:
             CC="$CLANG_BIN"
             HOSTCC=gcc
             HOSTCXX=g++
-            LLVM=1
             LLVM_IAS=0
             CLANG_TRIPLE=aarch64-linux-gnu-
             CROSS_COMPILE=aarch64-linux-gnu-
