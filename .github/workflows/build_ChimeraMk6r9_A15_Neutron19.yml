@@ -643,16 +643,22 @@ jobs:
             echo "# $1 is not set" >> "$DEFCONFIG"
           }
           # ── KernelSU core ───────────────────────────────────────────────────
+          unset_cfg CONFIG_KPROBES
+          unset_cfg CONFIG_HAVE_KPROBES
           set_cfg CONFIG_KSU y
           set_cfg CONFIG_KSU_MANUAL_HOOK y
-          # ── SUSFS — ALL features enabled ───────────────────────────────────
+          
+          # ── SUSFS Core Spoofing ─────────────────────────────────────────────
           set_cfg CONFIG_KSU_SUSFS y
+          set_cfg CONFIG_KSU_SUSFS_SUS_SU n
           set_cfg CONFIG_KSU_SUSFS_SUS_PATH y
           set_cfg CONFIG_KSU_SUSFS_SUS_MOUNT y
           set_cfg CONFIG_KSU_SUSFS_SUS_KSTAT y
           set_cfg CONFIG_KSU_SUSFS_SUS_MAP y
           set_cfg CONFIG_KSU_SUSFS_SUS_UNAME y
           set_cfg CONFIG_KSU_SUSFS_TRY_UMOUNT y
+          
+          # ── Isolation & Hiding ──────────────────────────────────────────────
           set_cfg CONFIG_KSU_SUSFS_SPOOF_UNAME y
           set_cfg CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG y
           set_cfg CONFIG_KSU_SUSFS_OPEN_REDIRECT y
@@ -660,12 +666,12 @@ jobs:
           set_cfg CONFIG_KSU_SUSFS_HIDE_KSU_DIR y
           set_cfg CONFIG_KSU_SUSFS_HIDE_MAGISK_EVIL y
           set_cfg CONFIG_KSU_SUSFS_ENABLE_LOG y
-          # Optional SUSFS symbols
-          set_cfg CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOF y
-          set_cfg CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOFING y
+          
+          # ── Advanced Hooks & Security Spoofing ──────────────────────────────
           set_cfg CONFIG_KSU_SUSFS_AVC_LOG_SPOOF y
           set_cfg CONFIG_KSU_SUSFS_SELINUX_AVC_HOOK y
           set_cfg CONFIG_KSU_SUSFS_SPOOF_SELINUX y
+          
           # ── SELinux enforcing-locked ────────────────────────────────────────
           unset_cfg CONFIG_SECURITY_SELINUX_DISABLE
           sed -i \
