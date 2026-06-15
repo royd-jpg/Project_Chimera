@@ -33,7 +33,7 @@
 #       heavy A15/16 frameworks, while explicitly fixing the MFC/Audio BSS
 #       aliasing issue via the -fcommon directive.
 # [Δ10] KSU source switched from sidex15/KernelSU-Next@legacy-susfs-v2 to
-#       KernelSU-Next/KernelSU-Next@legacy-susfs (upstream canonical repo).
+#       KernelSU-Next/KernelSU-Next@legacy-susfs (upstream canonical repo) [sidex15/KernelSU-Next@legacy-susfs-v2]. 
 # [Δ11] AVC log spoofing disabled: CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOF,
 #       CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOFING, and CONFIG_KSU_SUSFS_AVC_LOG_SPOOF
 #       switched from set_cfg to unset_cfg in Step 13. Eliminates SELinux
@@ -70,12 +70,12 @@ on:
         description: "KernelSU git URL (https only)"
         required: false
         type: string
-        default: "https://github.com/KernelSU-Next/KernelSU-Next.git"   # [Δ10]
+        default: "https://github.com/sidex15/KernelSU-Next.git"   # [Δ10]
       ksu_ref:
         description: "KernelSU branch/tag/ref"
         required: false
         type: string
-        default: "legacy-susfs"                                          # [Δ10]
+        default: "legacy-susfs-v2"                                          # [Δ10]
       ksu_commit:
         description: "KernelSU exact commit SHA (leave blank to track ref tip)"
         required: false
@@ -1115,7 +1115,7 @@ jobs:
             ### Feature Framework Set
             | Security / Feature Node | Status Config |
             |---|---|
-            | **KernelSU-Next Core Engine** | ✅ `KernelSU-Next/KernelSU-Next @ legacy-susfs` [Δ10] |
+            | **KernelSU-Next Core Engine** | ✅ `sidex15/KernelSU-Next @ legacy-susfs-v2` [Δ10] |
             | **SUSFS VFS Guard Layer** | ✅ Native Tree Hook v${{ env.SUSFS_TARGET_VERSION }} |
             | **AVC Log Spoofing** | ❌ Disabled [Δ11] — full AVC visibility for A16 bring-up |
             | **BPF Syscall + Cgroup BPF** | ✅ Enabled [Δ12] — A16 bpfloader / netd |
