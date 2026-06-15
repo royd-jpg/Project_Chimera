@@ -493,7 +493,41 @@ jobs:
             > /tmp/fix_syscall_fn_t.py
           python3 /tmp/fix_syscall_fn_t.py
 
-      # ── 5c. Diagnostic: su_compat / kernel_umount hook wiring [Δ20] ──────────
+      # ── 5c. Apply Manual Kernel Patches (The "Surgery") ───────────────────────
+      - name: Apply Manual Kernel Patches
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          
+          # 1. Disable the KSU-Next Kbuild auto-patcher to prevent conflicts
+          # This replaces the logic block with a safe comment in the build files
+          sed -i '/ifneq ($(shell grep -Eq "^int path_umount"/,/endif/c\# KSU_NEXT auto-patcher disabled for stability' KernelSU-Next/kernel/Kbuild
+          
+          # 2. Inject declaration into fs/internal.h
+          # We search for mnt_init and add our declaration immediately after
+          sed -i '/extern void __init mnt_init(void);/a extern int path_umount(struct path *path, int flags);' fs/internal.h
+          
+          # 3. Append the implementation to fs/namespace.c (only if not already present)
+              if ! grep -q "int path_umount" fs/namespace.c; then
+                  cat >> fs/namespace.c <<EOF
+    
+              int path_umount(struct path *path, int flags)
+              {
+                  struct mount *mnt = real_mount(path->mnt);
+                  int ret;
+                  ret = can_umount(path, flags);
+                  if (!ret)
+                      ret = do_umount(mnt, flags);
+                  dput(path->dentry);
+                  mntput_no_expire(mnt);
+                  return ret;
+              }
+              EOF
+              fi
+          
+          echo "Surgery complete: Kbuild patched and path_umount integrated."
+
+      # ── 5d. Diagnostic: su_compat / kernel_umount hook wiring [Δ20] ──────────
       # [Δ20] BRENE (rrr333nnn333/BRENE) toggles two KernelSU-Next runtime
       # features on boot-completed via `ksud feature set su_compat <v>` and
       # `ksud feature set kernel_umount <v>`. On a kprobe-disabled, pre-5.9
