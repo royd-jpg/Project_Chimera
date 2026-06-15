@@ -121,6 +121,21 @@
 #       '-' (required by kbuild's LOCALVERSION concatenation) and that
 #       build_user/build_host are non-empty, failing fast with a clear error
 #       before any cloning/build work begins if misconfigured.
+# [Δ20] New Step 5c ("Diagnostic: su_compat / kernel_umount hook wiring
+#       (BRENE)") — investigates a reported bootloop that occurs once the
+#       BRENE module (rrr333nnn333/BRENE) runs its boot-completed.sh, which
+#       calls `ksud feature set su_compat <v>` and
+#       `ksud feature set kernel_umount <v>`. This step greps the freshly
+#       cloned sidex15/legacy-susfs-v2 KernelSU-Next tree for
+#       CONFIG_KSU_KPROBES_HOOK usage, ksu_su_compat_enabled /
+#       ksu_sucompat_init wiring in sucompat.c, and kernel_umount/
+#       path_umount handling, plus checks whether fs/namespace.c in this
+#       4.9.337 base tree defines path_umount (required by KernelSU's
+#       native "Umount module" feature on kernels <5.9, and distinct from
+#       the existing CONFIG_KSU_SUSFS_TRY_UMOUNT). Output goes to
+#       logs/brene-hook-diagnostic.log (picked up by "Upload logs"). Purely
+#       informational: `set +e` and a trailing `true` ensure this step
+#       never fails the workflow, including on dry runs.
 # ═══════════════════════════════════════════════════════════════════════════════
 name: Project Chimera Mk7e — LOS/AOSP Android 15/16 QPR2 / Exynos 9810 (star2lte) - AOSP Clang 21.0 v5
 
@@ -477,6 +492,95 @@ jobs:
             '    print("OK: syscall_fn_t already present (idempotent)")' \
             > /tmp/fix_syscall_fn_t.py
           python3 /tmp/fix_syscall_fn_t.py
+
+      # ── 5c. Diagnostic: su_compat / kernel_umount hook wiring [Δ20] ──────────
+      # [Δ20] BRENE (rrr333nnn333/BRENE) toggles two KernelSU-Next runtime
+      # features on boot-completed via `ksud feature set su_compat <v>` and
+      # `ksud feature set kernel_umount <v>`. On a kprobe-disabled, pre-5.9
+      # 4.9 BSP (CONFIG_KSU_MANUAL_HOOK, no path_umount), either toggle can
+      # exercise a hook path that doesn't exist on this tree and panic during
+      # early boot — manifesting as a bootloop once the module's
+      # boot-completed.sh runs. This step inspects the freshly-cloned
+      # sidex15/legacy-susfs-v2 KernelSU-Next tree (and the base kernel tree)
+      # to determine how these two toggles are wired, WITHOUT requiring
+      # device/dmesg access. Purely informational — never fails the build.
+      - name: "Diagnostic: su_compat / kernel_umount hook wiring (BRENE)"
+        working-directory: kernel
+        run: |
+          set +e
+          LOG="../$LOG_DIR/brene-hook-diagnostic.log"
+          {
+            echo "════════════════════════════════════════════════════════"
+            echo " BRENE su_compat / kernel_umount hook wiring diagnostic"
+            echo " KernelSU-Next: ${{ inputs.ksu_repo }} @ ${{ inputs.ksu_ref }}"
+            echo "════════════════════════════════════════════════════════"
+
+            echo ""
+            echo "── 1. CONFIG_KSU_KPROBES_HOOK in Kconfig (expect: absent or 'n' — manual hook mode) ──"
+            grep -RnE 'KSU_KPROBES_HOOK' KernelSU-Next/kernel/Kconfig 2>/dev/null \
+              || echo "INFO: CONFIG_KSU_KPROBES_HOOK not found in Kconfig"
+            echo "── Our defconfig setting for it ──"
+            grep -nE 'KSU_KPROBES_HOOK|KSU_MANUAL_HOOK' "$DEFCONFIG" 2>/dev/null \
+              || echo "INFO: no KPROBES_HOOK/MANUAL_HOOK entries in $DEFCONFIG yet (pre-Step-13)"
+
+            echo ""
+            echo "── 2. ksu_su_compat_enabled: definition + usage sites ──"
+            grep -RnE 'ksu_su_compat_enabled' KernelSU-Next/kernel 2>/dev/null \
+              || echo "INFO: ksu_su_compat_enabled not found (su_compat may be a no-op on this fork)"
+
+            echo ""
+            echo "── 3. ksu_sucompat_init: definition + call site + guard ──"
+            grep -RnE -B2 -A2 'ksu_sucompat_init' KernelSU-Next/kernel 2>/dev/null \
+              || echo "INFO: ksu_sucompat_init not found"
+
+            echo ""
+            echo "── 4. sucompat.c: kprobe vs manual-hook gating ──"
+            if [[ -f KernelSU-Next/kernel/sucompat.c ]]; then
+              grep -nE 'CONFIG_KSU_KPROBES_HOOK|CONFIG_KSU_MANUAL_HOOK|register_kprobe|kallsyms_lookup_name' \
+                KernelSU-Next/kernel/sucompat.c
+            else
+              echo "INFO: KernelSU-Next/kernel/sucompat.c not present in this tree"
+            fi
+
+            echo ""
+            echo "── 5. \"feature set\" / kernel_umount handling in ksud / core_hook ──"
+            grep -RnE -i 'kernel_umount|feature.*umount|umount.*feature' \
+              KernelSU-Next/kernel KernelSU-Next/userspace 2>/dev/null \
+              || echo "INFO: no kernel_umount references found in KernelSU-Next tree"
+
+            echo ""
+            echo "── 6. path_umount availability (required by native kernel_umount on <5.9) ──"
+            echo "-- in KernelSU-Next tree --"
+            grep -RnE 'path_umount' KernelSU-Next 2>/dev/null \
+              || echo "INFO: KernelSU-Next does not reference path_umount"
+            echo "-- in base kernel fs/namespace.c (this 4.9.337 tree) --"
+            if [[ -f fs/namespace.c ]]; then
+              grep -nE 'path_umount|SYSCALL_DEFINE2\(umount' fs/namespace.c \
+                || echo "INFO: path_umount NOT DEFINED in fs/namespace.c (expected on stock 4.9 — would need backport)"
+            else
+              echo "INFO: fs/namespace.c not found at expected path"
+            fi
+
+            echo ""
+            echo "════════════════════════════════════════════════════════"
+            echo " Interpretation guide:"
+            echo "  - If (1) shows KPROBES_HOOK absent/unset and (4) shows"
+            echo "    sucompat.c gated on CONFIG_KSU_KPROBES_HOOK only, then"
+            echo "    su_compat toggling is likely a SAFE no-op here."
+            echo "  - If (2)/(3) show ksu_su_compat_enabled or"
+            echo "    ksu_sucompat_init() reachable WITHOUT a KPROBES_HOOK"
+            echo "    guard, su_compat=true from BRENE can activate"
+            echo "    kprobe registration on a kernel where kprobes are"
+            echo "    known-unstable -> panic risk."
+            echo "  - If (6) shows path_umount missing from fs/namespace.c"
+            echo "    but KernelSU-Next's kernel_umount path calls it"
+            echo "    unconditionally, kernel_umount=true from BRENE is"
+            echo "    UNSAFE without backporting path_umount (separate from"
+            echo "    the existing CONFIG_KSU_SUSFS_TRY_UMOUNT, which is"
+            echo "    SUSFS's own umount mechanism and unaffected)."
+            echo "════════════════════════════════════════════════════════"
+          } | tee "$LOG"
+          true
 
       # ── 6. Preflight: detect pre-integrated KSU/SUSFS ────────────────────────
       - name: Preflight tree state
