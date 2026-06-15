@@ -947,79 +947,34 @@ jobs:
             grep -qE "^\s*config\s+${1#CONFIG_}\s*$" \
               KernelSU-Next/kernel/Kconfig 2>/dev/null
           }
-          # ── KernelSU core ───────────────────────────────────────────────────
           set_cfg CONFIG_KSU y
-          set_cfg CONFIG_KSU_MANUAL_HOOK y
-          # ── SUSFS — core features (present in both 1.5.5 and 2.x) ─────────
-          set_cfg CONFIG_KSU_SUSFS y
-          set_cfg CONFIG_KSU_SUSFS_SUS_PATH y
-          set_cfg CONFIG_KSU_SUSFS_SUS_MOUNT y
-          set_cfg CONFIG_KSU_SUSFS_SUS_KSTAT y
-          set_cfg CONFIG_KSU_SUSFS_SUS_UNAME y
-          set_cfg CONFIG_KSU_SUSFS_TRY_UMOUNT y
-          set_cfg CONFIG_KSU_SUSFS_SPOOF_UNAME y
-          set_cfg CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG y
-          set_cfg CONFIG_KSU_SUSFS_OPEN_REDIRECT y
-          set_cfg CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS y
-          set_cfg CONFIG_KSU_SUSFS_HIDE_KSU_DIR y
-          set_cfg CONFIG_KSU_SUSFS_ENABLE_LOG y
-          # ── [Δ13] SUSFS symbols gated by Kconfig probe ─────────────────────
-          # CONFIG_KSU_SUSFS_SUS_MAP: added after v1.5.5; absent in 1.5.5 Kconfig.
-          if kconfig_has CONFIG_KSU_SUSFS_SUS_MAP; then
-            set_cfg CONFIG_KSU_SUSFS_SUS_MAP y
-            echo "INFO: CONFIG_KSU_SUSFS_SUS_MAP present — enabled"
-          else
-            echo "INFO: CONFIG_KSU_SUSFS_SUS_MAP absent in SUSFS 1.5.5 tree — skipped"
-          fi
-          # CONFIG_KSU_SUSFS_HIDE_MAGISK_EVIL: added after v1.5.5.
-          if kconfig_has CONFIG_KSU_SUSFS_HIDE_MAGISK_EVIL; then
-            set_cfg CONFIG_KSU_SUSFS_HIDE_MAGISK_EVIL y
-            echo "INFO: CONFIG_KSU_SUSFS_HIDE_MAGISK_EVIL present — enabled"
-          else
-            echo "INFO: CONFIG_KSU_SUSFS_HIDE_MAGISK_EVIL absent in SUSFS 1.5.5 tree — skipped"
-          fi
-          # CONFIG_KSU_SUSFS_SPOOF_SELINUX: [Δ16] HARD-DISABLED for A16 QPR2
-          # Safe-Boot. A16's SELinux policy loader panics when it detects an
-          # active SELinux spoof during early policy load. Regardless of
-          # whether this symbol is exported by the checked-out SUSFS tree's
-          # Kconfig, unconditionally write it as unset so no stale '=y' entry
-          # (from a prior run's .config/defconfig state) can re-enable it.
-          unset_cfg CONFIG_KSU_SUSFS_SPOOF_SELINUX
-          if kconfig_has CONFIG_KSU_SUSFS_SPOOF_SELINUX; then
-            echo "INFO [Δ16]: CONFIG_KSU_SUSFS_SPOOF_SELINUX present in Kconfig — forced unset"
-          else
-            echo "INFO [Δ16]: CONFIG_KSU_SUSFS_SPOOF_SELINUX absent in Kconfig — unset written defensively"
-          fi
-          # CONFIG_KSU_SUSFS_SELINUX_AVC_HOOK: present in 1.5.5.
-          if kconfig_has CONFIG_KSU_SUSFS_SELINUX_AVC_HOOK; then
-            set_cfg CONFIG_KSU_SUSFS_SELINUX_AVC_HOOK y
-            echo "INFO: CONFIG_KSU_SUSFS_SELINUX_AVC_HOOK present — enabled"
-          else
-            echo "INFO: CONFIG_KSU_SUSFS_SELINUX_AVC_HOOK absent — skipped"
-          fi
-          # ── [Δ11/Δ16] AVC log spoofing — STRICTLY DISABLED (Safe-Boot) ─────
-          # These three symbols suppress SELinux AVC denial log entries in
-          # logcat. Disabling them restores full AVC visibility, which is
-          # essential for diagnosing A16 QPR2 vendor HAL bring-up failures
-          # (e.g. camera, audio) where silent denial suppression masks root
-          # causes. [Δ16] Also confirmed as part of the Safe-Boot hard-disable:
-          # A16 panics during SELinux policy loading when it detects an active
-          # spoof, so these AVC log spoof symbols and CONFIG_KSU_SUSFS_SPOOF_SELINUX
-          # (above) are unconditionally written as unset. Re-enable only after
-          # all HAL AVC paths are confirmed clean AND A16 boot stability with
-          # spoofing active has been independently verified.
-          # NOTE: on SUSFS 1.5.5 these symbols may not exist in the Kconfig;
-          # unset_cfg is safe to call regardless — it simply removes any
-          # existing '=y' entry and writes '# ... is not set'.
-          unset_cfg CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOF
-          unset_cfg CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOFING
-          unset_cfg CONFIG_KSU_SUSFS_AVC_LOG_SPOOF
-          echo "OK [Δ11/Δ16]: AVC log spoofing + SELinux spoofing strictly disabled (Safe-Boot)"
-          # ── SELinux enforcing-locked ────────────────────────────────────────
+
+          # SUSFS minimal feature set (Updated for 1.5.12)
+          set_cfg   CONFIG_KSU_SUSFS              y
+          set_cfg   CONFIG_KSU_SUSFS_SUS_PATH     y
+          set_cfg   CONFIG_KSU_SUSFS_SUS_KSTAT    y
+          set_cfg   CONFIG_KSU_SUSFS_TRY_UMOUNT   y
+          set_cfg   CONFIG_KSU_SUSFS_SUS_MAP      y # Required for modern SUS_PATH stability
+          
+          unset_cfg CONFIG_KSU_SUSFS_OPEN_REDIRECT
+          unset_cfg CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
+          unset_cfg CONFIG_KSU_SUSFS_SUS_MOUNT
+          unset_cfg CONFIG_KSU_SUSFS_SPOOF_UNAME
+          
+          # Disable all AVC / SELinux spoof options 
+          for opt in \
+            CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOF \
+            CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOFING \
+            CONFIG_KSU_SUSFS_AVC_LOG_SPOOF \
+            CONFIG_KSU_SUSFS_SELINUX_AVC_HOOK \
+            CONFIG_KSU_SUSFS_SPOOF_SELINUX; do
+            unset_cfg "$opt"
+          done
+
+          unset_cfg CONFIG_SECURITY_SELINUX_DEVELOP
+          unset_cfg CONFIG_SECURITY_SELINUX_BOOTPARAM
           unset_cfg CONFIG_SECURITY_SELINUX_DISABLE
-          sed -i \
-            's/androidboot\.selinux=permissive//g; s/\benforcing=0\b//g' \
-            "$DEFCONFIG"
+          sed -i 's/androidboot\.selinux=permissive//g; s/\benforcing=0\b//g' "$DEFCONFIG"
           # ── Scheduler tuning ────────────────────────────────────────────────
           set_cfg CONFIG_PREEMPT y
           unset_cfg CONFIG_PREEMPT_NONE
