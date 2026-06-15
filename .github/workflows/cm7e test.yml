@@ -826,52 +826,33 @@ jobs:
               KernelSU-Next/kernel/Kconfig 2>/dev/null
           }
 
-          set_cfg CONFIG_KSU y
-
-
-          # SUSFS minimal feature set (Updated for 1.5.12)
-
-          set_cfg   CONFIG_KSU_SUSFS              y
-
-          set_cfg   CONFIG_KSU_SUSFS_SUS_PATH     y
-
-          set_cfg   CONFIG_KSU_SUSFS_SUS_KSTAT    y
-
-          set_cfg   CONFIG_KSU_SUSFS_TRY_UMOUNT   y
-
-          set_cfg   CONFIG_KSU_SUSFS_SUS_MAP      y # Required for modern
-          SUS_PATH stability
-
-
-          unset_cfg CONFIG_KSU_SUSFS_OPEN_REDIRECT
-
-          unset_cfg CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
-
-          unset_cfg CONFIG_KSU_SUSFS_SUS_MOUNT
-
-          unset_cfg CONFIG_KSU_SUSFS_SPOOF_UNAME
-
-
-          # Disable all AVC / SELinux spoof options 
-
-          for opt in \
-            CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOF \
-            CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOFING \
-            CONFIG_KSU_SUSFS_AVC_LOG_SPOOF \
-            CONFIG_KSU_SUSFS_SELINUX_AVC_HOOK \
-            CONFIG_KSU_SUSFS_SPOOF_SELINUX; do
-            unset_cfg "$opt"
-          done
-
-
-          unset_cfg CONFIG_SECURITY_SELINUX_DEVELOP
-
-          unset_cfg CONFIG_SECURITY_SELINUX_BOOTPARAM
-
-          unset_cfg CONFIG_SECURITY_SELINUX_DISABLE
-
-          sed -i 's/androidboot\.selinux=permissive//g; s/\benforcing=0\b//g'
-          "$DEFCONFIG"
+          # ── SUSFS 2.1.0 Feature Set ──────────────────────────────────────────
+                    set_cfg CONFIG_KSU_SUSFS y
+                    set_cfg CONFIG_KSU_SUSFS_SUS_PATH y
+                    set_cfg CONFIG_KSU_SUSFS_SUS_KSTAT y
+                    set_cfg CONFIG_KSU_SUSFS_SUS_MAP y
+                    set_cfg CONFIG_KSU_SUSFS_TRY_UMOUNT y
+                    
+                    # SUSFS 2.x specific features
+                    set_cfg CONFIG_KSU_SUSFS_HIDE_MAGISK_EVIL y
+                    
+                    # Hard-lockdown (Safe-Boot) for A16 QPR2
+                    # We explicitly unset these to prevent the kernel panics 
+                    # triggered by A16's policy-load integrity checks.
+                    unset_cfg CONFIG_KSU_SUSFS_OPEN_REDIRECT
+                    unset_cfg CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
+                    unset_cfg CONFIG_KSU_SUSFS_SUS_MOUNT
+                    unset_cfg CONFIG_KSU_SUSFS_SPOOF_UNAME
+                    unset_cfg CONFIG_KSU_SUSFS_SPOOF_SELINUX
+                    
+                    # AVC / SELinux Spoof Lockdown
+                    for opt in \
+                      CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOF \
+                      CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOFING \
+                      CONFIG_KSU_SUSFS_AVC_LOG_SPOOF \
+                      CONFIG_KSU_SUSFS_SELINUX_AVC_HOOK; do
+                      unset_cfg "$opt"
+                    done
 
           # ── Scheduler tuning ────────────────────────────────────────────────
 
