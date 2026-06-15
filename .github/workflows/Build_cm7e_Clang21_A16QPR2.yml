@@ -58,9 +58,44 @@
 # [Δ14] Branding updated to Mk7e: BRAND="-Chimera_Mk7e". All uname preview
 #       strings, artifact names, step names, and release body updated
 #       throughout to reflect "Linux version 4.9.337-Chimera_Mk7e".
+# ───────────────────────────────────────────────────────────────────────────────
+# A16 QPR2 "Safe-Boot" refactor (this revision)
+# [Δ15] KSU source switched from KernelSU-Next/KernelSU-Next@legacy-susfs to
+#       sidex15/KernelSU-Next@legacy-susfs-v2. ksu_repo/ksu_ref input
+#       defaults and the Step 5 in-tree fallback ref are updated together so
+#       a workflow_dispatch run with no overrides clones sidex15's
+#       legacy-susfs-v2 tree. No other Step 5 logic changes — the clone/
+#       checkout/Kconfig-probe/symlink flow is fully input-driven and was
+#       already generic.
+# [Δ16] AVC/SELinux spoof — HARD-DISABLED for A16 QPR2. A16's SELinux policy
+#       loader was panicking on boot because it detected an active SELinux
+#       identity spoof during early policy load. Step 13 previously set
+#       CONFIG_KSU_SUSFS_SPOOF_SELINUX=y conditionally (via a Kconfig probe,
+#       for SUSFS 2.x+ trees that export the symbol). That conditional SET
+#       is now an UNCONDITIONAL unset_cfg call — the symbol is written as
+#       "# CONFIG_KSU_SUSFS_SPOOF_SELINUX is not set" regardless of whether
+#       the checked-out SUSFS Kconfig defines it, so no SUSFS-tree variation
+#       can re-enable it. CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOF (and its
+#       sibling _SPOOFING / AVC_LOG_SPOOF symbols, already unset since Δ11)
+#       remain hard-unset for the same reason — AVC log spoofing and the
+#       SELinux identity spoof are part of the same "hide root" surface that
+#       trips A16's policy-load integrity checks. All three are now
+#       documented together as the Safe-Boot AVC/SELinux spoof block.
+# [Δ17] A16 QPR2 boot-essential defconfig additions + diagnostics:
+#       - CONFIG_NET_CLS_BPF=y added to the BPF Subsystem block (Step 13),
+#         alongside the existing CONFIG_BPF_SYSCALL / CONFIG_CGROUP_BPF.
+#         CONFIG_FUSE_FS, CONFIG_OVERLAY_FS, CONFIG_ANDROID_BINDER_IPC, and
+#         CONFIG_ANDROID_BINDERFS were already enabled by [Δ12] and are
+#         unchanged — verified still present/enabled for A16 QPR2.
+#       - New Step 17b ("Diagnostic — print SUSFS and Binder CONFIG values")
+#         greps the post-build $OUT_DIR/.config for the SUSFS feature set,
+#         the [Δ16] spoof-disable symbols, Binder device-node config, and
+#         the BPF/FUSE/OverlayFS symbols, writing them to
+#         logs/safeboot-config-verify.log (uploaded with the existing
+#         "Upload logs" artifact) so the active config can be inspected
+#         directly in the CI run without downloading kernel-out/.config.
 # ═══════════════════════════════════════════════════════════════════════════════
-
-name: Project Chimera Mk7e — LOS/AOSP Android 15/16 QPR2 / Exynos 9810 (star2lte) - AOSP Clang 21.0
+name: Project Chimera Mk7e — LOS/AOSP Android 15/16 QPR2 / Exynos 9810 (star2lte) - AOSP Clang 21.0 v6
 
 on:
   workflow_dispatch:
@@ -86,12 +121,12 @@ on:
         description: "KernelSU git URL (https only)"
         required: false
         type: string
-        default: "https://github.com/KernelSU-Next/KernelSU-Next.git"   # [Δ10]
+        default: "https://github.com/sidex15/KernelSU-Next.git"        # [Δ15]
       ksu_ref:
         description: "KernelSU branch/tag/ref"
         required: false
         type: string
-        default: "legacy-susfs"                                          # [Δ10]
+        default: "legacy-susfs-v2"                                      # [Δ15]
       ksu_commit:
         description: "KernelSU exact commit SHA (leave blank to track ref tip)"
         required: false
@@ -290,10 +325,10 @@ jobs:
             echo "      Continuing — version mismatch is non-fatal."
           fi
 
-      # ── 5. Set up KernelSU-Next (KernelSU-Next/legacy-susfs; pinned) ──────────
-      # [Δ10] Switched from sidex15/KernelSU-Next@legacy-susfs-v2 to
-      #       KernelSU-Next/KernelSU-Next@legacy-susfs (upstream canonical repo).
-      - name: Set up KernelSU-Next (KernelSU-Next/legacy-susfs)
+      # ── 5. Set up KernelSU-Next (sidex15/legacy-susfs-v2; pinned) ─────────────
+      # [Δ15] Switched from KernelSU-Next/KernelSU-Next@legacy-susfs to
+      #       sidex15/KernelSU-Next@legacy-susfs-v2 for A16 QPR2 Safe-Boot.
+      - name: Set up KernelSU-Next (sidex15/legacy-susfs-v2)
         working-directory: kernel
         run: |
           set -Eeuo pipefail
@@ -306,8 +341,8 @@ jobs:
             || { echo "ERROR: KSU URL must use https://"; exit 1; }
           [[ "$KSU_URL" =~ [[:space:]] ]] \
             && { echo "ERROR: KSU URL contains whitespace"; exit 1; }
-          # [Δ10] Fallback ref updated to match new upstream default branch
-          [[ -n "$KSU_REF" ]] || KSU_REF="legacy-susfs"
+          # [Δ15] Fallback ref updated to match new sidex15 default branch
+          [[ -n "$KSU_REF" ]] || KSU_REF="legacy-susfs-v2"
           if [[ -n "$KSU_COMMIT" && ! "$KSU_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]; then
             echo "ERROR: ksu_commit must be a full 40-char SHA"; exit 1
           fi
@@ -770,12 +805,17 @@ jobs:
           else
             echo "INFO: CONFIG_KSU_SUSFS_HIDE_MAGISK_EVIL absent in SUSFS 1.5.5 tree — skipped"
           fi
-          # CONFIG_KSU_SUSFS_SPOOF_SELINUX: added after v1.5.5.
+          # CONFIG_KSU_SUSFS_SPOOF_SELINUX: [Δ16] HARD-DISABLED for A16 QPR2
+          # Safe-Boot. A16's SELinux policy loader panics when it detects an
+          # active SELinux spoof during early policy load. Regardless of
+          # whether this symbol is exported by the checked-out SUSFS tree's
+          # Kconfig, unconditionally write it as unset so no stale '=y' entry
+          # (from a prior run's .config/defconfig state) can re-enable it.
+          unset_cfg CONFIG_KSU_SUSFS_SPOOF_SELINUX
           if kconfig_has CONFIG_KSU_SUSFS_SPOOF_SELINUX; then
-            set_cfg CONFIG_KSU_SUSFS_SPOOF_SELINUX y
-            echo "INFO: CONFIG_KSU_SUSFS_SPOOF_SELINUX present — enabled"
+            echo "INFO [Δ16]: CONFIG_KSU_SUSFS_SPOOF_SELINUX present in Kconfig — forced unset"
           else
-            echo "INFO: CONFIG_KSU_SUSFS_SPOOF_SELINUX absent in SUSFS 1.5.5 tree — skipped"
+            echo "INFO [Δ16]: CONFIG_KSU_SUSFS_SPOOF_SELINUX absent in Kconfig — unset written defensively"
           fi
           # CONFIG_KSU_SUSFS_SELINUX_AVC_HOOK: present in 1.5.5.
           if kconfig_has CONFIG_KSU_SUSFS_SELINUX_AVC_HOOK; then
@@ -784,19 +824,24 @@ jobs:
           else
             echo "INFO: CONFIG_KSU_SUSFS_SELINUX_AVC_HOOK absent — skipped"
           fi
-          # ── [Δ11] AVC log spoofing — STRICTLY DISABLED ─────────────────────
+          # ── [Δ11/Δ16] AVC log spoofing — STRICTLY DISABLED (Safe-Boot) ─────
           # These three symbols suppress SELinux AVC denial log entries in
           # logcat. Disabling them restores full AVC visibility, which is
           # essential for diagnosing A16 QPR2 vendor HAL bring-up failures
           # (e.g. camera, audio) where silent denial suppression masks root
-          # causes. Re-enable only after all HAL AVC paths are confirmed clean.
+          # causes. [Δ16] Also confirmed as part of the Safe-Boot hard-disable:
+          # A16 panics during SELinux policy loading when it detects an active
+          # spoof, so these AVC log spoof symbols and CONFIG_KSU_SUSFS_SPOOF_SELINUX
+          # (above) are unconditionally written as unset. Re-enable only after
+          # all HAL AVC paths are confirmed clean AND A16 boot stability with
+          # spoofing active has been independently verified.
           # NOTE: on SUSFS 1.5.5 these symbols may not exist in the Kconfig;
           # unset_cfg is safe to call regardless — it simply removes any
           # existing '=y' entry and writes '# ... is not set'.
           unset_cfg CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOF
           unset_cfg CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOFING
           unset_cfg CONFIG_KSU_SUSFS_AVC_LOG_SPOOF
-          echo "OK [Δ11]: AVC log spoofing strictly disabled"
+          echo "OK [Δ11/Δ16]: AVC log spoofing + SELinux spoofing strictly disabled (Safe-Boot)"
           # ── SELinux enforcing-locked ────────────────────────────────────────
           unset_cfg CONFIG_SECURITY_SELINUX_DISABLE
           sed -i \
@@ -844,8 +889,12 @@ jobs:
           # Android 16 bpfloader, netd traffic stats, and cgroup eBPF programs
           # require BPF_SYSCALL and CGROUP_BPF. Both are present in Samsung
           # 4.9 BSP as they were backported for Android Go compliance.
+          # [Δ16] NET_CLS_BPF added — A16 QPR2 netd traffic shaping/classifier
+          # eBPF programs attach via the net_cls classifier; required for
+          # Safe-Boot parity with stock A16 netd cgroup eBPF expectations.
           set_cfg CONFIG_BPF_SYSCALL y
           set_cfg CONFIG_CGROUP_BPF y
+          set_cfg CONFIG_NET_CLS_BPF y
 
           # ── FUSE Filesystem ─────────────────────────────────────────────────
           # A16 MediaStore uses FUSE passthrough for /sdcard access. FUSE_FS
@@ -1105,6 +1154,42 @@ jobs:
             | head -3 \
             | tee "$GITHUB_WORKSPACE/$LOG_DIR/uname-verify.log" || true
 
+      # ── 17b. Diagnostic: SUSFS & Binder CONFIG verification [Δ17] ───────────
+      # [Δ17] A16 QPR2 Safe-Boot diagnostic. Prints the FINAL, post-build
+      # CONFIG state for the SUSFS feature set (including the [Δ16]
+      # hard-disabled spoof symbols, which should appear as
+      # "# CONFIG_... is not set") and the Binder/BPF/FUSE/OverlayFS A16
+      # boot-essential symbols, so the CI log can be inspected to confirm
+      # the Safe-Boot configuration actually landed in $OUT_DIR/.config.
+      - name: Diagnostic — print SUSFS and Binder CONFIG values
+        if: ${{ inputs.dry_run == false }}
+        run: |
+          set -Eeuo pipefail
+          CONFIG_FILE="$GITHUB_WORKSPACE/$OUT_DIR/.config"
+          DIAG_LOG="$GITHUB_WORKSPACE/$LOG_DIR/safeboot-config-verify.log"
+          test -f "$CONFIG_FILE" || { echo "ERROR: $CONFIG_FILE not found"; exit 1; }
+          {
+            echo "════════════════════════════════════════════════════════"
+            echo " Chimera Mk7e A16 QPR2 Safe-Boot — Active CONFIG values"
+            echo "════════════════════════════════════════════════════════"
+            echo ""
+            echo "── SUSFS (CONFIG_KSU / CONFIG_KSU_SUSFS_*) ─────────────────"
+            grep -E '^(CONFIG_KSU|CONFIG_KSU_SUSFS|# CONFIG_KSU_SUSFS)' "$CONFIG_FILE" || true
+            echo ""
+            echo "── AVC / SELinux spoof hard-disable [Δ16] ──────────────────"
+            grep -E \
+              '(CONFIG_KSU_SUSFS_SPOOF_SELINUX|CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOF|CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOFING|CONFIG_KSU_SUSFS_AVC_LOG_SPOOF|CONFIG_SECURITY_SELINUX)' \
+              "$CONFIG_FILE" || echo "INFO: no matching SUSFS spoof symbols in .config (expected on SUSFS 1.5.5)"
+            echo ""
+            echo "── Binder IPC (CONFIG_ANDROID_BINDER*) ─────────────────────"
+            grep -E '^(CONFIG_ANDROID_BINDER|# CONFIG_ANDROID_BINDER)' "$CONFIG_FILE" || true
+            echo ""
+            echo "── BPF / FUSE / OverlayFS (A16 QPR2 boot-essential) ────────"
+            grep -E '^(CONFIG_BPF_SYSCALL|CONFIG_CGROUP_BPF|CONFIG_NET_CLS_BPF|CONFIG_FUSE_FS|CONFIG_OVERLAY_FS|# CONFIG_BPF_SYSCALL|# CONFIG_CGROUP_BPF|# CONFIG_NET_CLS_BPF|# CONFIG_FUSE_FS|# CONFIG_OVERLAY_FS)' "$CONFIG_FILE" || true
+            echo ""
+            echo "════════════════════════════════════════════════════════"
+          } | tee "$DIAG_LOG"
+
       # ── 18. Package AnyKernel3 flashable zip ─────────────────────────────────
       - name: Package flashable zip
         if: ${{ inputs.dry_run == false }}
@@ -1193,16 +1278,21 @@ jobs:
             ### Feature Framework Set
             | Security / Feature Node | Status Config |
             |---|---|
-            | **KernelSU-Next Core Engine** | ✅ `KernelSU-Next/KernelSU-Next @ legacy-susfs` [Δ10] |
+            | **KernelSU-Next Core Engine** | ✅ `sidex15/KernelSU-Next @ legacy-susfs-v2` [Δ15] |
             | **SUSFS VFS Guard Layer** | ✅ Native Tree Hook v${{ env.SUSFS_TARGET_VERSION }} [Δ13] |
-            | **AVC Log Spoofing** | ❌ Disabled [Δ11] — full AVC visibility for A16 bring-up |
-            | **BPF Syscall + Cgroup BPF** | ✅ Enabled [Δ12] — A16 bpfloader / netd |
+            | **AVC Log Spoofing** | ❌ Hard-disabled [Δ11/Δ16] — full AVC visibility for A16 bring-up |
+            | **SELinux Identity Spoof (SPOOF_SELINUX)** | ❌ Hard-disabled [Δ16] — A16 SELinux policy-load panic fix |
+            | **BPF Syscall + Cgroup BPF + NET_CLS_BPF** | ✅ Enabled [Δ12/Δ17] — A16 bpfloader / netd |
             | **FUSE + OverlayFS** | ✅ Enabled [Δ12] — A16 MediaStore + RRO |
             | **Binder (binder/hwbinder/vndbinder)** | ✅ Enabled [Δ12] — A16 AIDL |
             | **PSI + MEMCG** | ✅ Enabled [Δ12] — A16 LMKD PSI eviction |
             | **Net Cgroup + VETH** | ✅ Enabled [Δ12] — A16 netd traffic control |
-            | **SUS_MAP / HIDE_MAGISK_EVIL / SPOOF_SELINUX** | ⏭️ Kconfig-gated probe — skipped on v1.5.5 [Δ13] |
+            | **SUS_MAP / HIDE_MAGISK_EVIL** | ⏭️ Kconfig-gated probe — skipped on v1.5.5 [Δ13] |
             | **LRU_GEN (MGLRU)** | ⏭️ Source-tree probe — no-op on 4.9 BSP [Δ12] |
+            ### Safe-Boot Diagnostics [Δ17]
+            Post-build CONFIG verification for SUSFS, AVC/SELinux spoof, Binder,
+            and BPF/FUSE/OverlayFS is written to `logs/safeboot-config-verify.log`
+            (see the "Upload logs" artifact for this run).
             ### uname String
             `Linux version 4.9.337-Chimera_Mk7e (X@AegisDevLabs)`
             ### Flash Instructions
