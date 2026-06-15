@@ -7,7 +7,7 @@
 # SUSFS     : simonpunk/susfs4ksu @ kernel-4.9 · v1.5.5            [Δ13]
 # Clang     : AOSP Clang 21 (r563880c) — Tarball
 # Target    : LOS/AOSP Android 15/16 QPR2 · Evolution X 11.8
-# Branding  : 4.9.337-Chimera_Mk7e (X@AegisDevLabs)               [Δ14]
+# Branding  : 4.9.337-19611906 (dpi@SWDD5605) — Samsung-stock-style       [Δ18]
 # ───────────────────────────────────────────────────────────────────────────────
 # Changes from rev7 (build_CM6P_rev7.yml)
 # [Δ1]  Target ROM changed to LOS/AOSP Android 15/16.
@@ -94,6 +94,33 @@
 #         logs/safeboot-config-verify.log (uploaded with the existing
 #         "Upload logs" artifact) so the active config can be inspected
 #         directly in the CI run without downloading kernel-out/.config.
+# [Δ18] Branding switched from "-Chimera_Mk7e" (X@AegisDevLabs) to a
+#       Samsung-stock-style placeholder: BRAND="-19611906",
+#       BUILD_USER="dpi", BUILD_HOST="SWDD5605" → uname reads
+#       "Linux version 4.9.337-19611906 (dpi@SWDD5605)". This is the
+#       actual baked-in kernel version string (LOCALVERSION +
+#       KBUILD_BUILD_USER/HOST via setlocalversion), independent of and
+#       not affected by CONFIG_KSU_SUSFS_SPOOF_UNAME, which only rewrites
+#       what userspace reads via uname()/proc, not the string compiled
+#       into the Image itself. Values here are GENERIC placeholders —
+#       swap in the exact LOCALVERSION/build-host strings from a target
+#       stock firmware to mimic a specific build. The AnyKernel3
+#       `kernel.string=` flasher-UI label is unaffected by this change
+#       (it's metadata shown in recovery, not part of the kernel uname)
+#       and still identifies the build as Project Chimera Mk7e.
+# [Δ19] The [Δ18] branding values are now editable per-run via three new
+#       workflow_dispatch inputs: "brand", "build_user", "build_host"
+#       (defaults: "-19611906", "dpi", "SWDD5605" — same Samsung-stock-style
+#       placeholders as Δ18). The env-level BRAND/BUILD_USER/BUILD_HOST now
+#       read from ${{ inputs.brand }} / ${{ inputs.build_user }} /
+#       ${{ inputs.build_host }} instead of being hardcoded, so Step 14
+#       (Apply Samsung-stock-style branding), the dry-run summary, the
+#       release body uname string, and the new Step 0 validation all pick
+#       up per-run overrides automatically — no other step changes required.
+#       Step 0 ("Prepare workspace") now validates that "brand" starts with
+#       '-' (required by kbuild's LOCALVERSION concatenation) and that
+#       build_user/build_host are non-empty, failing fast with a clear error
+#       before any cloning/build work begins if misconfigured.
 # ═══════════════════════════════════════════════════════════════════════════════
 name: Project Chimera Mk7e — LOS/AOSP Android 15/16 QPR2 / Exynos 9810 (star2lte) - AOSP Clang 21.0 v5
 
@@ -154,6 +181,29 @@ on:
         type: string
         default: ""
 
+      # ── Kernel branding / uname identity [Δ19] ───────────────────────────────
+      # Controls the LOCALVERSION suffix and KBUILD_BUILD_USER/HOST baked into
+      # the Image's "Linux version ..." string (see [Δ18]). Defaults are a
+      # generic Samsung-stock-style placeholder. Override per-run to mimic a
+      # specific target firmware's uname string, e.g.:
+      #   brand="-19611906", build_user="dpi", build_host="SWDD5605"
+      #   → "Linux version 4.9.337-19611906 (dpi@SWDD5605)"
+      brand:
+        description: "LOCALVERSION suffix (must start with '-'), e.g. -19611906 or -Chimera_Mk7e"
+        required: false
+        type: string
+        default: "-19611906"                                            # [Δ19]
+      build_user:
+        description: "KBUILD_BUILD_USER — uname '(user@host)' left side, e.g. dpi"
+        required: false
+        type: string
+        default: "dpi"                                                  # [Δ19]
+      build_host:
+        description: "KBUILD_BUILD_HOST — uname '(user@host)' right side, e.g. SWDD5605"
+        required: false
+        type: string
+        default: "SWDD5605"                                             # [Δ19]
+
 permissions:
   contents: write
 
@@ -181,12 +231,24 @@ jobs:
 
       DEFCONFIG: "arch/arm64/configs/exynos9810-star2lte_defconfig"
 
-      # [Δ14] LOCALVERSION suffix — produces "4.9.337-Chimera_Mk7e"
-      BRAND: "-Chimera_Mk7e"
+      # [Δ18/Δ19] LOCALVERSION suffix — Samsung-stock-style placeholder,
+      # editable per-run via the "brand" workflow_dispatch input (default
+      # "-19611906" → "4.9.337-19611906"). SUSFS SPOOF_UNAME does not rewrite
+      # the uname string baked into the Image at build time, so the real fix
+      # is here at the source: LOCALVERSION + KBUILD_BUILD_USER/HOST. Override
+      # the "brand" input with the exact LOCALVERSION string from a real
+      # target firmware (e.g. via a stock boot.img `strings | grep "Linux version"`)
+      # to mimic a specific build.
+      BRAND: "${{ inputs.brand }}"
 
-      # [Δ4] Build identity — uname: Linux version 4.9.337-Chimera_Mk7e (X@AegisDevLabs)
-      BUILD_USER: "X"
-      BUILD_HOST: "AegisDevLabs"
+      # [Δ18/Δ19] Build identity — Samsung-stock-style placeholder, editable
+      # per-run via the "build_user" / "build_host" workflow_dispatch inputs
+      # (defaults "dpi" / "SWDD5605" → "Linux version 4.9.337-19611906 (dpi@SWDD5605)").
+      # "dpi" and "SWDDxxxx" are typical Samsung build-farm user/host strings
+      # seen in stock kernels; override with values matching the firmware
+      # you're targeting if mimicking a specific build.
+      BUILD_USER: "${{ inputs.build_user }}"
+      BUILD_HOST: "${{ inputs.build_host }}"
 
     steps:
 
@@ -195,6 +257,12 @@ jobs:
         run: |
           set -Eeuo pipefail
           mkdir -p "$LOG_DIR" "$OUT_DIR"
+          # [Δ19] LOCALVERSION must start with '-' or kbuild concatenates it
+          # directly onto the version number with no separator.
+          [[ "$BRAND" == -* ]] \
+            || { echo "ERROR: brand input must start with '-' (got: $BRAND)"; exit 1; }
+          [[ -n "$BUILD_USER" && -n "$BUILD_HOST" ]] \
+            || { echo "ERROR: build_user/build_host must not be empty"; exit 1; }
           {
             echo "build_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             echo "run_number=${GITHUB_RUN_NUMBER}"
@@ -206,6 +274,7 @@ jobs:
             echo "brand=$BRAND"
             echo "build_user=$BUILD_USER"
             echo "build_host=$BUILD_HOST"
+            echo "uname_preview=Linux version 4.9.337${BRAND} (${BUILD_USER}@${BUILD_HOST})"
           } | tee "$LOG_DIR/build-inputs.log"
 
       # ── 1. Dependencies ───────────────────────────────────────────────────────
@@ -981,9 +1050,10 @@ jobs:
             "$DEFCONFIG" \
             | tee -a "../$LOG_DIR/defconfig-tuning.log"
 
-      # ── 14. Branding [Δ3][Δ4][Δ14] ──────────────────────────────────────────
-      # [Δ14] uname: Linux version 4.9.337-Chimera_Mk7e (X@AegisDevLabs)
-      - name: Apply Mk7e branding
+      # ── 14. Branding [Δ3][Δ4][Δ14][Δ18] ──────────────────────────────────────
+      # [Δ18] uname: Linux version 4.9.337-19611906 (dpi@SWDD5605)
+      #       Samsung-stock-style placeholder — see [Δ18] header note.
+      - name: Apply Samsung-stock-style branding
         working-directory: kernel
         run: |
           set -Eeuo pipefail
@@ -1009,7 +1079,7 @@ jobs:
           echo "uname preview: Linux version 4.9.337${BRAND} (${BUILD_USER}@${BUILD_HOST})"
 
       # ── 15. SUSFS pre-build sanity check ──────────────────────────────────────
-      # [Δ14] uname string in sanity log updated to reflect Mk7e branding.
+      # [Δ14/Δ18] uname string in sanity log reflects current branding (env BRAND).
       - name: SUSFS pre-build sanity check
         working-directory: kernel
         run: |
@@ -1044,7 +1114,7 @@ jobs:
           [[ "$MK" == *"sus_su.o"* ]] \
             && echo "OK: fs/Makefile has sus_su.o" | tee -a "$LOG" \
             || { echo "FAIL: fs/Makefile missing sus_su.o" | tee -a "$LOG"; FAIL=1; }
-          # [Δ14] Branding updated to Mk7e in sanity output
+          # [Δ18] uname preview reflects current Samsung-stock-style branding
           echo "uname preview: Linux version 4.9.337${BRAND} (${KBUILD_USER}@${KBUILD_HOST})" \
             | tee -a "$LOG"
           [[ "$FAIL" -eq 0 ]] || { echo "ERROR: sanity check failed"; exit 1; }
@@ -1293,8 +1363,10 @@ jobs:
             Post-build CONFIG verification for SUSFS, AVC/SELinux spoof, Binder,
             and BPF/FUSE/OverlayFS is written to `logs/safeboot-config-verify.log`
             (see the "Upload logs" artifact for this run).
-            ### uname String
-            `Linux version 4.9.337-Chimera_Mk7e (X@AegisDevLabs)`
+            ### uname String [Δ18]
+            `Linux version 4.9.337${{ env.BRAND }} (${{ env.BUILD_USER }}@${{ env.BUILD_HOST }})`
+            Samsung-stock-style placeholder — replace `BRAND`/`BUILD_USER`/`BUILD_HOST`
+            with values from a target firmware to mimic a specific build.
             ### Flash Instructions
             1. Boot into custom recovery (TWRP / OrangeFox)
             2. Flash zip — device check enforces `star2lte` / `SM-G965x`
