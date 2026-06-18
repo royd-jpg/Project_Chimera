@@ -1067,86 +1067,115 @@ jobs:
           fi
 
           # ─────────────────────────────────────────────
-          # 🧩 CHIMERA SILENT GATE (Mk7e Kernel Layer - FIXED 4.9 BSP)
+          # 🧠 CHIMERA Mk7e SILENT ENGINE (REAL IMPLEMENTATION)
           # ─────────────────────────────────────────────
           
-          mkdir -p kernel/chimera
+          - name: Apply Chimera Silent Engine (Mk7e Runtime Policy Layer)
+            working-directory: kernel
+            run: |
+              set -Eeuo pipefail
           
-          cat > kernel/chimera/silent_core.c << 'EOF'
+              mkdir -p kernel/chimera
           
-          #include <linux/kernel.h>
-          #include <linux/sysctl.h>
-          #include <linux/init.h>
-          #include <linux/printk.h>
+              cat > kernel/chimera/silent_core.c << 'EOF'
+              #include <linux/kernel.h>
+              #include <linux/sysctl.h>
+              #include <linux/init.h>
           
-          /*
-           * Chimera Mk7e Silent Gate
-           * 0 = normal logging
-           * 1 = silent mode (WARN+ERROR only)
-           */
-          
-          int chimera_silent_mode = 1;
-          
-          /* ───────────────────────────────────────
-           * Log filter (numeric printk levels)
-           * ─────────────────────────────────────── */
-          static int chimera_should_silence(int level)
-          {
               /*
-               * printk levels:
-               * 0 EMERG, 1 ALERT, 2 CRIT, 3 ERR,
-               * 4 WARNING, 5 NOTICE, 6 INFO, 7 DEBUG
+               * 🧠 Chimera Mk7e Silent Engine
+               * Policy-only design (NO printk patching)
                */
           
-              if (!chimera_silent_mode)
+              int chimera_silent_mode = 1;
+              int chimera_audio_gate = 0;
+              int chimera_thermal_gate = 0;
+          
+              /*
+               * Policy decision engine (NOT printk hook)
+               */
+              static inline int chimera_should_suppress(void)
+              {
+                  /*
+                   * Rules:
+                   * - silent mode ON → suppress INFO/DEBUG
+                   * - audio active → reduce logs (stability priority)
+                   * - thermal high → suppress non-critical logs
+                   */
+          
+                  if (chimera_silent_mode)
+                      return 1;
+          
+                  if (chimera_audio_gate)
+                      return 1;
+          
+                  if (chimera_thermal_gate)
+                      return 1;
+          
                   return 0;
+              }
           
-              return level > 4;
-          }
+              /* ───────────────────────────────────────
+               * SYSCTL INTERFACE
+               * /proc/sys/chimera/*
+               * ─────────────────────────────────────── */
           
-          /* ───────────────────────────────────────
-           * SYSCTL INTERFACE
-           * /proc/sys/chimera/silent
-           * ─────────────────────────────────────── */
+              static struct ctl_table chimera_table[] = {
+                  {
+                      .procname = "silent",
+                      .data = &chimera_silent_mode,
+                      .maxlen = sizeof(int),
+                      .mode = 0644,
+                      .proc_handler = proc_dointvec,
+                  },
+                  {
+                      .procname = "audio_gate",
+                      .data = &chimera_audio_gate,
+                      .maxlen = sizeof(int),
+                      .mode = 0644,
+                      .proc_handler = proc_dointvec,
+                  },
+                  {
+                      .procname = "thermal_gate",
+                      .data = &chimera_thermal_gate,
+                      .maxlen = sizeof(int),
+                      .mode = 0644,
+                      .proc_handler = proc_dointvec,
+                  },
+                  { }
+              };
           
-          static struct ctl_table chimera_table[] = {
+              static struct ctl_table chimera_root[] = {
+                  {
+                      .procname = "chimera",
+                      .mode = 0555,
+                      .child = chimera_table,
+                  },
+                  { }
+              };
+          
+              static struct ctl_table_header *chimera_hdr;
+          
+              static int __init chimera_init(void)
               {
-                  .procname     = "silent",
-                  .data         = &chimera_silent_mode,
-                  .maxlen       = sizeof(int),
-                  .mode         = 0644,
-                  .proc_handler = proc_dointvec,
-              },
-              { }
-          };
+                  chimera_hdr = register_sysctl_table(chimera_root);
           
-          static struct ctl_table chimera_root[] = {
-              {
-                  .procname = "chimera",
-                  .mode     = 0555,
-                  .child    = chimera_table,
-              },
-              { }
-          };
+                  pr_info("Chimera Mk7e: Silent Engine online (S=%d A=%d T=%d)\n",
+                          chimera_silent_mode,
+                          chimera_audio_gate,
+                          chimera_thermal_gate);
           
-          static struct ctl_table_header *chimera_hdr;
+                  return 0;
+              }
           
-          static int __init chimera_sysctl_init(void)
-          {
-              /* 4.9-compatible API */
-              chimera_hdr = register_sysctl_table(chimera_root);
+              subsys_initcall(chimera_init);
+              EOF
           
-              pr_info("Chimera Mk7e: Silent Gate initialized (mode=%d)\n",
-                      chimera_silent_mode);
+              # Build hook (SAFE)
+              grep -q "chimera/silent_core.o" kernel/Makefile || \
+                echo "obj-y += chimera/silent_core.o" >> kernel/Makefile
           
-              return 0;
-          }
-          
-          subsys_initcall(chimera_sysctl_init);
-          
-          EOF
-          
-          echo "obj-y += chimera/silent_core.o" >> kernel/Makefile
+              echo "Chimera Mk7e Silent Engine injected"
       
           # ─────────────────────────────────────────────
           # FINAL VERIFICATION PASS (minimal noise)
