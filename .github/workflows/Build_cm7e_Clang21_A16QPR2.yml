@@ -1067,12 +1067,13 @@ jobs:
           fi
 
           # ─────────────────────────────────────────────
-          # 🧩 CHIMERA SILENT GATE (Mk7e Kernel Layer)
+          # 🧩 CHIMERA SILENT GATE (Mk7e Kernel Layer - FIXED 4.9 BSP)
           # ─────────────────────────────────────────────
           
           mkdir -p kernel/chimera
           
           cat > kernel/chimera/silent_core.c << 'EOF'
+          
           #include <linux/kernel.h>
           #include <linux/sysctl.h>
           #include <linux/init.h>
@@ -1087,18 +1088,20 @@ jobs:
           int chimera_silent_mode = 1;
           
           /* ───────────────────────────────────────
-           * Runtime log suppression hook
+           * Log filter (numeric printk levels)
            * ─────────────────────────────────────── */
-          
           static int chimera_should_silence(int level)
           {
-              /* printk levels:
-               * 0 EMERG, 1 ALERT, 2 CRIT, 3 ERR, 4 WARNING, ...
+              /*
+               * printk levels:
+               * 0 EMERG, 1 ALERT, 2 CRIT, 3 ERR,
+               * 4 WARNING, 5 NOTICE, 6 INFO, 7 DEBUG
                */
+          
               if (!chimera_silent_mode)
                   return 0;
           
-              return level > KERN_WARNING;
+              return level > 4;
           }
           
           /* ───────────────────────────────────────
@@ -1126,9 +1129,12 @@ jobs:
               { }
           };
           
+          static struct ctl_table_header *chimera_hdr;
+          
           static int __init chimera_sysctl_init(void)
           {
-              register_sysctl_init("kernel/chimera", chimera_root);
+              /* 4.9-compatible API */
+              chimera_hdr = register_sysctl_table(chimera_root);
           
               pr_info("Chimera Mk7e: Silent Gate initialized (mode=%d)\n",
                       chimera_silent_mode);
@@ -1137,10 +1143,10 @@ jobs:
           }
           
           subsys_initcall(chimera_sysctl_init);
+          
           EOF
-
-          grep -q "chimera/silent_core.o" kernel/Makefile || \
-            echo "obj-y += chimera/silent_core.o" >> kernel/Makefile
+          
+          echo "obj-y += chimera/silent_core.o" >> kernel/Makefile
       
           # ─────────────────────────────────────────────
           # FINAL VERIFICATION PASS (minimal noise)
