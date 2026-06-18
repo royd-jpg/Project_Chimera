@@ -97,7 +97,7 @@
 # ═══════════════════════════════════════════════════════════════════════════════
 name: >-
   Project Chimera Mk7e — LOS/AOSP Android 15/16 QPR2 / Exynos 9810 (star2lte) -
-  AOSP Clang 21.0 Forte v1
+  AOSP Clang 21.0 v7 Forte
 'on':
   workflow_dispatch:
     inputs:
@@ -260,8 +260,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           git clone --depth=1 -b "$KERNEL_BRANCH" "$KERNEL_REPO" "$KERNEL_DIR"
-          git -C "$KERNEL_DIR" log --oneline -5 | tee
-          "$LOG_DIR/kernel-revision.log"
+          git -C "$KERNEL_DIR" log --oneline -5 | tee "$LOG_DIR/kernel-revision.log"
           echo "OK: kernel tree cloned (branch: $KERNEL_BRANCH)"
 
       - name: Clone SUSFS (kernel-tree files; v1.5.5 pinned)
