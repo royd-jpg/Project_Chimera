@@ -892,310 +892,267 @@ jobs:
             'print("OK: weak symbol fallbacks injected into fs/sus_su.c")' \
             > /tmp/inject_weak_fallbacks.py
           python3 /tmp/inject_weak_fallbacks.py
-      - name: Apply defconfig tuning (SUSFS v1.5.5 + A16 QPR2 EvoX tuning)
+          
+      - name: Apply defconfig tuning (FORTe Mode — hardened A16 QPR2 SUSFS profile)
         working-directory: kernel
-        run: >
+        run: |
           set -Eeuo pipefail
-
-          test -f "$DEFCONFIG" || { echo "ERROR: $DEFCONFIG not found"; exit 1;
-          }
-
+      
+          test -f "$DEFCONFIG" || { echo "ERROR: $DEFCONFIG not found"; exit 1; }
+      
+          LOG="../$LOG_DIR/defconfig-forte.log"
+          : > "$LOG"
+      
+          # ─────────────────────────────────────────────
+          # CORE HELPERS (strict + idempotent)
+          # ─────────────────────────────────────────────
           set_cfg() {
-            sed -i "/^$1=.*/d;/^# $1 is not set/d" "$DEFCONFIG"
-            echo "$1=$2" >> "$DEFCONFIG"
+            local k="$1"
+            local v="$2"
+            sed -i "/^${k}=.*/d;/^# ${k} is not set/d" "$DEFCONFIG"
+            echo "${k}=${v}" >> "$DEFCONFIG"
           }
-
+      
           unset_cfg() {
-            sed -i "/^$1=.*/d;/^# $1 is not set/d" "$DEFCONFIG"
-            echo "# $1 is not set" >> "$DEFCONFIG"
+            local k="$1"
+            sed -i "/^${k}=.*/d;/^# ${k} is not set/d" "$DEFCONFIG"
+            echo "# ${k} is not set" >> "$DEFCONFIG"
           }
-
-          # [Δ13] Probe the KernelSU-Next Kconfig to determine which SUSFS
-
-          # symbols are actually exported by the checked-out tree. SUSFS 1.5.5
-
-          # does not define CONFIG_KSU_SUSFS_SUS_MAP, _HIDE_MAGISK_EVIL, or
-
-          # _SPOOF_SELINUX. Setting undefined Kconfig symbols pollutes .config
-
-          # with orphan entries that make oldconfig noisy and can shadow real
-
-          # symbols in later make passes. The probe is a grep on the Kconfig
-
-          # file; it is safe and costs < 1 ms.
-
-          kconfig_has() {
-            grep -qE "^\s*config\s+${1#CONFIG_}\s*$" \
+      
+          probe_kconfig() {
+            grep -qE "^[[:space:]]*config[[:space:]]+${1#CONFIG_}[[:space:]]*$" \
               KernelSU-Next/kernel/Kconfig 2>/dev/null
           }
-
-          # ── SUSFS 2.1.0 Feature Set
-          ──────────────────────────────────────────
-                    set_cfg CONFIG_KSU_SUSFS y
-                    set_cfg CONFIG_KSU_SUSFS_SUS_PATH y
-                    set_cfg CONFIG_KSU_SUSFS_SUS_KSTAT y
-                    set_cfg CONFIG_KSU_SUSFS_SUS_MAP y
-                    set_cfg CONFIG_KSU_SUSFS_TRY_UMOUNT y
-                    
-                    # SUSFS 2.x specific features
-                    set_cfg CONFIG_KSU_SUSFS_HIDE_MAGISK_EVIL y
-                    
-                    # Hard-lockdown (Safe-Boot) for A16 QPR2
-                    # We explicitly unset these to prevent the kernel panics 
-                    # triggered by A16's policy-load integrity checks.
-                    unset_cfg CONFIG_KSU_SUSFS_OPEN_REDIRECT
-                    unset_cfg CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
-                    unset_cfg CONFIG_KSU_SUSFS_SUS_MOUNT
-                    unset_cfg CONFIG_KSU_SUSFS_SPOOF_UNAME
-                    unset_cfg CONFIG_KSU_SUSFS_SPOOF_SELINUX
-                    
-                    # AVC / SELinux Spoof Lockdown
-                    for opt in \
-                      CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOF \
-                      CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOFING \
-                      CONFIG_KSU_SUSFS_AVC_LOG_SPOOF \
-                      CONFIG_KSU_SUSFS_SELINUX_AVC_HOOK; do
-                      unset_cfg "$opt"
-                    done
-
-          # ── Scheduler tuning ────────────────────────────────────────────────
-
+      
+          echo "=== FORTe Mode: Defconfig tuning start ===" | tee -a "$LOG"
+      
+          # ─────────────────────────────────────────────
+          # SCHEDULER (latency-stable profile)
+          # ─────────────────────────────────────────────
           set_cfg CONFIG_PREEMPT y
-
           unset_cfg CONFIG_PREEMPT_NONE
-
           unset_cfg CONFIG_PREEMPT_VOLUNTARY
-
+      
           unset_cfg CONFIG_HZ_100
-
           unset_cfg CONFIG_HZ_250
-
           set_cfg CONFIG_HZ_300 y
-
           set_cfg CONFIG_HZ 300
-
-          # ── TCP congestion control ──────────────────────────────────────────
-
+      
+          # ─────────────────────────────────────────────
+          # TCP (AOSP-aligned stable throughput)
+          # ─────────────────────────────────────────────
           set_cfg CONFIG_TCP_CONG_ADVANCED y
-
           set_cfg CONFIG_TCP_CONG_BBR y
-
           set_cfg CONFIG_TCP_CONG_CUBIC y
-
-          sed -i \
-            '/^CONFIG_DEFAULT_TCP_CONG=/d;/^# CONFIG_DEFAULT_TCP_CONG is not set/d' \
-            "$DEFCONFIG"
+      
+          sed -i '/CONFIG_DEFAULT_TCP_CONG/d' "$DEFCONFIG"
           echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> "$DEFCONFIG"
-
-          # ── Memory / compression ────────────────────────────────────────────
-
+      
+          # ─────────────────────────────────────────────
+          # MEMORY / RUNTIME STABILITY
+          # ─────────────────────────────────────────────
           set_cfg CONFIG_SCHED_DEBUG y
-
           set_cfg CONFIG_ZRAM y
-
           set_cfg CONFIG_ZSMALLOC y
-
           set_cfg CONFIG_CRYPTO_LZ4 y
-
           set_cfg CONFIG_CRYPTO_LZ4HC y
 
-          # ── Clang compatibility ─────────────────────────────────────────────
+          # ─────────────────────────────────────────────
 
-          # Samsung 4.9 BSP compiler probes are incompatible with modern
-
-          # Android clang stack protector detection.
-
+          # 🧠 CHIMERA SILENT CORE (defconfig-level gate)
+          
+          # ─────────────────────────────────────────────
+          
+          set_cfg CONFIG_PRINTK y
+          
+          set_cfg CONFIG_PRINTK_SAFE_LOG_BUF y
+          
+          set_cfg CONFIG_CONSOLE_LOGLEVEL_DEFAULT 3
+          
+          set_cfg CONFIG_MESSAGE_LOGLEVEL_DEFAULT 3
+          
+          set_cfg CONFIG_DEFAULT_MESSAGE_LOGLEVEL 3
+          
+          unset_cfg CONFIG_PRINTK_TIME
+          
+          unset_cfg CONFIG_PRINTK_CALLER
+          
+          # IMPORTANT: prevent debug infrastructure build
+          
+          unset_cfg CONFIG_DYNAMIC_DEBUG
+          
+          unset_cfg CONFIG_DYNAMIC_DEBUG_CORE
+          
+          unset_cfg CONFIG_DEBUG_FS
+          
+          # Reduce log buffer churn
+          
+          set_cfg CONFIG_LOG_BUF_SHIFT 18
+      
+          # ─────────────────────────────────────────────
+          # CLANG STABILITY LAYER (IMPORTANT FOR 4.9 BSP)
+          # ─────────────────────────────────────────────
           unset_cfg CONFIG_CC_STACKPROTECTOR_STRONG
-
           unset_cfg CONFIG_CC_STACKPROTECTOR_REGULAR
-
           set_cfg CONFIG_CC_STACKPROTECTOR_NONE y
-
-          # ── Branding consistency ────────────────────────────────────────────
-
+      
           unset_cfg CONFIG_LOCALVERSION_AUTO
-
-
-          # ════════════════════════════════════════════════════════════════════
-
-          # [Δ12] A16 QPR2 / Evolution X 11.8 — 4.9 BSP-Safe Tuning
-
-          # All symbols in this section are confirmed present in the Samsung
-
-          # Exynos 9810 4.9 BSP. No mainline-only symbols are unconditionally
-
-          # set. Guarded probes are used where presence is uncertain.
-
-          # ════════════════════════════════════════════════════════════════════
-
-
-          # ── BPF Subsystem ───────────────────────────────────────────────────
-
-          # Android 16 bpfloader, netd traffic stats, and cgroup eBPF programs
-
-          # require BPF_SYSCALL and CGROUP_BPF. Both are present in Samsung
-
-          # 4.9 BSP as they were backported for Android Go compliance.
-
-          # [Δ16] NET_CLS_BPF added — A16 QPR2 netd traffic shaping/classifier
-
-          # eBPF programs attach via the net_cls classifier; required for
-
-          # Safe-Boot parity with stock A16 netd cgroup eBPF expectations.
-
+      
+          # ─────────────────────────────────────────────
+          # A16 QPR2 CORE SUBSYSTEMS (STRICT SET)
+          # ─────────────────────────────────────────────
           set_cfg CONFIG_BPF_SYSCALL y
-
           set_cfg CONFIG_CGROUP_BPF y
-
           set_cfg CONFIG_NET_CLS_BPF y
-
-
-          # ── FUSE Filesystem ─────────────────────────────────────────────────
-
-          # A16 MediaStore uses FUSE passthrough for /sdcard access. FUSE_FS
-
-          # is a standard 4.9 symbol and must be enabled for sdcardfs fallback
-
-          # and FUSE passthrough mode used by EvoX 11.8.
-
+      
           set_cfg CONFIG_FUSE_FS y
-
-
-          # ── OverlayFS ───────────────────────────────────────────────────────
-
-          # Required for Android Runtime Resource Overlays (RROs) used by EvoX
-
-          # 11.8 theming and for GSI-style system_ext overlayfs stacking.
-
-          # Present in Samsung 4.9 BSP; safe to enforce here.
-
           set_cfg CONFIG_OVERLAY_FS y
-
-
-          # ── Android Binder IPC ─────────────────────────────────────────────
-
-          # A16 QPR2 AIDL requires all three binder device nodes. vndbinder is
-
-          # mandatory for vendor AIDL services introduced in Android 8+ and
-
-          # enforced more strictly in A16 VINTF validation.
-
-          # ANDROID_BINDER_IPC_SELFTEST is a CI stress-test knob — disable it
-
-          # to avoid spurious binder-selftest thread overhead at boot.
-
+      
           set_cfg CONFIG_ANDROID_BINDER_IPC y
-
           set_cfg CONFIG_ANDROID_BINDERFS y
-
-          sed -i \
-            '/^CONFIG_ANDROID_BINDER_DEVICES=/d;/^# CONFIG_ANDROID_BINDER_DEVICES is not set/d' \
-            "$DEFCONFIG"
-          echo 'CONFIG_ANDROID_BINDER_DEVICES="binder,hwbinder,vndbinder"' >>
-          "$DEFCONFIG"
-
+      
+          sed -i '/CONFIG_ANDROID_BINDER_DEVICES/d' "$DEFCONFIG"
+          echo 'CONFIG_ANDROID_BINDER_DEVICES="binder,hwbinder,vndbinder"' >> "$DEFCONFIG"
+      
           unset_cfg CONFIG_ANDROID_BINDER_IPC_SELFTEST
-
-
-          # ── Cgroup v1 / Memory Control ─────────────────────────────────────
-
-          # A16 LMKD (Low Memory Killer Daemon) uses PSI + memcg for eviction
-
-          # decisions. CONFIG_PSI is mandatory for A16 — without it LMKD will
-
-          # fail to open /proc/pressure/memory at boot and fall back to the
-
-          # legacy driver which is absent from A16 frameworks. MEMCG enables
-
-          # per-process memory accounting consumed by system_server's OOM
-
-          # adjuster. MEMCG_SWAP tracks swap pressure per cgroup.
-
+      
           set_cfg CONFIG_MEMCG y
-
           set_cfg CONFIG_MEMCG_SWAP y
-
           set_cfg CONFIG_PSI y
-
+      
           set_cfg CONFIG_CGROUPS y
-
           set_cfg CONFIG_CGROUP_SCHED y
-
           set_cfg CONFIG_FAIR_GROUP_SCHED y
-
           set_cfg CONFIG_RT_GROUP_SCHED y
-
-
-          # ── Network Cgroup / Netfilter ──────────────────────────────────────
-
-          # A16 netd uses NET_CLS_CGROUP for per-UID traffic classification and
-
-          # NETFILTER_XT_MATCH_CGROUP for iptables uid/cgroup chain matching.
-
-          # VETH is required for VPN tun-over-veth and network namespace
-
-          # isolation used by the A16 connectivity stack.
-
+      
           set_cfg CONFIG_NET_CLS_CGROUP y
-
           set_cfg CONFIG_NETFILTER_XT_MATCH_CGROUP y
-
           set_cfg CONFIG_VETH y
-
-
-          # ── /proc/config.gz ────────────────────────────────────────────────
-
-          # EvoX 11.8 build fingerprint tooling and some GKI compatibility
-
-          # checks query /proc/config.gz. Low overhead; safe on 4.9 BSP.
-
+      
           set_cfg CONFIG_IKCONFIG y
-
           set_cfg CONFIG_IKCONFIG_PROC y
-
-
-          # ── Process Events Connector ────────────────────────────────────────
-
-          # A16 ActivityManagerService and the stats daemon listen on the
-
-          # netlink process events connector for fork/exec/exit notifications.
-
-          # Present in Samsung 4.9 BSP.
-
+      
           set_cfg CONFIG_PROC_EVENTS y
-
-
-          # ── LRU_GEN (MGLRU) — Guarded Probe ────────────────────────────────
-
-          # CONFIG_LRU_GEN (Multi-Gen LRU) is a mainline 6.1+ feature and is
-
-          # NOT present in Samsung 4.9 BSP. This block probes the source tree
-
-          # before touching the defconfig. On stock star2lte BSP this is a
-
-          # guaranteed no-op. If a future cherry-pick lands MGLRU into the
-
-          # tree, the block will activate automatically without workflow edits.
-
+      
+          # ─────────────────────────────────────────────
+          # SUSFS SAFE MODE (NO ORPHAN CONFIG GENERATION)
+          # ─────────────────────────────────────────────
+          set_cfg CONFIG_KSU_SUSFS y
+          set_cfg CONFIG_KSU_SUSFS_TRY_UMOUNT y
+      
+          if probe_kconfig CONFIG_KSU_SUSFS_SUS_MAP; then
+            set_cfg CONFIG_KSU_SUSFS_SUS_MAP y
+          else
+            echo "SKIP: SUS_MAP not present in tree" | tee -a "$LOG"
+          fi
+      
+          if probe_kconfig CONFIG_KSU_SUSFS_HIDE_MAGISK_EVIL; then
+            set_cfg CONFIG_KSU_SUSFS_HIDE_MAGISK_EVIL y
+          else
+            echo "SKIP: HIDE_MAGISK_EVIL not present" | tee -a "$LOG"
+          fi
+      
+          if probe_kconfig CONFIG_KSU_SUSFS_SPOOF_SELINUX; then
+            unset_cfg CONFIG_KSU_SUSFS_SPOOF_SELINUX
+          fi
+      
+          # ─────────────────────────────────────────────
+          # OPTIONAL LRU GEN (SAFE PROBE ONLY)
+          # ─────────────────────────────────────────────
           if grep -qr 'config LRU_GEN' mm/ 2>/dev/null; then
-            echo "INFO: CONFIG_LRU_GEN found in mm/ — enabling MGLRU"
             set_cfg CONFIG_LRU_GEN y
             set_cfg CONFIG_LRU_GEN_ENABLED y
             set_cfg CONFIG_LRU_GEN_STATS y
-          else
-            echo "INFO: CONFIG_LRU_GEN absent from 4.9 BSP mm/ — skip (expected on star2lte)"
+            echo "INFO: MGLRU enabled" | tee -a "$LOG"
           fi
 
+          # ─────────────────────────────────────────────
+          # 🧩 CHIMERA SILENT GATE (Mk7e Kernel Layer)
+          # ─────────────────────────────────────────────
+          
+          mkdir -p kernel/chimera
+          
+          cat > kernel/chimera/silent_core.c << 'EOF'
+          #include <linux/kernel.h>
+          #include <linux/sysctl.h>
+          #include <linux/init.h>
+          #include <linux/printk.h>
+          
+          /*
+           * Chimera Mk7e Silent Gate
+           * 0 = normal logging
+           * 1 = silent mode (WARN+ERROR only)
+           */
+          
+          int chimera_silent_mode = 1;
+          
+          /* ───────────────────────────────────────
+           * Runtime log suppression hook
+           * ─────────────────────────────────────── */
+          
+          static int chimera_should_silence(int level)
+          {
+              /* printk levels:
+               * 0 EMERG, 1 ALERT, 2 CRIT, 3 ERR, 4 WARNING, ...
+               */
+              if (!chimera_silent_mode)
+                  return 0;
+          
+              return level > KERN_WARNING;
+          }
+          
+          /* ───────────────────────────────────────
+           * SYSCTL INTERFACE
+           * /proc/sys/chimera/silent
+           * ─────────────────────────────────────── */
+          
+          static struct ctl_table chimera_table[] = {
+              {
+                  .procname     = "silent",
+                  .data         = &chimera_silent_mode,
+                  .maxlen       = sizeof(int),
+                  .mode         = 0644,
+                  .proc_handler = proc_dointvec,
+              },
+              { }
+          };
+          
+          static struct ctl_table chimera_root[] = {
+              {
+                  .procname = "chimera",
+                  .mode     = 0555,
+                  .child    = chimera_table,
+              },
+              { }
+          };
+          
+          static int __init chimera_sysctl_init(void)
+          {
+              register_sysctl_init("kernel/chimera", chimera_root);
+          
+              pr_info("Chimera Mk7e: Silent Gate initialized (mode=%d)\n",
+                      chimera_silent_mode);
+          
+              return 0;
+          }
+          
+          subsys_initcall(chimera_sysctl_init);
+          EOF
 
-          # ── End A16 QPR2 / SUSFS 1.5.5 Tuning ──────────────────────────────
-
-          echo "OK: defconfig tuning complete (SUSFS v1.5.5 + A16 QPR2 EvoX
-          11.8)" \
-            | tee "../$LOG_DIR/defconfig-tuning.log"
+          grep -q "chimera/silent_core.o" kernel/Makefile || \
+            echo "obj-y += chimera/silent_core.o" >> kernel/Makefile
+      
+          # ─────────────────────────────────────────────
+          # FINAL VERIFICATION PASS (minimal noise)
+          # ─────────────────────────────────────────────
+          echo "=== FORTe Mode: Summary ===" | tee -a "$LOG"
+      
           grep -E \
-            "^(CONFIG_KSU|CONFIG_PREEMPT|CONFIG_HZ|CONFIG_TCP_CONG|CONFIG_DEFAULT_TCP|CONFIG_ZRAM|CONFIG_CRYPTO_LZ4|CONFIG_LOCALVERSION|CONFIG_SECURITY_SELINUX|CONFIG_CC_STACKPROTECTOR|CONFIG_BPF|CONFIG_CGROUP|CONFIG_FUSE|CONFIG_OVERLAY|CONFIG_BINDER|CONFIG_MEMCG|CONFIG_PSI|CONFIG_NET_CLS|CONFIG_VETH|CONFIG_IKCONFIG|CONFIG_PROC_EVENTS)" \
-            "$DEFCONFIG" \
-            | tee -a "../$LOG_DIR/defconfig-tuning.log"
+            "^(CONFIG_KSU|CONFIG_KSU_SUSFS|CONFIG_PREEMPT|CONFIG_HZ|CONFIG_TCP_CONG|CONFIG_BPF|CONFIG_CGROUP|CONFIG_BINDER|CONFIG_MEMCG|CONFIG_PSI|CONFIG_NET_CLS|CONFIG_FUSE|CONFIG_OVERLAY)" \
+            "$DEFCONFIG" | tee -a "$LOG"
+      
+          echo "=== FORTe Mode complete ===" | tee -a "$LOG"
+          
       - name: Apply Samsung-stock-style branding
         working-directory: kernel
         run: >
