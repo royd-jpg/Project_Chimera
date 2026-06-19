@@ -126,39 +126,40 @@ jobs:
             gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
 
       - name: Cache AOSP Clang 21.0 r563880c
-        id: cache-clang
+        id: cache-clang19
         uses: actions/cache@v4
         with:
           path: aosp-clang
-          key: ${{ runner.os }}-aosp-clang-r563880c-${{ env.AOSP_KEY }}
+          key: '${{ env.AOSP_KEY }}'
 
-      - name: Download and verify AOSP Clang 21.0 (tarball)
-        if: steps.cache-clang.outputs.cache-hit != 'true'
+      - name: Download AOSP Clang 21.0 r563880c (Tarball)
+        if: steps.cache-clang19.outputs.cache-hit != 'true'
         run: |
           set -Eeuo pipefail
+          echo "=== Fetching AOSP Clang r563880c tarball ==="
           mkdir -p aosp-clang
-          URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/21b19c041de1f1df9b97fd9902ae5405c6cf8eb9/clang-r563880c.tar.gz"
-          OUT="aosp-clang/clang-r563880c.tar.gz"
-          curl -fsSL "$URL" -o "$OUT"
-          if [[ -n "${{ inputs.clang_checksum }}" ]]; then
-            echo "${{ inputs.clang_checksum }}  $OUT" > /tmp/clang.sha256
-            sha256sum -c /tmp/clang.sha256
+          wget -q \
+            -O aosp-clang/clang-r563880c.tar.gz \
+            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/21b19c041de1f1df9b97fd9902ae5405c6cf8eb9/clang-r563880c.tar.gz"
+          tar -xzf aosp-clang/clang-r563880c.tar.gz -C aosp-clang
+          rm -f aosp-clang/clang-r563880c.tar.gz
+          if [[ -x aosp-clang/bin/clang ]]; then
+            :
+          elif [[ -x aosp-clang/clang-r563880c/bin/clang ]]; then
+            mv aosp-clang/clang-r563880c/* aosp-clang/
+            rmdir aosp-clang/clang-r563880c
           fi
-          tar -xzf "$OUT" -C aosp-clang
-          rm -f "$OUT"
-          if [[ -x aosp-clang/clang-r563880c/bin/clang ]]; then
-            mv aosp-clang/clang-r563880c/* aosp-clang/ || true
-            rmdir aosp-clang/clang-r563880c || true
-          fi
-          test -x aosp-clang/bin/clang || { echo "ERROR: clang binary missing after extract"; exit 1; }
+          test -x aosp-clang/bin/clang \
+            || { echo "ERROR: clang binary missing after extract"; exit 1; }
           aosp-clang/bin/clang --version | tee -a "$LOG_DIR/toolchain.log"
 
       - name: Export Clang 21.0 PATH
         run: |
           echo "$GITHUB_WORKSPACE/aosp-clang/bin" >> "$GITHUB_PATH"
+          export PATH="$GITHUB_WORKSPACE/aosp-clang/bin:$PATH"
           echo "=== Verifying Compiler Binaries ==="
           clang --version
-          ld.lld --version || true
+          ld.lld --version
 
       - name: Clone kernel tree
         run: |
