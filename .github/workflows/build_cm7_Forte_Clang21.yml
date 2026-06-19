@@ -117,11 +117,11 @@ jobs:
 
       DEFCONFIG: "arch/arm64/configs/exynos9810-star2lte_defconfig"
 
-      # [Δ3] LOCALVERSION suffix — produces "4.9.337-Chimera_Mk7"
-      BRAND: "-Chimera_Mk7"
+      # [Δ3] LOCALVERSION suffix — produces "4.9.337-Chimera_Mk7_Forte"
+      BRAND: "-Chimera_Mk7_Forte"
 
       # [Δ4] Build identity — uname: Linux version 4.9.337-Chimera_Mk7 (X@AegisDevLabs)
-      BUILD_USER: "X"
+      BUILD_USER: "Terminal_Echo"
       BUILD_HOST: "AegisDevLabs"
 
     steps:
@@ -852,7 +852,7 @@ jobs:
             "$DEFCONFIG" | tee -a "$LOG"
           echo "=== FORTe Mode complete ===" | tee -a "$LOG"
 
-      - name: Apply Chimera Silent Engine (Mk7e Runtime Policy Layer)
+      - name: Apply Chimera Silent Engine (Mk7 Runtime Policy Layer)
         working-directory: kernel
         run: |
           set -Eeuo pipefail
