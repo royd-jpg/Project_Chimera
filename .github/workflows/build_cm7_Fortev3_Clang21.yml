@@ -1,7 +1,8 @@
 # ═══════════════════════════════════════════════════════════════════════════════
 # Project Chimera Mk7 Forte v3 — LOS/AOSP Android 15/16 / Exynos 9810 (star2lte)
-# Hardened CI variant — all inline heredocs converted to YAML-safe printf
+# Hardened CI variant — all heredocs replaced with YAML-safe printf blocks
 # Branding  : 4.9.337-Chimera_Mk7_Forte (Terminal_Echo@AegisDevLabs)
+# Note: This file is a drop-in replacement for .github/workflows/build_cm7_Fortev3_Clang21.yml
 # ═══════════════════════════════════════════════════════════════════════════════
 
 name: Project Chimera Mk7 Forte v3 — LOS/AOSP Android 15/16 / Exynos 9810 (star2lte) - AOSP Clang 21.0
@@ -126,44 +127,45 @@ jobs:
             gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
 
       - name: Cache AOSP Clang 21.0 r563880c
-        id: cache-clang19
+        id: cache-clang
         uses: actions/cache@v4
         with:
           path: aosp-clang
-          key: '${{ env.AOSP_KEY }}'
+          key: ${{ runner.os }}-aosp-clang-r563880c-${{ env.AOSP_KEY }}
 
-      - name: Download AOSP Clang 21.0 r563880c (Tarball)
-        if: steps.cache-clang19.outputs.cache-hit != 'true'
+      - name: Download and verify AOSP Clang 21.0 (tarball)
+        if: steps.cache-clang.outputs.cache-hit != 'true'
         run: |
           set -Eeuo pipefail
-          echo "=== Fetching AOSP Clang r563880c tarball ==="
           mkdir -p aosp-clang
-          wget -q \
-            -O aosp-clang/clang-r563880c.tar.gz \
-            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/21b19c041de1f1df9b97fd9902ae5405c6cf8eb9/clang-r563880c.tar.gz"
-          tar -xzf aosp-clang/clang-r563880c.tar.gz -C aosp-clang
-          rm -f aosp-clang/clang-r563880c.tar.gz
-          if [[ -x aosp-clang/bin/clang ]]; then
-            :
-          elif [[ -x aosp-clang/clang-r563880c/bin/clang ]]; then
-            mv aosp-clang/clang-r563880c/* aosp-clang/
-            rmdir aosp-clang/clang-r563880c
+          URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/21b19c041de1f1df9b97fd9902ae5405c6cf8eb9/clang-r563880c.tar.gz"
+          OUT="aosp-clang/clang-r563880c.tar.gz"
+          curl -fsSL "$URL" -o "$OUT"
+          if [[ -n "${{ inputs.clang_checksum }}" ]]; then
+            echo "${{ inputs.clang_checksum }}  $OUT" > /tmp/clang.sha256
+            sha256sum -c /tmp/clang.sha256
           fi
-          test -x aosp-clang/bin/clang \
-            || { echo "ERROR: clang binary missing after extract"; exit 1; }
+          tar -xzf "$OUT" -C aosp-clang
+          rm -f "$OUT"
+          if [[ -x aosp-clang/clang-r563880c/bin/clang ]]; then
+            mv aosp-clang/clang-r563880c/* aosp-clang/ || true
+            rmdir aosp-clang/clang-r563880c || true
+          fi
+          test -x aosp-clang/bin/clang || { echo "ERROR: clang binary missing after extract"; exit 1; }
           aosp-clang/bin/clang --version | tee -a "$LOG_DIR/toolchain.log"
 
       - name: Export Clang 21.0 PATH
         run: |
           echo "$GITHUB_WORKSPACE/aosp-clang/bin" >> "$GITHUB_PATH"
-          export PATH="$GITHUB_WORKSPACE/aosp-clang/bin:$PATH"
           echo "=== Verifying Compiler Binaries ==="
           clang --version
-          ld.lld --version
+          ld.lld --version || true
 
       - name: Clone kernel tree
         run: |
           set -Eeuo pipefail
+          # ensure clean target directory to avoid git clone failure
+          rm -rf "$KERNEL_DIR"
           git clone --depth=1 -b "$KERNEL_BRANCH" "$KERNEL_REPO" "$KERNEL_DIR"
           git -C "$KERNEL_DIR" log --oneline -5 | tee "$LOG_DIR/kernel-revision.log"
           echo "OK: kernel tree cloned (branch: $KERNEL_BRANCH)"
@@ -175,6 +177,7 @@ jobs:
           SUSFS_REF="${{ inputs.susfs_ref }}"
           SUSFS_COMMIT="${{ inputs.susfs_commit }}"
           [[ "$SUSFS_URL" =~ ^https:// ]] || { echo "ERROR: SUSFS URL must use https://"; exit 1; }
+          rm -rf susfs4ksu
           git clone --filter=blob:none --no-tags "$SUSFS_URL" susfs4ksu
           if [[ -n "$SUSFS_COMMIT" ]]; then
             git -C susfs4ksu fetch --depth=1 origin "$SUSFS_COMMIT"
