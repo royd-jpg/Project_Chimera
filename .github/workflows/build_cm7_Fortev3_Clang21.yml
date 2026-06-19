@@ -1,30 +1,7 @@
 # ═══════════════════════════════════════════════════════════════════════════════
 # Project Chimera Mk7 Forte v3 — LOS/AOSP Android 15/16 / Exynos 9810 (star2lte)
-# Hardened CI variant — ready to drop in
-# ───────────────────────────────────────────────────────────────────────────────
-# Base      : royd-jpg/Project_Chimera @ chimera-mk6l
-# KSU       : sidex15/KernelSU-Next @ legacy-susfs-v2
-# SUSFS     : simonpunk/susfs4ksu @ kernel-4.9 (kernel-tree files only)
-# Clang     : AOSP Clang 21 (r563880c) — Tarball
-# Target    : LOS/AOSP Android 15/16 · ALL SUSFS features
+# Hardened CI variant — all inline heredocs converted to YAML-safe printf
 # Branding  : 4.9.337-Chimera_Mk7_Forte (Terminal_Echo@AegisDevLabs)
-#
-# Changes from rev7 (build_CM6P_rev7.yml)
-# [Δ1]  Target ROM changed to LOS/AOSP Android 15/16.
-# [Δ2]  ALL CONFIG_KSU_SUSFS_* options enabled including SUS_MOUNT,
-#       OPEN_REDIRECT, SPOOF_UNAME, ENABLE_LOG, HIDE_KSU_SUSFS_SYMBOLS,
-#       SPOOF_CMDLINE_OR_BOOTCONFIG, and all AVC/SELinux spoof options.
-# [Δ3]  BRAND changed to "-Chimera_Mk7".
-# [Δ4]  KBUILD_BUILD_USER="Terminal_Echo", KBUILD_BUILD_HOST="AegisDevLabs".
-# [Δ5]  Artifact/release names updated throughout to Chimera Mk7 Forte v3.
-# [Δ6]  Toolchain switched from sparse-checkout r536225 to tarball r563880c.
-# [Δ7]  Build hardening added for stricter Clang compatibility.
-# [Δ8]  LLVM=1, LLVM_IAS=0, and KCFLAGS removed previously; KCFLAGS later
-#       reinjected with "-O2 -fcommon -fno-strict-aliasing -Wno-error".
-# [Δ9]  Integration steps moved into a tracked script (kernel/scripts/integration_and_tuning.sh)
-# [Δ10] Hardened defconfig tuning (FORTe Mode) using scripts/config when available,
-#        safer patch application, compile-time validation, and artifact gating.
-# All other steps (surgery, prctl bridge, weak fallbacks) preserved but hardened.
 # ═══════════════════════════════════════════════════════════════════════════════
 
 name: Project Chimera Mk7 Forte v3 — LOS/AOSP Android 15/16 / Exynos 9810 (star2lte) - AOSP Clang 21.0
@@ -132,7 +109,7 @@ jobs:
             echo "build_host=$BUILD_HOST"
           } | tee "$LOG_DIR/build-inputs.log"
 
-          # export KBUILD_* so preview matches kernel branding fields
+          # Export KBUILD_* so the preview matches the kernel branding fields
           export KBUILD_USER="$BUILD_USER"
           export KBUILD_HOST="$BUILD_HOST"
           LOG="$LOG_DIR/build-inputs.log"
@@ -278,28 +255,36 @@ jobs:
           if [[ ! -f "$HOOK_H" ]] || ! grep -q 'syscall_fn_t' "$HOOK_H"; then
             echo "INFO: syscall_fn_t — nothing to fix"; exit 0
           fi
-          cat > /tmp/fix_syscall_fn_t.py <<'PY'
-from pathlib import Path
-import re
-path = Path("KernelSU-Next/kernel/hook/syscall_hook.h")
-if not path.exists(): raise SystemExit(0)
-content = path.read_text()
-typedef = (
-    "/* syscall_fn_t: Samsung 4.9 BSP compatibility */\n"
-    "typedef long (*syscall_fn_t)(\n"
-    "    unsigned long, unsigned long, unsigned long,\n"
-    "    unsigned long, unsigned long, unsigned long\n"
-    ");\n\n"
-)
-pos = 0
-for m in re.finditer(r"^#(include|pragma|ifndef|define)[^\n]*\n", content, re.MULTILINE):
-    pos = m.end()
-if "typedef long (*syscall_fn_t)" not in content:
-    path.write_text(content[:pos] + typedef + content[pos:])
-    print("OK: syscall_fn_t typedef injected")
-else:
-    print("OK: syscall_fn_t already present (idempotent)")
-PY
+
+          # Write Python fixer using printf to avoid heredoc/YAML parsing issues
+          printf '%s\n' \
+            'from pathlib import Path' \
+            'import re' \
+            '' \
+            'path = Path("KernelSU-Next/kernel/hook/syscall_hook.h")' \
+            'if not path.exists():' \
+            '    raise SystemExit(0)' \
+            '' \
+            'content = path.read_text()' \
+            'typedef = (' \
+            '    "/* syscall_fn_t: Samsung 4.9 BSP compatibility */\\n"' \
+            '    "typedef long (*syscall_fn_t)(\\n"' \
+            '    "    unsigned long, unsigned long, unsigned long,\\n"' \
+            '    "    unsigned long, unsigned long, unsigned long\\n"' \
+            '    ");\\n\\n"' \
+            ')' \
+            '' \
+            'pos = 0' \
+            'for m in re.finditer(r"^#(include|pragma|ifndef|define)[^\\n]*\\n", content, re.MULTILINE):' \
+            '    pos = m.end()' \
+            '' \
+            'if "typedef long (*syscall_fn_t)" not in content:' \
+            '    path.write_text(content[:pos] + typedef + content[pos:])' \
+            '    print("OK: syscall_fn_t typedef injected")' \
+            'else:' \
+            '    print("OK: syscall_fn_t already present (idempotent)")' \
+            > /tmp/fix_syscall_fn_t.py
+
           python3 /tmp/fix_syscall_fn_t.py
 
       - name: Preflight tree state
@@ -415,42 +400,52 @@ PY
             -e 's|#include "../drivers/kernelsu/\(.*\)"|#include <kernelsu/\1>|g' \
             {} +
           echo "OK [Surgery A]: SUSFS include namespace normalized"
-          cat > /tmp/export_headers.py <<'PY'
-import sys
-from pathlib import Path
-def export_header(name):
-    matches = [p for p in Path("KernelSU-Next").rglob(name) if "/include/" not in str(p)]
-    dst = Path("include/kernelsu") / name
-    if not matches:
-        print(f"WARN: {name} not found — generating fallback")
-        dst.write_text(f"#pragma once\n/* Auto-generated fallback for {name} */\n")
-        return
-    src = matches[0]
-    content = src.read_text()
-    content = "\n".join(l for l in content.splitlines() if "drivers/kernelsu" not in l and "<kernelsu/" not in l)
-    dst.write_text(content)
-    print(f"OK [Surgery B]: exported {name}")
-for h in ("core_hook.h", "kernel_compat.h", "ksu.h", "sucompat.h"):
-    export_header(h)
-PY
-          python3 /tmp/export_headers.py
-          cat > include/kernelsu/ksu.h <<'KSU'
-#pragma once
-/* Kernel-safe shim for Mk7 — replaces upstream ksu.h */
-#include <linux/types.h>
-#include <linux/cred.h>
-#include <linux/sched.h>
-#include <linux/uaccess.h>
 
-extern const struct cred *ksu_cred;
-KSU
+          # Export headers via printf-based Python to avoid heredoc YAML parsing issues
+          printf '%s\n' \
+            'import sys' \
+            'from pathlib import Path' \
+            '' \
+            'def export_header(name):' \
+            '    matches = [p for p in Path("KernelSU-Next").rglob(name) if "/include/" not in str(p)]' \
+            '    dst = Path("include/kernelsu") / name' \
+            '    if not matches:' \
+            '        print(f"WARN: {name} not found — generating fallback")' \
+            '        dst.write_text(f"#pragma once\n/* Auto-generated fallback for {name} */\n")' \
+            '        return' \
+            '    src = matches[0]' \
+            '    content = src.read_text()' \
+            '    content = "\n".join(l for l in content.splitlines() if "drivers/kernelsu" not in l and "<kernelsu/" not in l)' \
+            '    dst.write_text(content)' \
+            '    print(f"OK [Surgery B]: exported {name}")' \
+            '' \
+            'for h in ("core_hook.h", "kernel_compat.h", "ksu.h", "sucompat.h"):' \
+            '    export_header(h)' \
+            > /tmp/export_headers.py
+
+          python3 /tmp/export_headers.py
+
+          # Write kernel-safe ksu.h using printf to avoid heredoc parsing issues
+          printf '%s\n' \
+            '#pragma once' \
+            '/* Kernel-safe shim for Mk7 — replaces upstream ksu.h */' \
+            '#include <linux/types.h>' \
+            '#include <linux/cred.h>' \
+            '#include <linux/sched.h>' \
+            '#include <linux/uaccess.h>' \
+            '' \
+            'extern const struct cred *ksu_cred;' \
+            > include/kernelsu/ksu.h
+
           echo "OK [Surgery C]: kernel-safe ksu.h installed"
+
           for hdr in include/kernelsu/core_hook.h include/kernelsu/kernel_compat.h; do
             if [[ -f "$hdr" ]] && ! grep -q 'ksu_cred' "$hdr"; then
               printf '\nextern const struct cred *ksu_cred;\n' >> "$hdr"
               echo "OK [Surgery D]: ksu_cred added to $hdr"
             fi
           done
+
           FAIL=0
           for f in include/kernelsu/core_hook.h include/kernelsu/kernel_compat.h include/kernelsu/ksu.h; do
             [[ -f "$f" ]] && echo "OK: $f" || { echo "FAIL: missing $f"; FAIL=1; }
@@ -470,45 +465,52 @@ KSU
             git apply patches/0002-add-susfs-prctl-bridge.patch || { echo "Patch apply failed"; exit 1; }
             echo "OK: applied patches/0002-add-susfs-prctl-bridge.patch"
           else
-            python3 - <<'PY'
-from pathlib import Path
-import re, sys
-MARKER = "CHIMERA_MK6R9_SUSFS_PRCTL_BRIDGE"
-susfs_h = Path("include/linux/susfs.h")
-susfs_def = Path("include/linux/susfs_def.h")
-if not susfs_h.exists():
-    print("WARN: include/linux/susfs.h missing — skipping bridge"); sys.exit(0)
-scan_src = susfs_def.read_text() if susfs_def.exists() else susfs_h.read_text()
-cmd_ids = re.findall(r"#define\s+(CMD_SUSFS_\w+|SUSFS_CMD_\w+)\s+(0x[0-9a-fA-F]+|\d+)", scan_src)
-if not cmd_ids:
-    print("WARN: no CMD_SUSFS_* constants found — bridge skipped"); sys.exit(0)
-vals = [int(v,0) for _,v in cmd_ids]
-cmd_min = min(vals); cmd_max = max(vals)
-susfs_c = Path("fs/susfs.c")
-bridge = f"""
-/* Chimera Mk7 SUSFS prctl bridge ({MARKER}) */
-#ifndef {MARKER}
-#define {MARKER} 1
-#ifdef CONFIG_KSU_SUSFS
-int ksu_susfs_handle_prctl(unsigned long option, unsigned long arg2,
-    unsigned long arg3, unsigned long arg4, unsigned long arg5)
-{{
-    return -EINVAL;
-}}
-EXPORT_SYMBOL_GPL(ksu_susfs_handle_prctl);
-#endif
-#endif
-"""
-if susfs_c.exists():
-    txt = susfs_c.read_text()
-    if MARKER not in txt:
-        susfs_c.write_text(txt + bridge)
-        print("OK: bridge appended to fs/susfs.c")
-    else:
-        print("OK: bridge already present")
-else:
-    print("WARN: fs/susfs.c not present — bridge append skipped")
-PY
+            # Use printf-based Python writer to avoid heredoc parsing issues
+            printf '%s\n' \
+              'from pathlib import Path' \
+              'import re, sys' \
+              '' \
+              'MARKER = "CHIMERA_MK6R9_SUSFS_PRCTL_BRIDGE"' \
+              'susfs_h = Path("include/linux/susfs.h")' \
+              'susfs_def = Path("include/linux/susfs_def.h")' \
+              'if not susfs_h.exists():' \
+              '    print("WARN: include/linux/susfs.h missing — skipping bridge")' \
+              '    sys.exit(0)' \
+              'scan_src = susfs_def.read_text() if susfs_def.exists() else susfs_h.read_text()' \
+              'cmd_ids = re.findall(r"#define\\s+(CMD_SUSFS_\\w+|SUSFS_CMD_\\w+)\\s+(0x[0-9a-fA-F]+|\\d+)", scan_src)' \
+              'if not cmd_ids:' \
+              '    print("WARN: no CMD_SUSFS_* constants found — bridge skipped")' \
+              '    sys.exit(0)' \
+              'vals = [int(v,0) for _,v in cmd_ids]' \
+              'cmd_min = min(vals); cmd_max = max(vals)' \
+              'susfs_c = Path("fs/susfs.c")' \
+              'bridge = f"""' \
+              '/* Chimera Mk7 SUSFS prctl bridge ({MARKER}) */' \
+              '#ifndef {MARKER}' \
+              '#define {MARKER} 1' \
+              '#ifdef CONFIG_KSU_SUSFS' \
+              'int ksu_susfs_handle_prctl(unsigned long option, unsigned long arg2,' \
+              '    unsigned long arg3, unsigned long arg4, unsigned long arg5)' \
+              '{' \
+              '    return -EINVAL;' \
+              '}' \
+              'EXPORT_SYMBOL_GPL(ksu_susfs_handle_prctl);' \
+              '#endif' \
+              '#endif' \
+              '"""' \
+              'if susfs_c.exists():' \
+              '    txt = susfs_c.read_text()' \
+              '    if MARKER not in txt:' \
+              '        susfs_c.write_text(txt + bridge)' \
+              '        print("OK: bridge appended to fs/susfs.c")' \
+              '    else:' \
+              '        print("OK: bridge already present")' \
+              'else:' \
+              '    print("WARN: fs/susfs.c not present — bridge append skipped")' \
+              > /tmp/inject_prctl_bridge.py
+
+            python3 /tmp/inject_prctl_bridge.py
+          fi
 
       - name: Inject weak symbol fallbacks (prefer tracked compat file)
         working-directory: kernel
@@ -517,36 +519,41 @@ PY
           if [[ -f "kernel/chimera/sus_compat.c" ]]; then
             echo "OK: kernel/chimera/sus_compat.c present — will be built via Makefile fragment"
           else
-            python3 - <<'PY'
-from pathlib import Path
-t = Path("fs/sus_su.c")
-if not t.exists():
-    print("INFO: fs/sus_su.c not found — skipping weak fallback injection")
-    raise SystemExit(0)
-content = t.read_text()
-if "WEAK_SYMBOL_FALLBACK" in content:
-    print("OK: weak fallbacks already present (idempotent)")
-    raise SystemExit(0)
-fallback = """
-/* === WEAK_SYMBOL_FALLBACK === */
-#include <linux/cred.h>
-#include <linux/uidgid.h>
-#include <linux/capability.h>
+            # Use printf-based Python writer to avoid heredoc parsing issues
+            printf '%s\n' \
+              'from pathlib import Path' \
+              '' \
+              't = Path("fs/sus_su.c")' \
+              'if not t.exists():' \
+              '    print("INFO: fs/sus_su.c not found — skipping weak fallback injection")' \
+              '    raise SystemExit(0)' \
+              'content = t.read_text()' \
+              'if "WEAK_SYMBOL_FALLBACK" in content:' \
+              '    print("OK: weak fallbacks already present (idempotent)")' \
+              '    raise SystemExit(0)' \
+              'fallback = """' \
+              '/* === WEAK_SYMBOL_FALLBACK === */' \
+              '#include <linux/cred.h>' \
+              '#include <linux/uidgid.h>' \
+              '#include <linux/capability.h>' \
+              '' \
+              '__attribute__((weak)) bool susfs_is_allow_su(void) { return false; }' \
+              '' \
+              '__attribute__((weak)) void ksu_escape_to_root(void) {' \
+              '    struct cred *nc = prepare_creds();' \
+              '    if (!nc) return;' \
+              '    nc->uid = nc->euid = nc->suid = nc->fsuid = GLOBAL_ROOT_UID;' \
+              '    nc->gid = nc->egid = nc->sgid = nc->fsgid = GLOBAL_ROOT_GID;' \
+              '    commit_creds(nc);' \
+              '}' \
+              '/* ========================== */' \
+              '"""' \
+              't.write_text(content + fallback)' \
+              'print("OK: weak symbol fallbacks injected into fs/sus_su.c")' \
+              > /tmp/inject_weak_fallbacks.py
 
-__attribute__((weak)) bool susfs_is_allow_su(void) { return false; }
-
-__attribute__((weak)) void ksu_escape_to_root(void) {
-    struct cred *nc = prepare_creds();
-    if (!nc) return;
-    nc->uid = nc->euid = nc->suid = nc->fsuid = GLOBAL_ROOT_UID;
-    nc->gid = nc->egid = nc->sgid = nc->fsgid = GLOBAL_ROOT_GID;
-    commit_creds(nc);
-}
-/* ========================== */
-"""
-t.write_text(content + fallback)
-print("OK: weak symbol fallbacks injected into fs/sus_su.c")
-PY
+            python3 /tmp/inject_weak_fallbacks.py
+          fi
 
       - name: Apply defconfig tuning (FORTe Mode — hardened A16 QPR2 SUSFS profile)
         working-directory: kernel
