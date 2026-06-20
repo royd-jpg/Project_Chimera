@@ -209,11 +209,15 @@ name: >-
       build_version:
         description: >-
           KBUILD_BUILD_VERSION — the "#N" token in the uname string
-          (e.g. "#1 SMP PREEMPT" when set to "1"). Controls only the
-          number; the kernel build system appends SMP PREEMPT automatically.
+          (e.g. "#1 SMP PREEMPT" when set to "1").
         required: false
         type: string
         default: '1'
+      build_date:
+        description: 'KBUILD_BUILD_TIMESTAMP — The date/time for the version string (static)'
+        required: false
+        type: string
+        default: 'Mon 1 Jan 00:00:00 UTC 2026'
 permissions:
   contents: write
 jobs:
@@ -237,6 +241,7 @@ jobs:
       BUILD_USER: '${{ inputs.build_user }}'
       BUILD_HOST: '${{ inputs.build_host }}'
       BUILD_VERSION: '${{ inputs.build_version }}'
+      KBUILD_BUILD_TIMESTAMP: '${{ inputs.build_date }}'
     steps:
       - name: Prepare workspace
         run: |
