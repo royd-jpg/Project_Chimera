@@ -2,12 +2,13 @@
 # Project Chimera Mk7e — LOS/AOSP Android 15/16 QPR2 / Exynos 9810 (star2lte)
 # ───────────────────────────────────────────────────────────────────────────────
 # Base      : royd-jpg/Project_Chimera @ chimera-mk6l
-# KSU       : KernelSU-Next/KernelSU-Next @ legacy-susfs           [Δ10]
+# KSU       : sidex15/KernelSU-Next @ legacy-susfs-v2                [Δ10, Δ15]
 #             SUSFS is natively wired into KernelSU-Next/kernel/ on this branch.
-# SUSFS     : simonpunk/susfs4ksu @ kernel-4.9 · v1.5.5            [Δ13]
+# SUSFS     : simonpunk/susfs4ksu @ kernel-4.9 · v1.5.5              [Δ13]
 # Clang     : AOSP Clang 21 (r563880c) — Tarball
-# Target    : LOS/AOSP Android 15/16 QPR2 · Evolution X 11.8
-# Branding  : 4.9.337-Chimera_Mk7e (X@AegisDevLabs)               [Δ14]
+# Target    : LOS/AOSP Android 15/16 QPR2
+# Branding  : 4.9.337-Chimera_Mk7e [CUSTOM LOCALVERSION]             [Δ14, Δ20]
+# Security  : AVC Log Spoofing HARD-DISABLED (Native/Configured)     [Δ11, Δ16, Δ21]
 # ───────────────────────────────────────────────────────────────────────────────
 # Changes from rev7 (build_CM6P_rev7.yml)
 # [Δ1]  Target ROM changed to LOS/AOSP Android 15/16.
@@ -104,6 +105,27 @@
 #       pre-build sanity check) were updated to display the same "#1 SMP
 #       PREEMPT" suffix so the preview text matches what actually ends up
 #       in the built Image.
+# [Δ21] AVC/SELinux spoof enforcement hardened — defconfig write gap closed.
+#       Audit of the defconfig tuning step found two enforcement gaps:
+#       (a) CONFIG_KSU_SUSFS_SPOOF_SELINUX was still being unset
+#           conditionally (behind a probe_kconfig guard), violating the
+#           "unconditional" mandate from [Δ16]. It is now called via a
+#           bare unset_cfg with no probe guard so the "not set" line is
+#           written regardless of which SUSFS tree is checked out.
+#       (b) The three AVC log spoof siblings declared hard-unset by [Δ11]
+#           had no actual unset_cfg calls in the defconfig step —
+#           CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOF,
+#           CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOFING, and
+#           CONFIG_KSU_SUSFS_AVC_LOG_SPOOF were only documented as
+#           disabled but never explicitly written to the defconfig file.
+#           All three now have unconditional unset_cfg calls in a dedicated
+#           "SAFE-BOOT AVC/SELINUX SPOOF — HARD-DISABLED" block, positioned
+#           immediately before the SUSFS feature enables and placed AFTER
+#           the SUSFS_SAFE_MODE set_cfg calls so any earlier residual
+#           value from the base defconfig cannot survive.
+#       The diagnostic step (Step 17b / "Diagnostic — print SUSFS and
+#       Binder CONFIG values") already greps for all four symbols so
+#       the CI log will now confirm "is not set" for every one of them.
 # ═══════════════════════════════════════════════════════════════════════════════
 name: >-
   Project Chimera Mk7e — LOS/AOSP Android 15/16 QPR2 / Exynos 9810 (star2lte) -
@@ -924,6 +946,55 @@ jobs:
           set_cfg CONFIG_PROC_EVENTS y
 
           # ─────────────────────────────────────────────
+          # SAFE-BOOT AVC/SELINUX SPOOF — HARD-DISABLED [Δ11, Δ16, Δ21]
+          #
+          # ALL FOUR symbols are written UNCONDITIONALLY — no probe_kconfig
+          # guard, no SUSFS-tree version check. The "not set" line is written
+          # regardless of which KSU or SUSFS tree is checked out, so no
+          # downstream Kconfig variation can re-enable any of these.
+          #
+          # Rationale:
+          #   [Δ16] A16's SELinux policy-loader panics on boot when it
+          #   detects an active identity spoof during early policy load.
+          #   [Δ11] AVC log spoofing suppresses genuine HAL AVC denials
+          #   that must remain visible during A16 bring-up.
+          #   [Δ21] Previous revision had CONFIG_KSU_SUSFS_SPOOF_SELINUX
+          #   behind a probe_kconfig guard (conditional unset), violating
+          #   the [Δ16] mandate. The three AVC log spoof siblings had no
+          #   unset_cfg calls at all — documented as disabled but never
+          #   written. All four are now enforced here explicitly.
+          #
+          # These must appear AFTER the SUSFS feature set_cfg calls above
+          # so they cannot be silently overridden by a base defconfig value
+          # that survives into the final .config.
+          # ─────────────────────────────────────────────
+          echo "=== Safe-Boot: AVC/SELinux spoof hard-disable [Δ11/Δ16/Δ21] ===" | tee -a "$LOG"
+          unset_cfg CONFIG_KSU_SUSFS_SPOOF_SELINUX
+          unset_cfg CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOF
+          unset_cfg CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOFING
+          unset_cfg CONFIG_KSU_SUSFS_AVC_LOG_SPOOF
+          echo "HARD-DISABLED: CONFIG_KSU_SUSFS_SPOOF_SELINUX"           | tee -a "$LOG"
+          echo "HARD-DISABLED: CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOF"    | tee -a "$LOG"
+          echo "HARD-DISABLED: CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOFING" | tee -a "$LOG"
+          echo "HARD-DISABLED: CONFIG_KSU_SUSFS_AVC_LOG_SPOOF"           | tee -a "$LOG"
+          # Verify all four landed as "not set" — fatal if any survived
+          SPOOF_FAIL=0
+          for sym in \
+            CONFIG_KSU_SUSFS_SPOOF_SELINUX \
+            CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOF \
+            CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOFING \
+            CONFIG_KSU_SUSFS_AVC_LOG_SPOOF; do
+            if grep -qE "^${sym}=y" "$DEFCONFIG"; then
+              echo "FATAL: ${sym} is still set=y after hard-disable — aborting" | tee -a "$LOG"
+              SPOOF_FAIL=1
+            else
+              echo "VERIFIED not set: ${sym}" | tee -a "$LOG"
+            fi
+          done
+          [[ "$SPOOF_FAIL" -eq 0 ]] || { echo "ERROR: AVC/SELinux spoof hard-disable verification failed"; exit 1; }
+          echo "=== Safe-Boot block PASSED ===" | tee -a "$LOG"
+
+          # ─────────────────────────────────────────────
           # SUSFS SAFE MODE (NO ORPHAN CONFIG GENERATION)
           # ─────────────────────────────────────────────
           set_cfg CONFIG_KSU_SUSFS y
@@ -939,10 +1010,6 @@ jobs:
             set_cfg CONFIG_KSU_SUSFS_HIDE_MAGISK_EVIL y
           else
             echo "SKIP: HIDE_MAGISK_EVIL not present" | tee -a "$LOG"
-          fi
-
-          if probe_kconfig CONFIG_KSU_SUSFS_SPOOF_SELINUX; then
-            unset_cfg CONFIG_KSU_SUSFS_SPOOF_SELINUX
           fi
 
           # ─────────────────────────────────────────────
@@ -1082,6 +1149,23 @@ jobs:
           else
             echo "WARN: CONFIG_SECURITY_SELINUX_DEVELOP may still be set" | tee -a "$LOG"
           fi
+          # [Δ21] Verify all four AVC/SELinux spoof symbols are hard-unset
+          echo "=== AVC/SELinux spoof hard-disable verification [Δ21] ===" | tee -a "$LOG"
+          SPOOF_FAIL=0
+          for sym in \
+            CONFIG_KSU_SUSFS_SPOOF_SELINUX \
+            CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOF \
+            CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOFING \
+            CONFIG_KSU_SUSFS_AVC_LOG_SPOOF; do
+            if grep -qE "^${sym}=y" "$DEFCONFIG"; then
+              echo "FATAL [Δ21]: ${sym}=y still present in defconfig — this WILL cause A16 boot panic" | tee -a "$LOG"
+              SPOOF_FAIL=1
+            else
+              echo "OK [Δ21]: ${sym} confirmed not set" | tee -a "$LOG"
+            fi
+          done
+          [[ "$SPOOF_FAIL" -eq 0 ]] \
+            || { echo "ERROR: AVC/SELinux spoof sanity failed — aborting build"; exit 1; }
           MK="$(cat fs/Makefile)"
           [[ "$MK" == *"susfs.o"* ]] && echo "OK: fs/Makefile has susfs.o"  | tee -a "$LOG" || { echo "FAIL: fs/Makefile missing susfs.o"  | tee -a "$LOG"; FAIL=1; }
           [[ "$MK" == *"sus_su.o"* ]] && echo "OK: fs/Makefile has sus_su.o" | tee -a "$LOG" || { echo "FAIL: fs/Makefile missing sus_su.o" | tee -a "$LOG"; FAIL=1; }
@@ -1097,6 +1181,7 @@ jobs:
           echo "  Target: LOS/AOSP Android 15/16 QPR2 (Evolution X 11.8)"
           echo "  SUSFS:  v${SUSFS_TARGET_VERSION} @ ${{ inputs.susfs_ref }}"
           echo "  KCFLAGS: -O2 -fcommon -fno-strict-aliasing -Wno-error [Δ9]"
+          echo "  AVC/SELinux spoof: HARD-DISABLED [Δ11/Δ16/Δ21]"
           echo "========================================"
           echo "KSU  : ${{ inputs.ksu_repo }} @ ${{ inputs.ksu_ref }}"
           echo "SUSFS: ${{ inputs.susfs_repo }} @ ${{ inputs.susfs_ref }}"
@@ -1164,6 +1249,24 @@ jobs:
           fi
           echo "=== Post-merge config verification ==="
           grep -E "CONFIG_KSU|CONFIG_KSU_SUSFS|CONFIG_SECURITY_SELINUX_DEVELOP|LOCALVERSION" "$GITHUB_WORKSPACE/$OUT_DIR/.config" | tee -a "$GITHUB_WORKSPACE/$LOG_DIR/config-verify.log"
+          # [Δ21] Post-merge AVC/SELinux spoof verification against final .config
+          echo "=== Post-merge AVC/SELinux spoof hard-disable check [Δ21] ==="
+          SPOOF_FAIL=0
+          for sym in \
+            CONFIG_KSU_SUSFS_SPOOF_SELINUX \
+            CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOF \
+            CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOFING \
+            CONFIG_KSU_SUSFS_AVC_LOG_SPOOF; do
+            if grep -qE "^${sym}=y" "$GITHUB_WORKSPACE/$OUT_DIR/.config"; then
+              echo "FATAL [Δ21]: ${sym}=y present in final .config — Kconfig merge re-enabled it" \
+                | tee -a "$GITHUB_WORKSPACE/$LOG_DIR/config-verify.log"
+              SPOOF_FAIL=1
+            else
+              echo "OK [Δ21]: ${sym} not set in final .config" \
+                | tee -a "$GITHUB_WORKSPACE/$LOG_DIR/config-verify.log"
+            fi
+          done
+          [[ "$SPOOF_FAIL" -eq 0 ]] || { echo "ERROR: AVC/SELinux spoof re-enabled by Kconfig merge — aborting"; exit 1; }
           echo "=== Building Image + DTBs ==="
           "${MAKE[@]}" Image dtbs 2>&1 | tee build.log
           IMAGE="$GITHUB_WORKSPACE/$OUT_DIR/arch/arm64/boot/Image"
@@ -1182,13 +1285,31 @@ jobs:
           {
             echo "════════════════════════════════════════════════════════"
             echo " Chimera Mk7e A16 QPR2 Safe-Boot — Active CONFIG values"
+            echo " AVC/SELinux spoof enforcement: [Δ11/Δ16/Δ21]"
             echo "════════════════════════════════════════════════════════"
             echo ""
             echo "── SUSFS (CONFIG_KSU / CONFIG_KSU_SUSFS_*) ─────────────────"
             grep -E '^(CONFIG_KSU|CONFIG_KSU_SUSFS|# CONFIG_KSU_SUSFS)' "$CONFIG_FILE" || true
             echo ""
-            echo "── AVC / SELinux spoof hard-disable [Δ16] ──────────────────"
-            grep -E '(CONFIG_KSU_SUSFS_SPOOF_SELINUX|CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOF|CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOFING|CONFIG_KSU_SUSFS_AVC_LOG_SPOOF|CONFIG_SECURITY_SELINUX)' "$CONFIG_FILE" || echo "INFO: no matching SUSFS spoof symbols in .config (expected on SUSFS 1.5.5)"
+            echo "── AVC / SELinux spoof hard-disable [Δ11/Δ16/Δ21] ─────────"
+            echo "   (all four must show '# ... is not set')"
+            for sym in \
+              CONFIG_KSU_SUSFS_SPOOF_SELINUX \
+              CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOF \
+              CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOFING \
+              CONFIG_KSU_SUSFS_AVC_LOG_SPOOF; do
+              result="$(grep -E "(^${sym}=|^# ${sym} is not set)" "$CONFIG_FILE" || true)"
+              if [[ -z "$result" ]]; then
+                echo "  ${sym}: absent from .config (symbol not defined in this SUSFS tree — OK)"
+              elif echo "$result" | grep -qE "^${sym}=y"; then
+                echo "  FAIL: ${sym}=y — spoof NOT disabled!"
+              else
+                echo "  OK: ${result}"
+              fi
+            done
+            echo ""
+            echo "── SELinux enforcement ──────────────────────────────────────"
+            grep -E '(CONFIG_SECURITY_SELINUX)' "$CONFIG_FILE" || true
             echo ""
             echo "── Binder IPC (CONFIG_ANDROID_BINDER*) ─────────────────────"
             grep -E '^(CONFIG_ANDROID_BINDER|# CONFIG_ANDROID_BINDER)' "$CONFIG_FILE" || true
@@ -1279,8 +1400,8 @@ jobs:
             |---|---|
             | **KernelSU-Next Core Engine** | ✅ `sidex15/KernelSU-Next @ legacy-susfs-v2` [Δ15] |
             | **SUSFS VFS Guard Layer** | ✅ Native Tree Hook v${{ env.SUSFS_TARGET_VERSION }} [Δ13] |
-            | **AVC Log Spoofing** | ❌ Hard-disabled [Δ11/Δ16] — full AVC visibility for A16 bring-up |
-            | **SELinux Identity Spoof (SPOOF_SELINUX)** | ❌ Hard-disabled [Δ16] — A16 SELinux policy-load panic fix |
+            | **AVC Log Spoofing** | ❌ Hard-disabled [Δ11/Δ16/Δ21] — all 3 sibling symbols explicitly unset |
+            | **SELinux Identity Spoof (SPOOF_SELINUX)** | ❌ Hard-disabled [Δ16/Δ21] — unconditional unset, no probe guard |
             | **BPF Syscall + Cgroup BPF + NET_CLS_BPF** | ✅ Enabled [Δ12/Δ17] — A16 bpfloader / netd |
             | **FUSE + OverlayFS** | ✅ Enabled [Δ12] — A16 MediaStore + RRO |
             | **Binder (binder/hwbinder/vndbinder)** | ✅ Enabled [Δ12] — A16 AIDL |
@@ -1288,8 +1409,8 @@ jobs:
             | **Net Cgroup + VETH** | ✅ Enabled [Δ12] — A16 netd traffic control |
             | **SUS_MAP / HIDE_MAGISK_EVIL** | ⏭️ Kconfig-gated probe — skipped on v1.5.5 [Δ13] |
             | **LRU_GEN (MGLRU)** | ⏭️ Source-tree probe — no-op on 4.9 BSP [Δ12] |
-            ### Safe-Boot Diagnostics [Δ17]
-            Post-build CONFIG verification for SUSFS, AVC/SELinux spoof, Binder, and BPF/FUSE/OverlayFS is written to `logs/safeboot-config-verify.log` (see the "Upload logs" artifact for this run).
+            ### Safe-Boot Diagnostics [Δ17/Δ21]
+            Post-build CONFIG verification for SUSFS, AVC/SELinux spoof (all four symbols), Binder, and BPF/FUSE/OverlayFS is written to `logs/safeboot-config-verify.log`. The build will abort if any spoof symbol is found set=y after Kconfig merge.
             ### uname String [Δ18]
             `Linux version 4.9.337${{ env.BRAND }} (${{ env.BUILD_USER }}@${{ env.BUILD_HOST }})`
             Samsung-stock-style placeholder — replace `BRAND`/`BUILD_USER`/`BUILD_HOST` with values from a target firmware to mimic a specific build.
