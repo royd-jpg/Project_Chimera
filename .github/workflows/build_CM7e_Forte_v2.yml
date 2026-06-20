@@ -105,6 +105,17 @@
 #       pre-build sanity check) were updated to display the same "#1 SMP
 #       PREEMPT" suffix so the preview text matches what actually ends up
 #       in the built Image.
+# [Δ22] build_version input added — KBUILD_BUILD_VERSION is now a
+#       workflow_dispatch text field instead of a hardcoded "1". The "#N"
+#       portion of the uname/version string (e.g. "#42 SMP PREEMPT ...") is
+#       fully user-controlled at dispatch time. Default is "1" to preserve
+#       prior behaviour when dispatched with no overrides. All uname preview
+#       echo strings in Prepare workspace, Apply Samsung-stock-style branding,
+#       SUSFS pre-build sanity check, and Dry run summary are updated to
+#       interpolate the input value rather than the literal "1". The kernel
+#       build system appends " SMP PREEMPT ..." automatically because
+#       CONFIG_SMP and CONFIG_PREEMPT are active; the input controls only
+#       the "#N" token that precedes it.
 # [Δ21] AVC/SELinux spoof enforcement hardened — defconfig write gap closed.
 #       Audit of the defconfig tuning step found two enforcement gaps:
 #       (a) CONFIG_KSU_SUSFS_SPOOF_SELINUX was still being unset
@@ -195,6 +206,14 @@ name: >-
         required: false
         type: string
         default: SWDD5605
+      build_version:
+        description: >-
+          KBUILD_BUILD_VERSION — the "#N" token in the uname string
+          (e.g. "#1 SMP PREEMPT" when set to "1"). Controls only the
+          number; the kernel build system appends SMP PREEMPT automatically.
+        required: false
+        type: string
+        default: '1'
 permissions:
   contents: write
 jobs:
@@ -217,6 +236,7 @@ jobs:
       BRAND: '${{ inputs.brand }}'
       BUILD_USER: '${{ inputs.build_user }}'
       BUILD_HOST: '${{ inputs.build_host }}'
+      BUILD_VERSION: '${{ inputs.build_version }}'
     steps:
       - name: Prepare workspace
         run: |
@@ -228,6 +248,8 @@ jobs:
             || { echo "ERROR: brand input must start with '-' (got: $BRAND)"; exit 1; }
           [[ -n "$BUILD_USER" && -n "$BUILD_HOST" ]] \
             || { echo "ERROR: build_user/build_host must not be empty"; exit 1; }
+          [[ -n "$BUILD_VERSION" ]] \
+            || { echo "ERROR: build_version must not be empty"; exit 1; }
           {
             echo "build_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             echo "run_number=${GITHUB_RUN_NUMBER}"
@@ -239,7 +261,8 @@ jobs:
             echo "brand=$BRAND"
             echo "build_user=$BUILD_USER"
             echo "build_host=$BUILD_HOST"
-            echo "uname_preview=Linux version 4.9.337${BRAND} (${BUILD_USER}@${BUILD_HOST}) #1 SMP PREEMPT"
+            echo "build_version=$BUILD_VERSION"
+            echo "uname_preview=Linux version 4.9.337${BRAND} (${BUILD_USER}@${BUILD_HOST}) #${BUILD_VERSION} SMP PREEMPT"
           } | tee "$LOG_DIR/build-inputs.log"
 
       - name: Install build dependencies
@@ -1114,16 +1137,18 @@ jobs:
           echo "CHIMERA_BRAND=$BRAND"       >> "$GITHUB_ENV"
           echo "KBUILD_HOST=$BUILD_HOST"    >> "$GITHUB_ENV"
           echo "KBUILD_USER=$BUILD_USER"    >> "$GITHUB_ENV"
+          echo "KBUILD_VERSION=$BUILD_VERSION" >> "$GITHUB_ENV"
           {
             echo "BRAND=$BRAND"
             echo "BUILD_USER=$BUILD_USER"
             echo "BUILD_HOST=$BUILD_HOST"
+            echo "BUILD_VERSION=$BUILD_VERSION"
             echo "RUN=${GITHUB_RUN_NUMBER}"
-            echo "UNAME_PREVIEW=Linux version 4.9.337${BRAND} (${BUILD_USER}@${BUILD_HOST}) #1 SMP PREEMPT"
+            echo "UNAME_PREVIEW=Linux version 4.9.337${BRAND} (${BUILD_USER}@${BUILD_HOST}) #${BUILD_VERSION} SMP PREEMPT"
           } | tee "../$LOG_DIR/branding.env"
           echo "=== setlocalversion ===" | tee "../$LOG_DIR/scm-dirty.log"
           cat scripts/setlocalversion       | tee -a "../$LOG_DIR/scm-dirty.log"
-          echo "uname preview: Linux version 4.9.337${BRAND} (${BUILD_USER}@${BUILD_HOST}) #1 SMP PREEMPT"
+          echo "uname preview: Linux version 4.9.337${BRAND} (${BUILD_USER}@${BUILD_HOST}) #${BUILD_VERSION} SMP PREEMPT"
 
       - name: SUSFS pre-build sanity check
         working-directory: kernel
@@ -1169,7 +1194,7 @@ jobs:
           MK="$(cat fs/Makefile)"
           [[ "$MK" == *"susfs.o"* ]] && echo "OK: fs/Makefile has susfs.o"  | tee -a "$LOG" || { echo "FAIL: fs/Makefile missing susfs.o"  | tee -a "$LOG"; FAIL=1; }
           [[ "$MK" == *"sus_su.o"* ]] && echo "OK: fs/Makefile has sus_su.o" | tee -a "$LOG" || { echo "FAIL: fs/Makefile missing sus_su.o" | tee -a "$LOG"; FAIL=1; }
-          echo "uname preview: Linux version 4.9.337${BRAND} (${KBUILD_USER}@${KBUILD_HOST}) #1 SMP PREEMPT" | tee -a "$LOG"
+          echo "uname preview: Linux version 4.9.337${BRAND} (${KBUILD_USER}@${KBUILD_HOST}) #${KBUILD_VERSION} SMP PREEMPT" | tee -a "$LOG"
           [[ "$FAIL" -eq 0 ]] || { echo "ERROR: sanity check failed"; exit 1; }
           echo "=== Sanity check PASSED ===" | tee -a "$LOG"
 
@@ -1182,6 +1207,7 @@ jobs:
           echo "  SUSFS:  v${SUSFS_TARGET_VERSION} @ ${{ inputs.susfs_ref }}"
           echo "  KCFLAGS: -O2 -fcommon -fno-strict-aliasing -Wno-error [Δ9]"
           echo "  AVC/SELinux spoof: HARD-DISABLED [Δ11/Δ16/Δ21]"
+          echo "  uname preview: Linux version 4.9.337${BRAND} (${BUILD_USER}@${BUILD_HOST}) #${BUILD_VERSION} SMP PREEMPT"
           echo "========================================"
           echo "KSU  : ${{ inputs.ksu_repo }} @ ${{ inputs.ksu_ref }}"
           echo "SUSFS: ${{ inputs.susfs_repo }} @ ${{ inputs.susfs_ref }}"
@@ -1197,9 +1223,10 @@ jobs:
           export PATH="$GITHUB_WORKSPACE/aosp-clang/bin:$PATH"
           export KBUILD_BUILD_USER="$BUILD_USER"
           export KBUILD_BUILD_HOST="$BUILD_HOST"
-          # [Δ20] Pinned to "1" so every build always reports "#1" in the
-          # uname/version string, regardless of the GitHub Actions run number.
-          export KBUILD_BUILD_VERSION="1"
+          # [Δ22] Wired to build_version dispatch input — no longer hardcoded.
+          # Default is "1" (set in workflow_dispatch.inputs) so existing
+          # dispatch runs with no override preserve prior behaviour.
+          export KBUILD_BUILD_VERSION="$BUILD_VERSION"
           CLANG_BIN="$GITHUB_WORKSPACE/aosp-clang/bin/clang"
           LD_BIN="$GITHUB_WORKSPACE/aosp-clang/bin/ld.lld"
           AR_BIN="$GITHUB_WORKSPACE/aosp-clang/bin/llvm-ar"
