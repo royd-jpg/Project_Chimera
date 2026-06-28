@@ -129,7 +129,21 @@ extern const struct qstr susfs_fake_qstr_name;
  * PATH_MAX includes the nul terminator --RR.
  */
 
-#define EMBEDDED_NAME_MAX	(PATH_MAX - offsetof(struct filename, iname))
+/*
+ * exynos9810: keep embedded filename usercopy away from page end.
+ *
+ * This 4.9 tree lacks kmem_cache_create_usercopy(), and names_cache can be
+ * treated like a generic kmalloc-4096 object by hardened usercopy. Copying
+ * PATH_MAX - offsetof(struct filename, iname) bytes into the embedded ->iname
+ * tail then trips:
+ *
+ *   usercopy: kernel memory overwrite attempt detected to 'kmalloc-4096'
+ *
+ * Keep short names embedded, but force long paths into the existing fallback
+ * path, where the full pathname is copied at the start of the names_cache
+ * allocation instead of near the end of the object.
+ */
+#define EMBEDDED_NAME_MAX	1024
 
 struct filename *
 getname_flags(const char __user *filename, int flags, int *empty)
@@ -2218,6 +2232,15 @@ static int link_path_walk(const char *name, struct nameidata *nd)
 		int type;
 #ifdef CONFIG_KSU_SUSFS_SUS_PATH
 		struct dentry *dentry;
+#endif
+
+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+		struct dentry *dentry = nd->path.dentry;
+		if (dentry->d_inode && susfs_is_inode_sus_path(dentry->d_inode)) {
+			// - No need to dput() here
+			// - return -ENOENT here since it is walking the sub path of sus path
+			return -ENOENT;
+		}
 #endif
 
 		err = may_lookup(nd);
