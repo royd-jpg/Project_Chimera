@@ -1167,7 +1167,7 @@ jobs:
             echo "════════════════════════════════════════════════════════"
           } | tee "$DIAG_LOG"
 
-      # ── 20. Package flashable zip ─────────────────────────────────────────────
+# ── 20. Package flashable zip ─────────────────────────────────────────────
       # [Δ7] All Mk7e references updated to Mk8
       - name: Package flashable zip
         if: '${{ inputs.dry_run == false }}'
@@ -1181,6 +1181,8 @@ jobs:
             "do.modules=0" \
             "do.cleanup=1" \
             "do.cleanuponabort=0" \
+            "do.dtb=0" \
+            "do.dtbo=0" \
             "device.name1=star2lte" \
             "device.name2=SM-G965F" \
             "device.name3=SM-G965U" \
@@ -1199,9 +1201,6 @@ jobs:
             "write_boot;" \
             > AnyKernel3/anykernel.sh
           cp "$OUT_DIR/arch/arm64/boot/Image" AnyKernel3/
-          find "$OUT_DIR/arch/arm64/boot/dts/exynos" -name '*star2lte*.dtb' -exec cp {} AnyKernel3/ \; 2>/dev/null || echo "INFO: no star2lte DTBs found"
-          mkdir -p AnyKernel3/ramdisk/overlay/system/etc/init.d
-          cp "$GITHUB_WORKSPACE/kernel/scripts/chimera_ems_tune.sh" "AnyKernel3/ramdisk/overlay/system/etc/init.d/99chimera_ems" 2>/dev/null || echo "INFO: EMS script not staged — skipping"
           # [Δ7] Zip renamed: mk7e → mk8
           ZIP="chimera-mk8-AOSPClang21.0-$(date +%Y%m%d-%H%M)-r${GITHUB_RUN_NUMBER}.zip"
           ( cd AnyKernel3 && zip -r9 "../$ZIP" . -x '*.git*' )
