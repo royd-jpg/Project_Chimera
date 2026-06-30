@@ -237,7 +237,7 @@ jobs:
           echo "=== Fetching Neutron Clang 19 ==="
           mkdir -p neutron-clang
           cd neutron-clang
-          curl -sSe "https://raw.githubusercontent.com/Neutron-Compilers/neutron-clang/main/antx" | bash
+          curl -sSL "https://raw.githubusercontent.com/Neutron-Compilers/neutron-clang/main/antx" | bash
           cd ..
           test -x neutron-clang/bin/clang \
             || { echo "ERROR: clang binary missing after extract"; exit 1; }
