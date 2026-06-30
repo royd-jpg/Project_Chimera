@@ -1091,6 +1091,26 @@ jobs:
           echo "Brand: ${BRAND}  User: ${BUILD_USER}@${BUILD_HOST}"
           echo "Re-run with dry_run=false to compile and package."
 
+# ──  Fix duplicate dentry decl in namei.c ─────────────────────────────
+      - name: Fix namei.c dentry redefinition (SUSFS/QPR2 merge collision)
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          FILE="fs/namei.c"
+          LINE=2234
+          CONTENT="$(sed -n "${LINE}p" "$FILE")"
+          if [[ "$CONTENT" =~ ^[[:space:]]*struct[[:space:]]+dentry[[:space:]]*\*dentry\;[[:space:]]*$ ]]; then
+            sed -i "${LINE}s|^|// |" "$FILE"
+            echo "OK: commented out redundant bare 'dentry' decl at $FILE:$LINE"
+          else
+            echo "ERROR: $FILE:$LINE content unexpected — refusing to blind-patch"
+            echo "  got: '$CONTENT'"
+            echo "  This likely means the duplicate moved or no longer exists."
+            echo "  Inspect logs/susfs-rejects.log and namei.c manually."
+            exit 1
+          fi
+          sed -n '2230,2242p' "$FILE" | tee -a "../$LOG_DIR/namei-fix.log"
+
       - name: Build kernel
         if: '${{ inputs.dry_run == false }}'
         working-directory: kernel
