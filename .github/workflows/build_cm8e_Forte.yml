@@ -221,22 +221,7 @@ jobs:
             zip unzip zstd lz4 \
             ccache \
             gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
-      # ── 1b. ccache setup ──────────────────────────────────────────────────────
-      # [Δ4] ccache dramatically reduces compile time on incremental CI runs
-      #      (60-80% speedup after first warm run). Cache is keyed per-branch
-      #      so Mk8 builds share a warm cache across runs on chimera-mk8.
-      #      CCACHE_SLOPPINESS is tuned for kernel/Clang: file_stat_matches
-      #      avoids false misses from inode timestamp churn in git checkouts;
-      #      time_macros prevents __DATE__/__TIME__ from busting every TU.
-      - name: Set up ccache
-        uses: hendrikmuhs/ccache-action@v1.2
-        with:
-          key: chimera-mk8-clang21-${{ runner.os }}-${{ github.ref_name }}
-          restore-keys: |
-            chimera-mk8-clang21-${{ runner.os }}-
-          max-size: ${{ env.CCACHE_MAXSIZE }}
-          verbose: 0
-
+            
       # ── 2. AOSP Clang 21 Toolchain ───────────────────────────────────────────
       # [Δ8] Clang r563880c (v21) is retained for the 4.9 BSP.
       #      The QPR2 ROM bump does not change the kernel toolchain requirement;
