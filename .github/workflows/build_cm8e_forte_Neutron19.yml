@@ -294,14 +294,14 @@ jobs:
       #      CCACHE_SLOPPINESS is tuned for kernel/Clang: file_stat_matches
       #      avoids false misses from inode timestamp churn in git checkouts;
       #      time_macros prevents __DATE__/__TIME__ from busting every TU.
-      - name: Set up ccache
-        uses: hendrikmuhs/ccache-action@v1.2
-        with:
-          key: chimera-mk8-clang21-${{ runner.os }}-${{ github.ref_name }}
-          restore-keys: |
-            chimera-mk8-clang21-${{ runner.os }}-
-          max-size: ${{ env.CCACHE_MAXSIZE }}
-          verbose: 0
+      #- name: Set up ccache
+      #  uses: hendrikmuhs/ccache-action@v1.2
+      #  with:
+      #    key: chimera-mk8-clang21-${{ runner.os }}-${{ github.ref_name }}
+      #    restore-keys: |
+      #      chimera-mk8-clang21-${{ runner.os }}-
+      #    max-size: ${{ env.CCACHE_MAXSIZE }}
+      #    verbose: 0
  
       # ── 2. Clang Toolchain — choice-driven, unified into ./toolchain ────────
       # [Δ10] Replaces the hardcoded AOSP Clang 21 download with a selection
