@@ -236,7 +236,7 @@ jobs:
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
       KERNEL_REPO: 'https://github.com/royd-jpg/Project_Chimera'
-      KERNEL_BRANCH: chimera-mk6l
+      KERNEL_BRANCH: chimera-mk8
       # [Δ-MK8e-2] bumped 1.5.5 -> 2.1.0 to match gavdoc38's native SUSFS
       SUSFS_TARGET_VERSION: 2.1.0
       KERNEL_DIR: kernel
