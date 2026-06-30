@@ -176,7 +176,8 @@ jobs:
       KERNEL_DIR: kernel
       OUT_DIR: kernel-out
       LOG_DIR: logs
-      NEUTRON_KEY: neutron-clang-19-ubuntu-24.04-v1
+      NEUTRON_URL: "https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/10032024/neutron-clang-10032024.tar.zst"
+      NEUTRON_KEY: "neutron-clang-10032024-ubuntu-24.04-v1"
       DEFCONFIG: arch/arm64/configs/exynos9810-star2lte_defconfig
       BRAND: '${{ inputs.brand }}'
       BUILD_USER: '${{ inputs.build_user }}'
@@ -219,42 +220,30 @@ jobs:
             git curl wget bc flex bison python3 \
             libssl-dev libelf-dev build-essential \
             zip unzip zstd lz4 \
-            ccache \
             gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
-            
-      # ── 2. Neutron Clang 19 Toolchain ────────────────────────────────────────
-      - name: Cache Neutron Clang 19
+
+      # ── 2. Neutron Clang toolchain ────────────────────────────────────────────
+      - name: Cache Neutron Clang
         id: cache-neutron
         uses: actions/cache@v4
         with:
           path: neutron-clang
           key: ${{ env.NEUTRON_KEY }}
 
-      - name: Download Neutron Clang 19
+      - name: Download Neutron Clang
         if: steps.cache-neutron.outputs.cache-hit != 'true'
         run: |
           set -Eeuo pipefail
-          echo "=== Fetching Neutron Clang 19 ==="
           mkdir -p neutron-clang
-          cd neutron-clang
-          curl -sSL "https://raw.githubusercontent.com/Neutron-Compilers/neutron-clang/main/antx" | bash
-          cd ..
+          echo "Downloading: $NEUTRON_URL" | tee "$LOG_DIR/toolchain.log"
+          wget -qO /tmp/neutron.tar.zst "$NEUTRON_URL"
+          tar -xf /tmp/neutron.tar.zst -C neutron-clang --strip-components=1
           test -x neutron-clang/bin/clang \
             || { echo "ERROR: clang binary missing after extract"; exit 1; }
           neutron-clang/bin/clang --version | tee -a "$LOG_DIR/toolchain.log"
 
-      - name: Export Neutron Clang 19 PATH
-        run: |
-          echo "$GITHUB_WORKSPACE/neutron-clang/bin" >> "$GITHUB_PATH"
-          export PATH="$GITHUB_WORKSPACE/neutron-clang/bin:$PATH"
-          echo "=== Verifying Compiler Binaries ==="
-          clang --version
-          ld.lld --version
-          # [Δ4] Verify ccache can wrap clang successfully
-          ccache --version | head -1
-          ccache clang --version | head -1
-          echo "=== ccache stats (pre-build) ==="
-          ccache --show-stats || true
+      - name: Export toolchain PATH
+        run: echo "$GITHUB_WORKSPACE/neutron-clang/bin" >> "$GITHUB_PATH"
 
       # ── 3. Clone kernel tree ──────────────────────────────────────────────────
       # [Δ1] Cloning chimera-mk8 branch (QPR2 merge result of chimera-mk6l +
