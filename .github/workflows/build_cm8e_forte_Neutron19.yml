@@ -1092,7 +1092,7 @@ jobs:
             OBJCOPY=llvm-objcopy
             OBJDUMP=llvm-objdump
             STRIP=llvm-strip
-            KCFLAGS="-fcommon -Wno-implicit-function-declaration -Wno-implicit-int -Wno-return-type"
+            KCFLAGS="-fcommon -Wno-implicit-function-declaration -Wno-implicit-int -Wno-return-type -fno-strict-aliasing -Wno-error"
             LOCALVERSION="$BRAND"
             KBUILD_BUILD_USER="$BUILD_USER"
             KBUILD_BUILD_HOST="$BUILD_HOST"
