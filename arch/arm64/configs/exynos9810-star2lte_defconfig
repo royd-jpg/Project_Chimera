@@ -1,4 +1,3 @@
-CONFIG_LOCALVERSION="-4.9.337-CM6P"
 CONFIG_POSIX_MQUEUE=y
 # CONFIG_FHANDLE is not set
 CONFIG_AUDIT=y
@@ -350,6 +349,18 @@ CONFIG_SPI=y
 CONFIG_SPI_BITBANG=y
 CONFIG_SENSORS_FP_SPI_NUMBER=1
 CONFIG_SPI_S3C64XX=y
+# Madera (Cirrus Logic cs47l9x) codec MFD core + SPI bus glue + GPIO child.
+# Required for the cs47l93 speaker amp/codec on this board (spi@10470000/
+# cs47l93@0 in the device tree) -- without these, madera-spi.c and
+# madera-core.c are not compiled in at all, so the SPI core has no driver
+# to bind the device to and the codec never probes (silent speaker, no
+# Madera strings anywhere in dmesg).
+CONFIG_MFD_MADERA=y
+CONFIG_MFD_MADERA_SPI=y
+CONFIG_MFD_CS47L92=y
+CONFIG_PINCTRL_MADERA=y
+CONFIG_GPIO_MADERA=y
+CONFIG_MFD_CS47L92_GPIO=y
 CONFIG_SPI_SPIDEV=y
 CONFIG_GPIOLIB=y
 CONFIG_GPIO_SYSFS=y
