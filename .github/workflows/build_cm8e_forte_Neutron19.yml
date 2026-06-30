@@ -1319,24 +1319,20 @@ jobs:
             O="$GITHUB_WORKSPACE/$OUT_DIR"
             ARCH=arm64
             SUBARCH=arm64
-            LLVM=1
-            LLVM_IAS=0
-            CC="$CLANG_BIN"
-            HOSTCC=gcc
-            HOSTCXX=g++
+            CC=clang
             CLANG_TRIPLE=aarch64-linux-gnu-
             CROSS_COMPILE=aarch64-linux-gnu-
             CROSS_COMPILE_ARM32=arm-linux-gnueabi-
-            LD="$LD_BIN"
-            AR="$AR_BIN"
-            NM="$NM_BIN"
-            OBJCOPY="$OBJCOPY_BIN"
-            OBJDUMP="$OBJDUMP_BIN"
-            STRIP="$STRIP_BIN"
+            LD="$GITHUB_WORKSPACE/neutron-clang/bin/ld.lld"
+            AR=llvm-ar
+            NM=llvm-nm
+            OBJCOPY=llvm-objcopy
+            OBJDUMP=llvm-objdump
+            STRIP=llvm-strip
+            KCFLAGS="-fcommon -Wno-implicit-function-declaration -Wno-implicit-int -Wno-return-type"
             LOCALVERSION="$BRAND"
             KBUILD_BUILD_USER="$BUILD_USER"
             KBUILD_BUILD_HOST="$BUILD_HOST"
-            KCFLAGS="-O2 -fcommon -fno-strict-aliasing -Wno-error"
           )
           echo "=== Applying defconfig ==="
           "${MAKE[@]}" exynos9810-star2lte_defconfig
