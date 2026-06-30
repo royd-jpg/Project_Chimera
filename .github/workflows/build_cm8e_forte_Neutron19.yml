@@ -904,14 +904,11 @@ jobs:
 
           int chimera_silent_mode = 1;
 
-          static int chimera_should_silence(int level)
+          static __maybe_unused int chimera_should_silence(int level)
           {
               if (!chimera_silent_mode)
                   return 0;
-
-              /* printk levels:
-               * 0 EMERG, 1 ALERT, 2 CRIT, 3 ERR, 4 WARNING
-               */
+          
               return level > 4;
           }
 
