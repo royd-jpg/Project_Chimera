@@ -7452,6 +7452,7 @@
 		phandle = <630>;
 
 		cs47l93@0 {
+			status = "okay"; 
 			compatible = "cirrus,cs47l93";
 			reg = <0>;
 			spi-max-frequency = <25000000>;
