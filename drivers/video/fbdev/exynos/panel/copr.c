@@ -729,8 +729,19 @@ int copr_disable(struct copr_info *copr)
 		props->state = COPR_UNINITIALIZED;
 	}
 	mutex_unlock(&copr->lock);
-	if (set_spi_gpios(panel, 0))
-		panel_err("%s:failed to set spio gpio\n", __func__);
+
+    /* * CHIMERA PATCH: 
+     * Commented out to prevent SPI bus power-gating.
+     * This keeps the SPI bus alive for the Madera Audio Codec
+     * even when the display panel is entering sleep mode.
+     */
+	// if (set_spi_gpios(panel, 0))
+	// 	panel_err("%s:failed to set spio gpio\n", __func__);
+        
+	pr_info("%s -\n", __func__);
+
+	return 0;
+}
 	pr_info("%s -\n", __func__);
 
 	return 0;
