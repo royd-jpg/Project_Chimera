@@ -19,6 +19,8 @@
 
 #include "madera.h"
 
+#include <linux/pm_runtime.h>  /* * CHIMERA PATCH: Runtime management logic for Madera Audio Codec. */
+
 static int madera_spi_probe(struct spi_device *spi)
 {
 	const struct spi_device_id *id = spi_get_device_id(spi);
@@ -98,6 +100,13 @@ static int madera_spi_probe(struct spi_device *spi)
 	madera->dev = &spi->dev;
 	madera->irq = spi->irq;
 
+/* * CHIMERA PATCH: Prevent Runtime Suspend.
+	 * Disables autosuspend so the SPI bus stays active 
+	 * for the Madera Audio Codec.
+	 */
+	pm_runtime_set_active(&spi->dev);
+	pm_runtime_forbid(&spi->dev);
+	
 	return madera_dev_init(madera);
 }
 
