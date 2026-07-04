@@ -100,7 +100,7 @@ name: >-
         description: 'KBUILD_BUILD_TIMESTAMP — The date/time for the version string (static)'
         required: false
         type: string
-        default: 'Mon 1 Jan 00:00:00 UTC 2026'
+        default: 'Mon Jan 1 00:00:00 UTC 2026'
 permissions:
   contents: write
 jobs:
