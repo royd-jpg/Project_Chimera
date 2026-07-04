@@ -5073,7 +5073,7 @@
 		gpu_dvfs_bl_config_clock = <260000>;
 		gpu_default_voltage = <800000>;
 		gpu_cold_minimum_vol = <0>;
-		gpu_voltage_offset_margin = <37500>;
+		gpu_voltage_offset_margin = <12500>;
 		gpu_tmu_control = <1>;
 		gpu_temp_throttling_level_num = <6>;
 		gpu_temp_throttling = <572000 546000 455000 338000 260000 260000>;
@@ -8736,7 +8736,7 @@
 				BUCK2 {
 					regulator-name = "vdd_cpucl1";
 					regulator-min-microvolt = <450000>;
-					regulator-max-microvolt = <1275000>;
+					regulator-max-microvolt = <1250000>;
 					regulator-always-on;
 					regulator-ramp-delay = <6000>;
 					regulator-initial-mode = <1>;
@@ -8747,7 +8747,7 @@
 				BUCK3 {
 					regulator-name = "vdd_cpucl0";
 					regulator-min-microvolt = <450000>;
-					regulator-max-microvolt = <1275000>;
+					regulator-max-microvolt = <1250000>;
 					regulator-always-on;
 					regulator-ramp-delay = <6000>;
 					regulator-initial-mode = <1>;
@@ -8791,7 +8791,7 @@
 				BUCK7 {
 					regulator-name = "vdd_cpucl1_m";
 					regulator-min-microvolt = <450000>;
-					regulator-max-microvolt = <1275000>;
+					regulator-max-microvolt = <1250000>;
 					regulator-always-on;
 					regulator-ramp-delay = <6000>;
 					regulator-initial-mode = <1>;
@@ -8802,7 +8802,7 @@
 				BUCK8 {
 					regulator-name = "vdd2_mem";
 					regulator-min-microvolt = <900000>;
-					regulator-max-microvolt = <1275000>;
+					regulator-max-microvolt = <1250000>;
 					regulator-always-on;
 					regulator-ramp-delay = <6000>;
 					regulator-initial-mode = <3>;
@@ -8835,7 +8835,7 @@
 				BUCK11 {
 					regulator-name = "vdd_lldo2";
 					regulator-min-microvolt = <900000>;
-					regulator-max-microvolt = <1275000>;
+					regulator-max-microvolt = <1250000>;
 					regulator-always-on;
 					regulator-ramp-delay = <6000>;
 					regulator-initial-mode = <3>;
@@ -8943,7 +8943,7 @@
 				LDO8 {
 					regulator-name = "vdd_ldo8";
 					regulator-min-microvolt = <700000>;
-					regulator-max-microvolt = <1275000>;
+					regulator-max-microvolt = <1250000>;
 					regulator-always-on;
 					regulator-ramp-delay = <12000>;
 					regulator-initial-mode = <1>;
