@@ -220,7 +220,7 @@ jobs:
           set -Eeuo pipefail
           sudo apt-get update -qq
           sudo apt-get install -yqq \
-            git curl wget bc flex bison python3 \
+            git curl wget aria2 bc flex bison python3 \
             libssl-dev libelf-dev build-essential \
             zip unzip zstd xz-utils lz4 jq \
             ccache \
@@ -389,7 +389,9 @@ jobs:
           echo "=== Fetching $TC_LABEL ==="
           mkdir -p "$TC_DIR"
           ARCHIVE="$TC_DIR/$TC_ARCHIVE_NAME"
-          wget -q -O "$ARCHIVE" "$TC_URL"
+          
+          aria2c -x 16 -s 16 -k 1M --console-log-level=warn -d "$TC_DIR" -o "$TC_ARCHIVE_NAME" "$TC_URL"
+          
           test -s "$ARCHIVE" || { echo "ERROR: downloaded archive is empty: $ARCHIVE"; exit 1; }
 
           case "$TC_ARCHIVE_FMT" in
