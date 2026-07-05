@@ -2372,6 +2372,47 @@ SYSCALL_DEFINE5(prctl, int, option, unsigned long, arg2, unsigned long, arg3,
 		return error;
 
 	error = 0;
+
+#ifdef CONFIG_KSU_SUSFS
+
+        if ((unsigned long)option >= 0x53555300UL &&
+
+            (unsigned long)option <= 0x535553ffUL) {
+
+                extern int ksu_susfs_handle_prctl(
+
+                        unsigned long,
+
+                        unsigned long,
+
+                        unsigned long,
+
+                        unsigned long,
+
+                        unsigned long);
+
+                int __r;
+
+                __r = ksu_susfs_handle_prctl(
+
+                        (unsigned long)option,
+
+                        (unsigned long)arg2,
+
+                        (unsigned long)arg3,
+
+                        (unsigned long)arg4,
+
+                        (unsigned long)arg5);
+
+                if (__r != -EINVAL)
+
+                        return (long)__r;
+
+        }
+
+#endif
+
 	switch (option) {
 	case PR_SET_PDEATHSIG:
 		if (!valid_signal(arg2)) {
