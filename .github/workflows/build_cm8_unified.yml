@@ -403,25 +403,28 @@ jobs:
           rm -f "$ARCHIVE"
 
           # Flatten one level if the archive extracted into a versioned subdirectory
-          # rather than directly into $TC_DIR (AOSP tarballs sometimes do this).
-          if [[ ! -x "$TC_DIR/bin/clang" ]]; then
-            if [[ -n "$TC_FLAT_ROOT_HINT" && -x "$TC_DIR/$TC_FLAT_ROOT_HINT/bin/clang" ]]; then
-              mv "$TC_DIR/$TC_FLAT_ROOT_HINT"/* "$TC_DIR/"
-              rmdir "$TC_DIR/$TC_FLAT_ROOT_HINT"
-            else
-              # Generic fallback: find the single subdir containing bin/clang
-              CAND="$(find "$TC_DIR" -mindepth 2 -maxdepth 3 -type f -name clang -path '*/bin/clang' | head -1)"
-              if [[ -n "$CAND" ]]; then
-                SRC_ROOT="$(dirname "$(dirname "$CAND")")"
-                if [[ "$SRC_ROOT" != "$TC_DIR" ]]; then
-                  shopt -s dotglob
-                  mv "$SRC_ROOT"/* "$TC_DIR/"
-                  shopt -u dotglob
+            # rather than directly into $TC_DIR (AOSP tarballs sometimes do this).
+            if [[ ! -x "$TC_DIR/bin/clang" ]]; then
+              if [[ -n "$TC_FLAT_ROOT_HINT" && -x "$TC_DIR/$TC_FLAT_ROOT_HINT/bin/clang" ]]; then
+                shopt -s dotglob
+                mv "$TC_DIR/$TC_FLAT_ROOT_HINT"/* "$TC_DIR/"
+                shopt -u dotglob
+                rm -rf "$TC_DIR/$TC_FLAT_ROOT_HINT"
+              else
+                # Generic fallback: find the single subdir containing bin/clang
+                CAND="$(find "$TC_DIR" -mindepth 2 -maxdepth 3 -type f -name clang -path '*/bin/clang' | head -1)"
+                if [[ -n "$CAND" ]]; then
+                  SRC_ROOT="$(dirname "$(dirname "$CAND")")"
+                  if [[ "$SRC_ROOT" != "$TC_DIR" ]]; then
+                    shopt -s dotglob
+                    mv "$SRC_ROOT"/* "$TC_DIR/"
+                    shopt -u dotglob
+                    rm -rf "$SRC_ROOT"
+                  fi
                 fi
               fi
             fi
-          fi
-
+            
           test -x "$TC_DIR/bin/clang" \
             || { echo "ERROR: clang binary missing after extract — archive layout unrecognized"; find "$TC_DIR" -maxdepth 3 | head -40; exit 1; }
           "$TC_DIR/bin/clang" --version | tee -a "$LOG_DIR/toolchain.log"
