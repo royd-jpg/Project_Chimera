@@ -2,7 +2,7 @@
 # Project Chimera Mk8 UNIFIED — LOS/AOSP Android 16 QPR2 / Exynos 9810 (star2lte)
 # ───────────────────────────────────────────────────────────────────────────────
 # Base       : royd-jpg/Project_Chimera @ chimera-mk8
-# KSU        : gavdoc38/KernelSU-Next @ f9b271d (default; overridable)
+# KSU        : gavdoc38/KernelSU-Next @ a846bdf7 (default; overridable)
 # SUSFS      : simonpunk/susfs4ksu @ kernel-4.9 · v2.1.0
 # Toolchains : AOSP Clang 19 / 20 / 21, Neutron Clang, ZyCromerZ Clang (selectable)
 # Profiles   : cm8 (runtime SUSFS spoofing) / cm8e (compile-time identity, spoof OFF)
@@ -91,7 +91,7 @@ on:
         description: "KernelSU exact commit SHA (gavdoc38 Exynos-optimized pin; leave blank to track ksu_ref tip instead)"
         required: false
         type: string
-        default: "f9b271d610c56f8037ed1a8839f29ccbd93ef0c7"
+        default: "a846bdf7ee69eb0a81d51edd354737ae22f30b03"
 
       susfs_repo:
         description: "SUSFS git URL (https only)"
@@ -623,7 +623,26 @@ jobs:
             > /tmp/fix_syscall_fn_t.py
           python3 /tmp/fix_syscall_fn_t.py
 
-      # ── 3e. Preflight: detect pre-integrated KSU/SUSFS ────────────────────────
+      # ── 3e-pre. Guard sus_memfd in supercall.c ─────────────────────────────
+      # a846bdf7 (tip of gavdoc38/ksun-susfs-legacy) supercall.c unconditionally
+      # references CMD_SUSFS_ADD_SUS_MEMFD. We exclude sus_memfd (experimental,
+      # untested on Samsung 4.9 shmem.c) and force-disable it in defconfig.
+      # This step wraps the call site in #ifdef so it compiles cleanly. Idempotent.
+      - name: Guard sus_memfd in supercall.c (excluded feature stub-out)
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          SUPERCALL="KernelSU-Next/kernel/supercall/supercall.c"
+          if [[ ! -f "$SUPERCALL" ]]; then
+            echo "INFO: $SUPERCALL not found — skipping"; exit 0
+          fi
+          if ! grep -q 'CMD_SUSFS_ADD_SUS_MEMFD' "$SUPERCALL"; then
+            echo "INFO: CMD_SUSFS_ADD_SUS_MEMFD not present — no guard needed"; exit 0
+          fi
+          echo "ZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCmltcG9ydCByZQpwID0gUGF0aCgiS2VybmVsU1UtTmV4dC9rZXJuZWwvc3VwZXJjYWxsL3N1cGVyY2FsbC5jIikKYyA9IHAucmVhZF90ZXh0KCkKaWYgIiNpZmRlZiBDT05GSUdfS1NVX1NVU0ZTX1NVU19NRU1GRCIgaW4gYzoKICAgIHByaW50KCJPSzogc3VzX21lbWZkIGd1YXJkIGFscmVhZHkgcHJlc2VudCAoaWRlbXBvdGVudCkiKTsgcmFpc2UgU3lzdGVtRXhpdCgwKQpwYXQgPSByZS5jb21waWxlKHInKFxuWyBcdF0qaWZccypcKFxzKmNtZFxzKj09XHMqQ01EX1NVU0ZTX0FERF9TVVNfTUVNRkRccypcKVxzKlx7W159XSpcfSknLCByZS5ET1RBTEwpCm0gPSBwYXQuc2VhcmNoKGMpCmlmIG06CiAgICBibGsgPSBtLmdyb3VwKDEpCiAgICBnID0gIlxuI2lmZGVmIENPTkZJR19LU1VfU1VTRlNfU1VTX01FTUZEIiArIGJsayArICJcbiNlbmRpZiAvKiBDT05GSUdfS1NVX1NVU0ZTX1NVU19NRU1GRCAqLyIKICAgIHAud3JpdGVfdGV4dChjWzptLnN0YXJ0KCldICsgZyArIGNbbS5lbmQoKTpdKTsgcHJpbnQoIk9LOiB3cmFwcGVkIENNRF9TVVNGU19BRERfU1VTX01FTUZEIGluICNpZmRlZiIpCmVsc2U6CiAgICBsaW5lcyA9IFsiLy8gW2NoaW1lcmEtbWs4OiBzdXNfbWVtZmQgZXhjbHVkZWRdICIgKyBsIGlmICJDTURfU1VTRlNfQUREX1NVU19NRU1GRCIgaW4gbCBvciAic3VzZnNfYWRkX3N1c19tZW1mZCIgaW4gbCBlbHNlIGwgZm9yIGwgaW4gYy5zcGxpdGxpbmVzKGtlZXBlbmRzPVRydWUpXQogICAgcC53cml0ZV90ZXh0KCIiLmpvaW4obGluZXMpKTsgcHJpbnQoIldBUk46IGxpbmUtY29tbWVudCBmYWxsYmFjayBhcHBsaWVkIikK" | base64 -d > /tmp/guard_sus_memfd.py
+          python3 /tmp/guard_sus_memfd.py
+
+            # ── 3e. Preflight: detect pre-integrated KSU/SUSFS ────────────────────────
       - name: Preflight tree state
         working-directory: kernel
         run: |
@@ -1074,6 +1093,8 @@ jobs:
           # ─── SUSFS BASE (spoof block is profile-specific — next step) ─────────
           set_cfg CONFIG_KSU_SUSFS y
           set_cfg CONFIG_KSU_SUSFS_TRY_UMOUNT y
+          # sus_memfd excluded: experimental, untested on Samsung 4.9 shmem.c
+          unset_cfg CONFIG_KSU_SUSFS_SUS_MEMFD
 
           if probe_kconfig CONFIG_KSU_SUSFS_SUS_MAP; then
             set_cfg CONFIG_KSU_SUSFS_SUS_MAP y
