@@ -287,12 +287,12 @@ jobs:
               ;;
 
             aosp20)
-              echo "TC_LABEL=korg Clang 20.1.8"                                      >> "$GITHUB_ENV"
-              echo "TC_URL=https://mirrors.edge.kernel.org/pub/tools/llvm/files/llvm-20.1.8-x86_64.tar.xz" >> "$GITHUB_ENV"
-              echo "TC_ARCHIVE_FMT=tar.xz"                                           >> "$GITHUB_ENV"
-              echo "TC_ARCHIVE_NAME=llvm-20.1.8-x86_64.tar.xz"                       >> "$GITHUB_ENV"
-              echo "TC_CACHE_KEY=korg-clang-20.1.8-ubuntu-24.04-v1-susfs220"                  >> "$GITHUB_ENV"
-              echo "TC_FLAT_ROOT_HINT=llvm-20.1.8-x86_64"                            >> "$GITHUB_ENV"
+              echo "TC_LABEL=AOSP Clang 20 r547379"                                      >> "$GITHUB_ENV"
+              echo "TC_URL=https://android.googlesource.com/platform/prebuilts/clang/host/darwin-x86/+/cbdf83f3e2b5728930d70ef0442c484f75165ff1/clang-r547379.tar.gz" >> "$GITHUB_ENV"
+              echo "TC_ARCHIVE_FMT=tar.gz"                                           >> "$GITHUB_ENV"
+              echo "TC_ARCHIVE_NAME=clang-r547379.tar.gz"                       >> "$GITHUB_ENV"
+              echo "TC_CACHE_KEY=aosp-clang-r547379-ubuntu-24.04-v1"                  >> "$GITHUB_ENV"
+              echo "TC_FLAT_ROOT_HINT=clang-r547379"                            >> "$GITHUB_ENV"
               echo "TC_USE_FULL_LLVM=true"                                           >> "$GITHUB_ENV"
               echo "TC_LLVM_IAS=0"                                                   >> "$GITHUB_ENV"
               echo "TC_DYNAMIC_RESOLVE=false"                                        >> "$GITHUB_ENV"
