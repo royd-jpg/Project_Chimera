@@ -190,7 +190,7 @@ jobs:
             *) echo "ERROR: unknown profile '$PROFILE'"; exit 1 ;;
           esac
           case "$TOOLCHAIN" in
-            aosp19|aosp20|aosp21|neutron19|zyc_stable) ;;
+            aosp19|aosp20|aosp21|aosp22|neutron19|zyc_stable) ;;
             *) echo "ERROR: unknown toolchain '$TOOLCHAIN'"; exit 1 ;;
           esac
 
