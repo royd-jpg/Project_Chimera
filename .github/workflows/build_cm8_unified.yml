@@ -57,7 +57,7 @@ on:
         description: "Compiler toolchain"
         required: true
         type: choice
-        options: [aosp19, aosp20, aosp21, neutron19, zyc_stable]
+        options: [aosp19, aosp20, aosp21, aosp22, neutron19, zyc_stable]
         default: aosp21
 
       # ── Existing controls ────────────────────────────────────────────────────
@@ -91,7 +91,7 @@ on:
         description: "KernelSU exact commit SHA (gavdoc38 Exynos-optimized pin; leave blank to track ksu_ref tip instead)"
         required: false
         type: string
-        default: "a846bdf7ee69eb0a81d51edd354737ae22f30b03"
+        default: "0ce4f57bdbc83eca4d7c6874850930ceb634a32a"
 
       susfs_repo:
         description: "SUSFS git URL (https only)"
@@ -309,7 +309,19 @@ jobs:
               echo "TC_LLVM_IAS=0"                                                   >> "$GITHUB_ENV"
               echo "TC_DYNAMIC_RESOLVE=false"                                        >> "$GITHUB_ENV"
               ;;
-
+              
+            aosp22)
+              echo "TC_LABEL=AOSP Clang 22.0 r596125 (Build ID: 15071444)"                               >> "$GITHUB_ENV"
+              echo "TC_URL=https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/mirror-goog-main-llvm-toolchain-source/clang-r596125.tar.gz" >> "$GITHUB_ENV"
+              echo "TC_ARCHIVE_FMT=tar.gz"                                           >> "$GITHUB_ENV"
+              echo "TC_ARCHIVE_NAME=clang-r596125.tar.gz"                           >> "$GITHUB_ENV"
+              echo "TC_CACHE_KEY=aosp-clang-r596125-ubuntu-24.04-v2-susfs220"                >> "$GITHUB_ENV"
+              echo "TC_FLAT_ROOT_HINT=clang-r596125"                                >> "$GITHUB_ENV"
+              echo "TC_USE_FULL_LLVM=true"                                           >> "$GITHUB_ENV"
+              echo "TC_LLVM_IAS=0"                                                   >> "$GITHUB_ENV"
+              echo "TC_DYNAMIC_RESOLVE=false"                                        >> "$GITHUB_ENV"
+              ;;
+              
             neutron19)
               echo "TC_LABEL=Neutron Clang (10032024 catalogue build)"               >> "$GITHUB_ENV"
               echo "TC_URL=https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/10032024/neutron-clang-10032024.tar.zst" >> "$GITHUB_ENV"
