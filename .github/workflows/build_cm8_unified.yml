@@ -1689,7 +1689,7 @@ jobs:
 
           echo "=== Building Image + DTBs ==="
           set -o pipefail
-"${MAKE[@]}" Image dtbs 2>&1 | tee build.log
+          "${MAKE[@]}" Image dtbs 2>&1 | tee build.log
 
           IMAGE="$GITHUB_WORKSPACE/$OUT_DIR/arch/arm64/boot/Image"
           test -f "$IMAGE" || { echo "ERROR: Image not produced — check build.log"; exit 1; }
