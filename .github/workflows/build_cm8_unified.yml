@@ -359,11 +359,7 @@ jobs:
           echo "TC_DIR=toolchain" >> "$GITHUB_ENV"
           echo "OK: toolchain configuration resolved for '$TOOLCHAIN'"
 
-    # ── 2b. Dynamic resolution for rolling-release toolchains (ZyC only) ──────
-      # If a custom URL is provided via workflow dispatch, we bypass the API
-      # and inject the manual tarball directly into the pipeline. Otherwise,
-      # we pull the newest published release via the GitHub Releases API.
-      # This keeps the workflow honest while preserving emergency override capability.
+# ── 2b. Dynamic resolution for rolling-release toolchains (ZyC only) ──────
       - name: Resolve ZyCromerZ release (Dynamic or Custom)
         if: ${{ env.TC_DYNAMIC_RESOLVE == 'true' }}
         run: |
@@ -393,6 +389,10 @@ jobs:
           echo "TC_URL=$ASSET_URL"                          >> "$GITHUB_ENV"
           echo "TC_ARCHIVE_NAME=$ASSET_NAME"                >> "$GITHUB_ENV"
           echo "TC_LABEL=ZyCromerZ Clang ($TAG)"            >> "$GITHUB_ENV"
+          
+          # [FIX INJECTED HERE] Combine the matrix prefix with the resolved tag to force a cache miss on new releases
+          echo "TC_CACHE_KEY=${TC_CACHE_KEY_PREFIX}-${TAG}" >> "$GITHUB_ENV"
+          
           {
             echo "ZYC_RESOLVED_TAG=$TAG"
             echo "ZYC_RESOLVED_URL=$ASSET_URL"
