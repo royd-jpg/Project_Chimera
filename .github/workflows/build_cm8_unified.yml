@@ -359,7 +359,7 @@ jobs:
           echo "TC_DIR=toolchain" >> "$GITHUB_ENV"
           echo "OK: toolchain configuration resolved for '$TOOLCHAIN'"
 
-# ── 2b. Dynamic resolution for rolling-release toolchains (ZyC only) ──────
+    # ── 2b. Dynamic resolution for rolling-release toolchains (ZyC only) ──────
       - name: Resolve ZyCromerZ release (Dynamic or Custom)
         if: ${{ env.TC_DYNAMIC_RESOLVE == 'true' }}
         run: |
@@ -371,27 +371,41 @@ jobs:
             echo ">> Override active: Resolving custom ZyCromerZ tarball..."
             ASSET_URL="$CUSTOM_URL"
             ASSET_NAME="${ASSET_URL##*/}"
-            TAG="custom-override"
+            
+            # Generate a short fingerprint of the URL so changes create a new cache
+            URL_FINGERPRINT="$(echo -n "$CUSTOM_URL" | md5sum | awk '{print $1}' | cut -c1-8)"
+            TAG="custom-${URL_FINGERPRINT}"
             
             [[ -n "$ASSET_NAME" ]] || { echo "ERROR: could not parse filename from URL"; exit 1; }
           else
             echo ">> Standard protocol: Resolving latest ZyCromerZ release via API..."
             API="https://api.github.com/repos/ZyCromerZ/Clang/releases/latest"
             RESP="$(curl -fsSL -H "Accept: application/vnd.github+json" "$API")"
-            TAG="$(echo "$RESP" | jq -r '.tag_name')"
+            
+            RAW_TAG="$(echo "$RESP" | jq -r '.tag_name')"
             ASSET_URL="$(echo "$RESP" | jq -r '[.assets[] | select(.name | endswith(".tar.gz"))][0].browser_download_url')"
             ASSET_NAME="$(echo "$RESP" | jq -r '[.assets[] | select(.name | endswith(".tar.gz"))][0].name')"
             
-            [[ -n "$TAG" && "$TAG" != "null" ]]             || { echo "ERROR: could not resolve ZyC latest tag"; exit 1; }
+            # GRAB THE UNIQUE ASSET ID to defeat rolling tags
+            ASSET_ID="$(echo "$RESP" | jq -r '[.assets[] | select(.name | endswith(".tar.gz"))][0].id')"
+            
+            [[ -n "$RAW_TAG" && "$RAW_TAG" != "null" ]]     || { echo "ERROR: could not resolve ZyC latest tag"; exit 1; }
             [[ -n "$ASSET_URL" && "$ASSET_URL" != "null" ]] || { echo "ERROR: could not resolve ZyC .tar.gz asset URL"; exit 1; }
+            [[ -n "$ASSET_ID" && "$ASSET_ID" != "null" ]]   || { echo "ERROR: could not resolve ZyC asset ID"; exit 1; }
+            
+            # Combine the tag name with the exact unique upload ID
+            TAG="${RAW_TAG}-id${ASSET_ID}"
           fi
           
           echo "TC_URL=$ASSET_URL"                          >> "$GITHUB_ENV"
           echo "TC_ARCHIVE_NAME=$ASSET_NAME"                >> "$GITHUB_ENV"
           echo "TC_LABEL=ZyCromerZ Clang ($TAG)"            >> "$GITHUB_ENV"
           
-          # [FIX INJECTED HERE] Combine the matrix prefix with the resolved tag to force a cache miss on new releases
+          # 1. Fix the GitHub Action Toolchain Cache (Warehouse)
           echo "TC_CACHE_KEY=${TC_CACHE_KEY_PREFIX}-${TAG}" >> "$GITHUB_ENV"
+          
+          # 2. Fix ccache (forces Assembly Line to see the compiler as brand new)
+          echo "CCACHE_COMPILERCHECK=string:${TAG}"         >> "$GITHUB_ENV"
           
           {
             echo "ZYC_RESOLVED_TAG=$TAG"
