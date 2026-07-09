@@ -392,7 +392,6 @@ jobs:
           
           echo "TC_URL=$ASSET_URL"                          >> "$GITHUB_ENV"
           echo "TC_ARCHIVE_NAME=$ASSET_NAME"                >> "$GITHUB_ENV"
-          echo "TC_CACHE_KEY=${TC_CACHE_KEY_PREFIX}-${TAG}" >> "$GITHUB_ENV"
           echo "TC_LABEL=ZyCromerZ Clang ($TAG)"            >> "$GITHUB_ENV"
           {
             echo "ZYC_RESOLVED_TAG=$TAG"
