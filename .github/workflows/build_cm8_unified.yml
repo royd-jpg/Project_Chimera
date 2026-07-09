@@ -59,7 +59,11 @@ on:
         type: choice
         options: [aosp19, aosp20, aosp21, aosp22, neutron19, zyc_stable]
         default: aosp21
-
+      zycromerz_url:
+        description: 'Custom ZyCromerZ Tarball URL (Leave blank for default)'
+        required: false
+        type: string
+        default: ''
       # ── Existing controls ────────────────────────────────────────────────────
       dry_run:
         description: "Validate only — skip build and package"
@@ -355,33 +359,46 @@ jobs:
           echo "TC_DIR=toolchain" >> "$GITHUB_ENV"
           echo "OK: toolchain configuration resolved for '$TOOLCHAIN'"
 
-      # ── 2b. Dynamic resolution for rolling-release toolchains (ZyC only) ──────
-      # ZyCromerZ/Clang has no fixed "stable" tag — releases are dated snapshots
-      # per LLVM major version. We pull the newest published release via the
-      # GitHub Releases API and take its first .tar.gz asset. This keeps the
-      # workflow honest (no stale hardcoded snapshot) at the cost of the build
-      # not being byte-for-byte reproducible run-to-run — acceptable for a
-      # "stable" floating channel; use aosp19/20/21/neutron19 if you need a
-      # pinned, reproducible toolchain.
-      - name: Resolve ZyCromerZ latest release
+    # ── 2b. Dynamic resolution for rolling-release toolchains (ZyC only) ──────
+      # If a custom URL is provided via workflow dispatch, we bypass the API
+      # and inject the manual tarball directly into the pipeline. Otherwise,
+      # we pull the newest published release via the GitHub Releases API.
+      # This keeps the workflow honest while preserving emergency override capability.
+      - name: Resolve ZyCromerZ release (Dynamic or Custom)
         if: ${{ env.TC_DYNAMIC_RESOLVE == 'true' }}
         run: |
           set -Eeuo pipefail
-          API="https://api.github.com/repos/ZyCromerZ/Clang/releases/latest"
-          RESP="$(curl -fsSL -H "Accept: application/vnd.github+json" "$API")"
-          TAG="$(echo "$RESP" | jq -r '.tag_name')"
-          ASSET_URL="$(echo "$RESP" | jq -r '[.assets[] | select(.name | endswith(".tar.gz"))][0].browser_download_url')"
-          ASSET_NAME="$(echo "$RESP" | jq -r '[.assets[] | select(.name | endswith(".tar.gz"))][0].name')"
-          [[ -n "$TAG" && "$TAG" != "null" ]]             || { echo "ERROR: could not resolve ZyC latest tag"; exit 1; }
-          [[ -n "$ASSET_URL" && "$ASSET_URL" != "null" ]] || { echo "ERROR: could not resolve ZyC .tar.gz asset URL"; exit 1; }
-          echo "TC_URL=$ASSET_URL"                       >> "$GITHUB_ENV"
-          echo "TC_ARCHIVE_NAME=$ASSET_NAME"              >> "$GITHUB_ENV"
+          
+          CUSTOM_URL="${{ inputs.zycromerz_url }}"
+          
+          if [[ -n "$CUSTOM_URL" ]]; then
+            echo ">> Override active: Resolving custom ZyCromerZ tarball..."
+            ASSET_URL="$CUSTOM_URL"
+            ASSET_NAME="${ASSET_URL##*/}"
+            TAG="custom-override"
+            
+            [[ -n "$ASSET_NAME" ]] || { echo "ERROR: could not parse filename from URL"; exit 1; }
+          else
+            echo ">> Standard protocol: Resolving latest ZyCromerZ release via API..."
+            API="https://api.github.com/repos/ZyCromerZ/Clang/releases/latest"
+            RESP="$(curl -fsSL -H "Accept: application/vnd.github+json" "$API")"
+            TAG="$(echo "$RESP" | jq -r '.tag_name')"
+            ASSET_URL="$(echo "$RESP" | jq -r '[.assets[] | select(.name | endswith(".tar.gz"))][0].browser_download_url')"
+            ASSET_NAME="$(echo "$RESP" | jq -r '[.assets[] | select(.name | endswith(".tar.gz"))][0].name')"
+            
+            [[ -n "$TAG" && "$TAG" != "null" ]]             || { echo "ERROR: could not resolve ZyC latest tag"; exit 1; }
+            [[ -n "$ASSET_URL" && "$ASSET_URL" != "null" ]] || { echo "ERROR: could not resolve ZyC .tar.gz asset URL"; exit 1; }
+          fi
+          
+          echo "TC_URL=$ASSET_URL"                          >> "$GITHUB_ENV"
+          echo "TC_ARCHIVE_NAME=$ASSET_NAME"                >> "$GITHUB_ENV"
           echo "TC_CACHE_KEY=${TC_CACHE_KEY_PREFIX}-${TAG}" >> "$GITHUB_ENV"
-          echo "TC_LABEL=ZyCromerZ Clang ($TAG)"          >> "$GITHUB_ENV"
+          echo "TC_LABEL=ZyCromerZ Clang ($TAG)"            >> "$GITHUB_ENV"
           {
             echo "ZYC_RESOLVED_TAG=$TAG"
             echo "ZYC_RESOLVED_URL=$ASSET_URL"
           } | tee -a "$LOG_DIR/toolchain.log"
+          
       # ── 2c. Cache toolchain ────────────────────────────────────────────────────
       - name: Cache toolchain
         id: cache-toolchain
