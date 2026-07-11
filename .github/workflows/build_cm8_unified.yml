@@ -334,12 +334,12 @@ jobs:
           case "$TOOLCHAIN" in
 
             aosp19)
-              echo "TC_LABEL=AOSP Clang 19 r596125"                                  >> "$GITHUB_ENV"
+              echo "TC_LABEL=AOSP Clang 19 r536225"                                  >> "$GITHUB_ENV"
               echo "TC_URL=https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/f60b8b55282f002f594f452ce22dfd6cf1fd7e3c/clang-r596125.tar.gz" >> "$GITHUB_ENV"
               echo "TC_ARCHIVE_FMT=tar.gz"                                           >> "$GITHUB_ENV"
-              echo "TC_ARCHIVE_NAME=clang-r596125.tar.gz"                            >> "$GITHUB_ENV"
-              echo "TC_CACHE_KEY=aosp-clang-r596125-ubuntu-24.04-v1-susfs220"                 >> "$GITHUB_ENV"
-              echo "TC_FLAT_ROOT_HINT=clang-r596125"                                 >> "$GITHUB_ENV"
+              echo "TC_ARCHIVE_NAME=clang-r536225.tar.gz"                            >> "$GITHUB_ENV"
+              echo "TC_CACHE_KEY=aosp-clang-r536225-ubuntu-24.04-v1-susfs220"                 >> "$GITHUB_ENV"
+              echo "TC_FLAT_ROOT_HINT=clang-r536225"                                 >> "$GITHUB_ENV"
               echo "TC_USE_FULL_LLVM=true"                                           >> "$GITHUB_ENV"
               echo "TC_LLVM_IAS=0"                                                   >> "$GITHUB_ENV"
               echo "TC_DYNAMIC_RESOLVE=false"                                        >> "$GITHUB_ENV"
@@ -482,7 +482,7 @@ jobs:
               echo "TC_ARCHIVE_NAME=clang-r596125.tar.gz"                               >> "$GITHUB_ENV"
               echo "TC_CACHE_KEY=aosp-clang-r596125-eva-gcc-ubuntu-24.04-v1-susfs220"  >> "$GITHUB_ENV"
               echo "TC_FLAT_ROOT_HINT=clang-r596125"                                    >> "$GITHUB_ENV"
-              # Full LLVM for LD/AR/NM/OBJCOPY/STRIP — all from the Clang 21 tarball.
+              # Full LLVM for LD/AR/NM/OBJCOPY/STRIP — all from the Clang 21\2 tarball.
               # Eva GCC provides ONLY the assembler backend; it does not own these tools.
               echo "TC_USE_FULL_LLVM=true"                                               >> "$GITHUB_ENV"
               # IAS=0: same Clang r596125 binary as aosp21 → same 4.9 BSP inline asm
@@ -640,7 +640,7 @@ jobs:
           path: eva-gcc
           key: eva-gcc-mvaisakh-arm64arm-ubuntu-24.04-v1
 
-      # ── 2d-eva2. [NEW] Download Eva GCC toolchains (clang21-eva-gcc only) ──────
+      # ── 2d-eva2. [NEW] Download Eva GCC toolchains (clang21/22-eva-gcc only) ──────
       # Shallow-clones mvaisakh/gcc-arm64 (aarch64-elf-) and mvaisakh/gcc-arm
       # (arm-eabi-) from GitHub. These are the Eva GCC support toolchains and are
       # used ONLY as:
@@ -696,7 +696,7 @@ jobs:
           echo "CC_BIN=$TC_ABS/bin/clang" >> "$GITHUB_ENV"
 
           if [[ "$TC_USE_FULL_LLVM" == "true" ]]; then
-            # AOSP 19/20/21/22 and clang21-eva-gcc: full LLVM toolchain,
+            # AOSP 19/20/21/22 and clang21/22-eva-gcc: full LLVM toolchain,
             # all binutils from the Clang tarball.
             echo "LD_BIN=$TC_ABS/bin/ld.lld"          >> "$GITHUB_ENV"
             echo "AR_BIN=$TC_ABS/bin/llvm-ar"          >> "$GITHUB_ENV"
@@ -747,7 +747,7 @@ jobs:
       # in scripts/Makefile.clang as --gcc-toolchain=<path>.
       # This step runs only for clang21-eva-gcc; for all other toolchains
       # GCC_TOOLCHAIN remains unset and the make array appends nothing.
-      - name: Export Eva GCC paths and set GCC_TOOLCHAIN (clang21-eva-gcc only)
+      - name: Export Eva GCC paths and set GCC_TOOLCHAIN (clang21/22-eva-gcc only)
         if: ${{ env.TC_NEEDS_EVA_GCC == 'true' }}
         run: |
           set -Eeuo pipefail
