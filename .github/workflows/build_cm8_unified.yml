@@ -95,7 +95,7 @@ on:
         description: "KernelSU exact commit SHA (gavdoc38 Exynos-optimized pin; leave blank to track ksu_ref tip instead)"
         required: false
         type: string
-        default: "f81bd7baf704a90df32e60088b39c3bf814da31b"
+        default: "242f245b2c971eb5c1cc4a689e01dcdeaff4c939"
 
       susfs_repo:
         description: "SUSFS git URL (https only)"
