@@ -5,7 +5,7 @@
 # KSU        : gavdoc38/KernelSU-Next @ 242f245 (default; overridable)
 # SUSFS      : simonpunk/susfs4ksu @ kernel-4.9 · v2.1.0
 # Toolchains : AOSP Clang 19 / 20 / 21 / 22, Neutron Clang, ZyCromerZ Clang,
-#              AOSP Clang 21 + Eva GCC cross-support (selectable)
+#              AOSP Clang 21 + Eva GCC cross-support, AOSP Clang 22.0.2 + Eva GCC cross-support (selectable)
 # Profiles   : cm8 (runtime SUSFS spoofing) / cm8e (compile-time identity, spoof OFF)
 # ───────────────────────────────────────────────────────────────────────────────
 # This workflow merges build_cm8_Forte_Clang21.yml and build_cm8e_Forte.yml into
@@ -23,7 +23,7 @@
 #                       own env-var pickup behaves on this heavily patched tree.
 #
 #   toolchain — aosp19 / aosp20 / aosp21 / aosp22 / neutron19 / zyc_stable /
-#               clang21-eva-gcc
+#               clang21-eva-gcc / clang22-eva-gcc
 #               Resolved by a single case-block step ("Resolve toolchain
 #               configuration") that exports CC/LD/AR/NM/OBJCOPY/OBJDUMP/STRIP,
 #               archive format, download URL, cache key, LLVM_IAS policy, and
@@ -85,10 +85,10 @@ on:
       toolchain:
         description: >-
           Compiler toolchain: aosp19/20/21/22 (full LLVM, IAS=0), neutron19 (GNU binutils, IAS=1),
-          zyc_stable (ZyCromerZ latest, IAS=0), clang21-eva-gcc (Clang 21 primary + Eva GCC assembler backend, IAS=0)
+          zyc_stable (ZyCromerZ latest, IAS=0), clang21-eva-gcc (Clang 21 primary + Eva GCC assembler backend, IAS=0), clang22-eva-gcc (Clang 22.0.2 primary + Eva GCC assembler backend, IAS=0)
         required: true
         type: choice
-        options: [aosp19, aosp20, aosp21, aosp22, neutron19, zyc_stable, clang21-eva-gcc]
+        options: [aosp19, aosp20, aosp21, aosp22, neutron19, zyc_stable, clang21-eva-gcc, clang22-eva-gcc]
         default: aosp21
       zycromerz_url:
         description: 'Custom ZyCromerZ Tarball URL (Leave blank for default)'
@@ -126,7 +126,7 @@ on:
         description: "KernelSU exact commit SHA (gavdoc38 Exynos-optimized pin; leave blank to track ksu_ref tip instead)"
         required: false
         type: string
-        default: "242f245b2c971eb5c1cc4a689e01dcdeaff4c939"
+        default: "ee36c9b1749583b1a8522af395bd555a793d2e84"
 
       susfs_repo:
         description: "SUSFS git URL (https only)"
@@ -224,9 +224,9 @@ jobs:
             cm8|cm8e) ;;
             *) echo "ERROR: unknown profile '$PROFILE'"; exit 1 ;;
           esac
-          # ── [CHANGED] clang21-eva-gcc added to valid toolchain set ────────────
+          # ── [CHANGED] clang21-eva-gcc and clang22-eva-gcc added to valid toolchain set ────────────
           case "$TOOLCHAIN" in
-            aosp19|aosp20|aosp21|aosp22|neutron19|zyc_stable|clang21-eva-gcc) ;;
+            aosp19|aosp20|aosp21|aosp22|neutron19|zyc_stable|clang21-eva-gcc|clang22-eva-gcc) ;;
             *) echo "ERROR: unknown toolchain '$TOOLCHAIN'"; exit 1 ;;
           esac
 
@@ -370,7 +370,7 @@ jobs:
               ;;
 
             aosp22)
-              echo "TC_LABEL=AOSP Clang 22.0 r596125 (Build ID: 15071444)"                               >> "$GITHUB_ENV"
+              echo "TC_LABEL=AOSP Clang 22.0.2 r596125 (Build ID: 15071444)"                               >> "$GITHUB_ENV"
               echo "TC_URL=https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/mirror-goog-main-llvm-toolchain-source/clang-r596125.tar.gz" >> "$GITHUB_ENV"
               echo "TC_ARCHIVE_FMT=tar.gz"                                           >> "$GITHUB_ENV"
               echo "TC_ARCHIVE_NAME=clang-r596125.tar.gz"                           >> "$GITHUB_ENV"
@@ -449,6 +449,56 @@ jobs:
               TC_CROSS_COMPILE=aarch64-elf-
               TC_CROSS_COMPILE_ARM32=arm-eabi-
               # Use Clang 21 as the host-side tool compiler for this toolchain.
+              TC_HOSTCC=clang
+              ;;
+
+            *)
+              echo "ERROR: unhandled toolchain '$TOOLCHAIN' in resolution matrix"; exit 1
+              ;;
+          esac
+
+            # ── [NEW] clang22-eva-gcc ──────────────────────────────────────────
+            # Primary compiler  : AOSP Clang 22.0.2 r596125 (CC + all LLVM tools).
+            # Support toolchain : Eva GCC (mvaisakh/gcc-arm64 + mvaisakh/gcc-arm).
+            #   Eva GCC is downloaded in step 2d-eva2 and placed on PATH. It serves
+            #   exclusively as the GNU assembler backend (aarch64-elf-as / arm-eabi-as)
+            #   when Clang shells out for assembly under LLVM_IAS=0. It is also
+            #   provided to Clang via the GCC_TOOLCHAIN make arg (→ --gcc-toolchain
+            #   flag), giving Clang access to the Eva GCC sysroot for any GNU
+            #   compatibility the Samsung 4.9 BSP headers may require.
+            # TC_CACHE_KEY      : Distinct from aosp22 to prevent ccache collision.
+            # TC_CROSS_COMPILE  : aarch64-elf- (Eva GCC arm64 target prefix)
+            # TC_CROSS_COMPILE_ARM32: arm-eabi- (Eva GCC arm32 target prefix)
+            # TC_HOSTCC         : clang — host-side kernel tool compilation via
+            #                     Clang 22 rather than system GCC. If host-build
+            #                     issues arise, set TC_HOSTCC=gcc in this case.
+            # Extending to a future Clang N + Eva GCC combo: duplicate this case,
+            # update TC_URL and TC_CACHE_KEY, leave all TC_NEEDS_EVA_GCC / Eva GCC
+            # TC_CROSS_COMPILE overrides unchanged.
+            clang22-eva-gcc)
+              echo "TC_LABEL=AOSP Clang 22.0.2 r596125 + Eva GCC (mvaisakh aarch64-elf-/arm-eabi-)" >> "$GITHUB_ENV"
+              echo "TC_URL=https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/mirror-goog-main-llvm-toolchain-source/clang-r596125.tar.gz" >> "$GITHUB_ENV"
+              echo "TC_ARCHIVE_FMT=tar.gz"                                                >> "$GITHUB_ENV"
+              echo "TC_ARCHIVE_NAME=clang-r596125.tar.gz"                               >> "$GITHUB_ENV"
+              echo "TC_CACHE_KEY=aosp-clang-r596125-eva-gcc-ubuntu-24.04-v1-susfs220"  >> "$GITHUB_ENV"
+              echo "TC_FLAT_ROOT_HINT=clang-r596125"                                    >> "$GITHUB_ENV"
+              # Full LLVM for LD/AR/NM/OBJCOPY/STRIP — all from the Clang 21 tarball.
+              # Eva GCC provides ONLY the assembler backend; it does not own these tools.
+              echo "TC_USE_FULL_LLVM=true"                                               >> "$GITHUB_ENV"
+              # IAS=0: same Clang r596125 binary as aosp21 → same 4.9 BSP inline asm
+              # incompatibilities. With IAS=0, ${CROSS_COMPILE}as (Eva GCC aarch64-elf-as)
+              # is the active assembler. Setting IAS=1 here would make Eva GCC redundant.
+              echo "TC_LLVM_IAS=0"                                                       >> "$GITHUB_ENV"
+              echo "TC_DYNAMIC_RESOLVE=false"                                            >> "$GITHUB_ENV"
+              # Signal steps 2d-eva1/2d-eva2/2e-eva to download and wire Eva GCC.
+              # All other toolchains default to false (set in post-case block below).
+              TC_NEEDS_EVA_GCC=true
+              # Eva GCC target prefixes — override the default linux-gnu- values
+              # used by all other toolchains. Set as shell vars here so the post-case
+              # default block below can apply ${VAR:-default} for all other cases.
+              TC_CROSS_COMPILE=aarch64-elf-
+              TC_CROSS_COMPILE_ARM32=arm-eabi-
+              # Use Clang 22 as the host-side tool compiler for this toolchain.
               TC_HOSTCC=clang
               ;;
 
@@ -582,7 +632,7 @@ jobs:
       # infrequently updated; shallow clones are small enough that a full re-clone
       # on a miss is fast). Bump the v1 suffix to force a fresh clone when a new
       # Eva GCC revision is needed.
-      - name: Cache Eva GCC toolchains (clang21-eva-gcc only)
+      - name: Cache Eva GCC toolchains (clang21/22-eva-gcc only)
         if: ${{ env.TC_NEEDS_EVA_GCC == 'true' }}
         id: cache-eva-gcc
         uses: actions/cache@v4
@@ -599,7 +649,7 @@ jobs:
       #   2. The GCC_TOOLCHAIN sysroot for Clang's --gcc-toolchain= flag, enabling
       #      GNU-style compatibility discovery without Eva GCC acting as CC.
       # Eva GCC binaries are NOT used for compilation. Clang 21 is the compiler.
-      - name: Download Eva GCC toolchains (clang21-eva-gcc only)
+      - name: Download Eva GCC toolchains (clang21/22-eva-gcc only)
         if: ${{ env.TC_NEEDS_EVA_GCC == 'true' && steps.cache-eva-gcc.outputs.cache-hit != 'true' }}
         run: |
           set -Eeuo pipefail
@@ -1839,7 +1889,7 @@ jobs:
             DTC_FLAGS="-Wno-unit_address_vs_reg"
           )
 
-          # ── [NEW] Conditionally append GCC_TOOLCHAIN for clang21-eva-gcc ──────
+          # ── [NEW] Conditionally append GCC_TOOLCHAIN for clang21-eva-gcc and clang22-eva-gcc ──────
           # GCC_TOOLCHAIN is unset for all other toolchains, so this block is a
           # no-op for them. When set, kbuild's scripts/Makefile.clang translates it
           # to Clang's --gcc-toolchain=<path> flag, giving Clang access to the Eva
@@ -2050,9 +2100,16 @@ jobs:
             | `neutron19` | Neutron Clang (catalogue) | System GNU binutils | Clang IAS | 1 |
             | `zyc_stable` | ZyCromerZ Clang (latest) | System GNU binutils | Clang integrated | 0 (GNU `as` via CROSS_COMPILE) |
             | `clang21-eva-gcc` | **AOSP Clang 21 r563880c** | **Full LLVM (tarball)** | **Eva GCC `aarch64-elf-as`** | **0 — Eva GCC provides GNU `as` backend** |
+            | `clang22-eva-gcc` | **AOSP Clang 22.0.2 r596125** | **Full LLVM (tarball)** | **Eva GCC `aarch64-elf-as`** | **0 — Eva GCC provides GNU `as` backend** |
 
             #### `clang21-eva-gcc` detail
             - **Primary compiler:** AOSP Clang 21.0 r563880c — all C/C++ compilation, linking (lld), and archiving (llvm-ar/nm/objcopy/strip).
+            - **Support toolchain:** Eva GCC (mvaisakh/gcc-arm64 `aarch64-elf-` + mvaisakh/gcc-arm `arm-eabi-`) — provides the GNU assembler backend (`aarch64-elf-as`) invoked by Clang when LLVM_IAS=0, and the GCC sysroot referenced via `--gcc-toolchain` for GNU compatibility. Eva GCC is **not** the compiler.
+            - **HOSTCC:** `clang` (host-side kernel tool compilation via Clang 21 rather than system gcc).
+            - **GCC_TOOLCHAIN:** `eva-gcc/arm64` — passed as a make argument; surfaces to Clang as `--gcc-toolchain=<path>` via `scripts/Makefile.clang`.
+
+            #### `clang22-eva-gcc` detail
+            - **Primary compiler:** AOSP Clang 22.0.2 r596125 — all C/C++ compilation, linking (lld), and archiving (llvm-ar/nm/objcopy/strip).
             - **Support toolchain:** Eva GCC (mvaisakh/gcc-arm64 `aarch64-elf-` + mvaisakh/gcc-arm `arm-eabi-`) — provides the GNU assembler backend (`aarch64-elf-as`) invoked by Clang when LLVM_IAS=0, and the GCC sysroot referenced via `--gcc-toolchain` for GNU compatibility. Eva GCC is **not** the compiler.
             - **HOSTCC:** `clang` (host-side kernel tool compilation via Clang 21 rather than system gcc).
             - **GCC_TOOLCHAIN:** `eva-gcc/arm64` — passed as a make argument; surfaces to Clang as `--gcc-toolchain=<path>` via `scripts/Makefile.clang`.
