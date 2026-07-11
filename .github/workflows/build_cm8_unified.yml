@@ -452,11 +452,6 @@ jobs:
               TC_HOSTCC=clang
               ;;
 
-            *)
-              echo "ERROR: unhandled toolchain '$TOOLCHAIN' in resolution matrix"; exit 1
-              ;;
-          esac
-
             # ── [NEW] clang22-eva-gcc ──────────────────────────────────────────
             # Primary compiler  : AOSP Clang 22.0.2 r596125 (CC + all LLVM tools).
             # Support toolchain : Eva GCC (mvaisakh/gcc-arm64 + mvaisakh/gcc-arm).
