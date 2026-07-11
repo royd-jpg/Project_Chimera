@@ -2,9 +2,9 @@
 # Project Chimera Mk8 UNIFIED — LOS/AOSP Android 16 QPR2 / Exynos 9810 (star2lte)
 # ───────────────────────────────────────────────────────────────────────────────
 # Base       : royd-jpg/Project_Chimera @ chimera-mk8
-# KSU        : gavdoc38/KernelSU-Next @ a846bdf7 (default; overridable)
+# KSU        : gavdoc38/KernelSU-Next @ 242f245 (default; overridable)
 # SUSFS      : simonpunk/susfs4ksu @ kernel-4.9 · v2.1.0
-# Toolchains : AOSP Clang 19 / 20 / 21, Neutron Clang, ZyCromerZ Clang (selectable)
+# Toolchains : AOSP Clang 19 / 20 / 21 / 22 , Neutron Clang, ZyCromerZ Clang (selectable)
 # Profiles   : cm8 (runtime SUSFS spoofing) / cm8e (compile-time identity, spoof OFF)
 # ───────────────────────────────────────────────────────────────────────────────
 # This workflow merges build_cm8_Forte_Clang21.yml and build_cm8e_Forte.yml into
