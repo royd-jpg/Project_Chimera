@@ -4,7 +4,8 @@
 # Base       : royd-jpg/Project_Chimera @ chimera-mk8
 # KSU        : gavdoc38/KernelSU-Next @ 242f245 (default; overridable)
 # SUSFS      : simonpunk/susfs4ksu @ kernel-4.9 · v2.1.0
-# Toolchains : AOSP Clang 19 / 20 / 21 / 22 , Neutron Clang, ZyCromerZ Clang (selectable)
+# Toolchains : AOSP Clang 19 / 20 / 21 / 22, Neutron Clang, ZyCromerZ Clang,
+#              AOSP Clang 21 + Eva GCC cross-support (selectable)
 # Profiles   : cm8 (runtime SUSFS spoofing) / cm8e (compile-time identity, spoof OFF)
 # ───────────────────────────────────────────────────────────────────────────────
 # This workflow merges build_cm8_Forte_Clang21.yml and build_cm8e_Forte.yml into
@@ -21,13 +22,41 @@
 #                       (whoami/hostname/git-describe), regardless of how kbuild's
 #                       own env-var pickup behaves on this heavily patched tree.
 #
-#   toolchain — aosp19 / aosp20 / aosp21 / neutron19 / zyc_stable
+#   toolchain — aosp19 / aosp20 / aosp21 / aosp22 / neutron19 / zyc_stable /
+#               clang21-eva-gcc
 #               Resolved by a single case-block step ("Resolve toolchain
 #               configuration") that exports CC/LD/AR/NM/OBJCOPY/OBJDUMP/STRIP,
-#               archive format, download URL, cache key, and LLVM_IAS policy.
-#               See that step's inline comments for the per-toolchain rationale
-#               (why Neutron gets LLVM_IAS=1 + GNU binutils, why AOSP variants
-#               stay full-LLVM with LLVM_IAS=0, why ZyC mirrors GNU binutils).
+#               archive format, download URL, cache key, LLVM_IAS policy, and
+#               cross-compile target prefixes via TC_* env vars.
+#               See that step's inline comments for the per-toolchain rationale.
+#
+#               clang21-eva-gcc specifics
+#               ─────────────────────────
+#               Primary compiler : AOSP Clang 21.0 r563880c (CC, LD/AR/NM/etc.
+#                                  all from the same Clang 21 tarball — full LLVM).
+#               Support path     : Eva GCC (mvaisakh/gcc-arm64 + mvaisakh/gcc-arm),
+#                                  cloned separately from GitHub and placed on PATH
+#                                  as a pure assembler-backend support toolchain.
+#                                  Eva GCC is NOT the primary compiler — it is only
+#                                  invoked as ${CROSS_COMPILE}as when the kernel
+#                                  build system shells out for GNU-style assembly.
+#               LLVM_IAS=0       : Same AOSP r563880c binary as aosp21; the Samsung
+#                                  4.9 BSP inline-asm incompatibilities that force
+#                                  IAS=0 on aosp21 apply equally here. With IAS=0,
+#                                  Clang emits textual asm and delegates to
+#                                  ${CROSS_COMPILE}as — resolved to Eva GCC's
+#                                  aarch64-elf-as on PATH. This is what makes
+#                                  clang21-eva-gcc distinct from pure aosp21.
+#               GCC_TOOLCHAIN    : Set to the Eva GCC arm64 sysroot directory and
+#                                  passed explicitly as a make argument. Clang picks
+#                                  it up via scripts/Makefile.clang as
+#                                  --gcc-toolchain=<path>, providing a full GNU
+#                                  compatibility layer without making GCC the active
+#                                  compiler. Only used when the tree or a build step
+#                                  needs explicit GNU-style sysroot discovery.
+#               CROSS_COMPILE    : aarch64-elf-  (Eva GCC target prefix, arm64)
+#               CROSS_COMPILE_ARM32: arm-eabi-   (Eva GCC target prefix, arm32)
+#               HOSTCC           : clang          (host-tool compilation via Clang 21)
 #
 # Both profiles run on the identical merged chimera-mk8 QPR2 base, share the
 # identical surgical patching pipeline (Surgery A-D, prctl bridge, weak symbol
@@ -54,10 +83,12 @@ on:
         options: [cm8, cm8e]
         default: cm8
       toolchain:
-        description: "Compiler toolchain"
+        description: >-
+          Compiler toolchain: aosp19/20/21/22 (full LLVM, IAS=0), neutron19 (GNU binutils, IAS=1),
+          zyc_stable (ZyCromerZ latest, IAS=0), clang21-eva-gcc (Clang 21 primary + Eva GCC assembler backend, IAS=0)
         required: true
         type: choice
-        options: [aosp19, aosp20, aosp21, aosp22, neutron19, zyc_stable]
+        options: [aosp19, aosp20, aosp21, aosp22, neutron19, zyc_stable, clang21-eva-gcc]
         default: aosp21
       zycromerz_url:
         description: 'Custom ZyCromerZ Tarball URL (Leave blank for default)'
@@ -193,8 +224,9 @@ jobs:
             cm8|cm8e) ;;
             *) echo "ERROR: unknown profile '$PROFILE'"; exit 1 ;;
           esac
+          # ── [CHANGED] clang21-eva-gcc added to valid toolchain set ────────────
           case "$TOOLCHAIN" in
-            aosp19|aosp20|aosp21|aosp22|neutron19|zyc_stable) ;;
+            aosp19|aosp20|aosp21|aosp22|neutron19|zyc_stable|clang21-eva-gcc) ;;
             *) echo "ERROR: unknown toolchain '$TOOLCHAIN'"; exit 1 ;;
           esac
 
@@ -243,23 +275,24 @@ jobs:
             chimera-mk8-${{ inputs.profile }}-${{ inputs.toolchain }}-${{ runner.os }}-
           max-size: ${{ env.CCACHE_MAXSIZE }}
           verbose: 0
+
       # ── 2. Toolchain Configuration Mapping ────────────────────────────────────
-      # Single source of truth for all five toolchains. Exports everything the
+      # Single source of truth for all toolchains. Exports everything the
       # download/extract/build steps need via $GITHUB_ENV so later steps stay
       # toolchain-agnostic (they just read $TC_* / $CC_BIN / etc).
       #
       # Per-toolchain rationale:
-      #   aosp19/20/21   — Full LLVM=1 (CC/LD/AR/NM/OBJCOPY/OBJDUMP/STRIP all from
-      #                     the same AOSP tarball). LLVM_IAS=0 — established Chimera
-      #                     requirement: Clang's integrated assembler has known
-      #                     incompatibilities with inline asm patterns in the
-      #                     Samsung 4.9 BSP tree, so we force Clang to emit textual
-      #                     asm and shell out to GNU `as` for assembly.
+      #   aosp19/20/21/22 — Full LLVM=1 (CC/LD/AR/NM/OBJCOPY/OBJDUMP/STRIP all
+      #                     from the same AOSP tarball). LLVM_IAS=0: Clang's
+      #                     integrated assembler has known incompatibilities with
+      #                     inline asm patterns in the Samsung 4.9 BSP tree, so we
+      #                     force Clang to emit textual asm and shell out to GNU `as`
+      #                     for assembly.
       #   neutron19      — CC from the Neutron tarball, but LD/AR/NM/OBJCOPY/STRIP
       #                     deliberately left on system GNU binutils (aarch64-linux-
       #                     gnu-*), per Project Chimera's original toolchain policy
       #                     (Neutron Clang + system GNU binutils as preferred combo).
-      #                     LLVM_IAS=1 — Neutron's LLVM 18+ base has a materially
+      #                     LLVM_IAS=1: Neutron's LLVM 18+ base has a materially
       #                     more mature integrated assembler than AOSP r563880c;
       #                     the 4.9 BSP asm incompatibilities that force IAS=0 on
       #                     AOSP Clang are already patched upstream in Neutron.
@@ -271,8 +304,30 @@ jobs:
       #                     publishes rolling dated per-major-version releases with
       #                     no fixed "stable" tag, so the exact tarball URL is
       #                     resolved at runtime via the GitHub Releases API in the
-      #                     download step rather than hardcoded here (hardcoding a
-      #                     dated snapshot would silently go stale).
+      #                     download step rather than hardcoded here.
+      #   clang21-eva-gcc — [NEW] Primary compiler is AOSP Clang 21.0 r563880c
+      #                     (same binary as aosp21; distinct TC_CACHE_KEY to prevent
+      #                     ccache cross-contamination). Eva GCC (mvaisakh/gcc-arm64
+      #                     + mvaisakh/gcc-arm) is a support toolchain downloaded
+      #                     separately in step 2d-eva2. TC_USE_FULL_LLVM=true: all
+      #                     LD/AR/NM/OBJCOPY/STRIP resolved from the Clang 21
+      #                     tarball, not from Eva GCC. LLVM_IAS=0: same 4.9 BSP asm
+      #                     incompatibilities as aosp21; with IAS=0, Clang emits
+      #                     textual asm and delegates to ${CROSS_COMPILE}as, which
+      #                     resolves to Eva GCC's aarch64-elf-as on PATH. This is
+      #                     what makes the combo distinct from pure aosp21. Eva GCC
+      #                     is NEVER the primary compiler — it only provides the GNU
+      #                     assembler and GCC_TOOLCHAIN sysroot compatibility path.
+      #                     To extend this pattern to a future Clang 22 + Eva GCC
+      #                     combo, duplicate this case, update TC_URL/TC_CACHE_KEY,
+      #                     and leave all Eva GCC handling (TC_NEEDS_EVA_GCC, the
+      #                     TC_CROSS_COMPILE override) intact in the new case.
+      #
+      # Cross-compile target prefix exports (TC_CROSS_COMPILE, TC_CROSS_COMPILE_ARM32,
+      # TC_CLANG_TRIPLE, TC_NEEDS_EVA_GCC, TC_HOSTCC) are set at the end of this
+      # step via post-case defaults. Only clang21-eva-gcc overrides the defaults in
+      # its case block; all other cases inherit the standard linux-gnu- prefixes with
+      # no changes to their existing case bodies.
       - name: Resolve toolchain configuration
         run: |
           set -Eeuo pipefail
@@ -313,7 +368,7 @@ jobs:
               echo "TC_LLVM_IAS=0"                                                   >> "$GITHUB_ENV"
               echo "TC_DYNAMIC_RESOLVE=false"                                        >> "$GITHUB_ENV"
               ;;
-              
+
             aosp22)
               echo "TC_LABEL=AOSP Clang 22.0 r596125 (Build ID: 15071444)"                               >> "$GITHUB_ENV"
               echo "TC_URL=https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/mirror-goog-main-llvm-toolchain-source/clang-r596125.tar.gz" >> "$GITHUB_ENV"
@@ -325,7 +380,7 @@ jobs:
               echo "TC_LLVM_IAS=0"                                                   >> "$GITHUB_ENV"
               echo "TC_DYNAMIC_RESOLVE=false"                                        >> "$GITHUB_ENV"
               ;;
-              
+
             neutron19)
               echo "TC_LABEL=Neutron Clang (10032024 catalogue build)"               >> "$GITHUB_ENV"
               echo "TC_URL=https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/10032024/neutron-clang-10032024.tar.zst" >> "$GITHUB_ENV"
@@ -352,67 +407,116 @@ jobs:
               echo "TC_DYNAMIC_RESOLVE=true"                                         >> "$GITHUB_ENV"
               ;;
 
+            # ── [NEW] clang21-eva-gcc ──────────────────────────────────────────
+            # Primary compiler  : AOSP Clang 21.0 r563880c (CC + all LLVM tools).
+            # Support toolchain : Eva GCC (mvaisakh/gcc-arm64 + mvaisakh/gcc-arm).
+            #   Eva GCC is downloaded in step 2d-eva2 and placed on PATH. It serves
+            #   exclusively as the GNU assembler backend (aarch64-elf-as / arm-eabi-as)
+            #   when Clang shells out for assembly under LLVM_IAS=0. It is also
+            #   provided to Clang via the GCC_TOOLCHAIN make arg (→ --gcc-toolchain
+            #   flag), giving Clang access to the Eva GCC sysroot for any GNU
+            #   compatibility the Samsung 4.9 BSP headers may require.
+            # TC_CACHE_KEY      : Distinct from aosp21 to prevent ccache collision.
+            # TC_CROSS_COMPILE  : aarch64-elf- (Eva GCC arm64 target prefix)
+            # TC_CROSS_COMPILE_ARM32: arm-eabi- (Eva GCC arm32 target prefix)
+            # TC_HOSTCC         : clang — host-side kernel tool compilation via
+            #                     Clang 21 rather than system GCC. If host-build
+            #                     issues arise, set TC_HOSTCC=gcc in this case.
+            # Extending to a future Clang N + Eva GCC combo: duplicate this case,
+            # update TC_URL and TC_CACHE_KEY, leave all TC_NEEDS_EVA_GCC / Eva GCC
+            # TC_CROSS_COMPILE overrides unchanged.
+            clang21-eva-gcc)
+              echo "TC_LABEL=AOSP Clang 21.0 r563880c + Eva GCC (mvaisakh aarch64-elf-/arm-eabi-)" >> "$GITHUB_ENV"
+              echo "TC_URL=https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/21b19c041de1f1df9b97fd9902ae5405c6cf8eb9/clang-r563880c.tar.gz" >> "$GITHUB_ENV"
+              echo "TC_ARCHIVE_FMT=tar.gz"                                                >> "$GITHUB_ENV"
+              echo "TC_ARCHIVE_NAME=clang-r563880c.tar.gz"                               >> "$GITHUB_ENV"
+              echo "TC_CACHE_KEY=aosp-clang-r563880c-eva-gcc-ubuntu-24.04-v1-susfs220"  >> "$GITHUB_ENV"
+              echo "TC_FLAT_ROOT_HINT=clang-r563880c"                                    >> "$GITHUB_ENV"
+              # Full LLVM for LD/AR/NM/OBJCOPY/STRIP — all from the Clang 21 tarball.
+              # Eva GCC provides ONLY the assembler backend; it does not own these tools.
+              echo "TC_USE_FULL_LLVM=true"                                               >> "$GITHUB_ENV"
+              # IAS=0: same Clang r563880c binary as aosp21 → same 4.9 BSP inline asm
+              # incompatibilities. With IAS=0, ${CROSS_COMPILE}as (Eva GCC aarch64-elf-as)
+              # is the active assembler. Setting IAS=1 here would make Eva GCC redundant.
+              echo "TC_LLVM_IAS=0"                                                       >> "$GITHUB_ENV"
+              echo "TC_DYNAMIC_RESOLVE=false"                                            >> "$GITHUB_ENV"
+              # Signal steps 2d-eva1/2d-eva2/2e-eva to download and wire Eva GCC.
+              # All other toolchains default to false (set in post-case block below).
+              TC_NEEDS_EVA_GCC=true
+              # Eva GCC target prefixes — override the default linux-gnu- values
+              # used by all other toolchains. Set as shell vars here so the post-case
+              # default block below can apply ${VAR:-default} for all other cases.
+              TC_CROSS_COMPILE=aarch64-elf-
+              TC_CROSS_COMPILE_ARM32=arm-eabi-
+              # Use Clang 21 as the host-side tool compiler for this toolchain.
+              TC_HOSTCC=clang
+              ;;
+
             *)
               echo "ERROR: unhandled toolchain '$TOOLCHAIN' in resolution matrix"; exit 1
               ;;
           esac
+
+          # ── Unified post-case exports ──────────────────────────────────────────
+          # These apply defaults for all vars that the per-toolchain case blocks above
+          # do NOT explicitly set. clang21-eva-gcc sets the shell vars TC_NEEDS_EVA_GCC,
+          # TC_CROSS_COMPILE, TC_CROSS_COMPILE_ARM32, and TC_HOSTCC above; every other
+          # toolchain leaves them unset, and the ${VAR:-default} expansion provides
+          # backward-compatible values without touching any existing case body.
+          echo "TC_CROSS_COMPILE=${TC_CROSS_COMPILE:-aarch64-linux-gnu-}"             >> "$GITHUB_ENV"
+          echo "TC_CROSS_COMPILE_ARM32=${TC_CROSS_COMPILE_ARM32:-arm-linux-gnueabi-}" >> "$GITHUB_ENV"
+          echo "TC_CLANG_TRIPLE=${TC_CLANG_TRIPLE:-aarch64-linux-gnu-}"               >> "$GITHUB_ENV"
+          echo "TC_NEEDS_EVA_GCC=${TC_NEEDS_EVA_GCC:-false}"                          >> "$GITHUB_ENV"
+          echo "TC_HOSTCC=${TC_HOSTCC:-gcc}"                                           >> "$GITHUB_ENV"
           echo "TC_DIR=toolchain" >> "$GITHUB_ENV"
           echo "OK: toolchain configuration resolved for '$TOOLCHAIN'"
 
-    # ── 2b. Dynamic resolution for rolling-release toolchains (ZyC only) ──────
+      # ── 2b. Dynamic resolution for rolling-release toolchains (ZyC only) ──────
       - name: Resolve ZyCromerZ release (Dynamic or Custom)
         if: ${{ env.TC_DYNAMIC_RESOLVE == 'true' }}
         run: |
           set -Eeuo pipefail
-          
+
           CUSTOM_URL="${{ inputs.zycromerz_url }}"
-          
+
           if [[ -n "$CUSTOM_URL" ]]; then
             echo ">> Override active: Resolving custom ZyCromerZ tarball..."
             ASSET_URL="$CUSTOM_URL"
             ASSET_NAME="${ASSET_URL##*/}"
-            
-            # Generate a short fingerprint of the URL so changes create a new cache
+
             URL_FINGERPRINT="$(echo -n "$CUSTOM_URL" | md5sum | awk '{print $1}' | cut -c1-8)"
             TAG="custom-${URL_FINGERPRINT}"
-            
+
             [[ -n "$ASSET_NAME" ]] || { echo "ERROR: could not parse filename from URL"; exit 1; }
           else
             echo ">> Standard protocol: Resolving latest ZyCromerZ release via API..."
             API="https://api.github.com/repos/ZyCromerZ/Clang/releases/latest"
             RESP="$(curl -fsSL -H "Accept: application/vnd.github+json" "$API")"
-            
+
             RAW_TAG="$(echo "$RESP" | jq -r '.tag_name')"
             ASSET_URL="$(echo "$RESP" | jq -r '[.assets[] | select(.name | endswith(".tar.gz"))][0].browser_download_url')"
             ASSET_NAME="$(echo "$RESP" | jq -r '[.assets[] | select(.name | endswith(".tar.gz"))][0].name')"
-            
-            # GRAB THE UNIQUE ASSET ID to defeat rolling tags
             ASSET_ID="$(echo "$RESP" | jq -r '[.assets[] | select(.name | endswith(".tar.gz"))][0].id')"
-            
+
             [[ -n "$RAW_TAG" && "$RAW_TAG" != "null" ]]     || { echo "ERROR: could not resolve ZyC latest tag"; exit 1; }
             [[ -n "$ASSET_URL" && "$ASSET_URL" != "null" ]] || { echo "ERROR: could not resolve ZyC .tar.gz asset URL"; exit 1; }
             [[ -n "$ASSET_ID" && "$ASSET_ID" != "null" ]]   || { echo "ERROR: could not resolve ZyC asset ID"; exit 1; }
-            
-            # Combine the tag name with the exact unique upload ID
+
             TAG="${RAW_TAG}-id${ASSET_ID}"
           fi
-          
+
           echo "TC_URL=$ASSET_URL"                          >> "$GITHUB_ENV"
           echo "TC_ARCHIVE_NAME=$ASSET_NAME"                >> "$GITHUB_ENV"
           echo "TC_LABEL=ZyCromerZ Clang ($TAG)"            >> "$GITHUB_ENV"
-          
-          # 1. Fix the GitHub Action Toolchain Cache (Warehouse)
           echo "TC_CACHE_KEY=${TC_CACHE_KEY_PREFIX}-${TAG}" >> "$GITHUB_ENV"
-          
-          # 2. Fix ccache (forces Assembly Line to see the compiler as brand new)
           echo "CCACHE_COMPILERCHECK=string:${TAG}"         >> "$GITHUB_ENV"
-          
+
           {
             echo "ZYC_RESOLVED_TAG=$TAG"
             echo "ZYC_RESOLVED_URL=$ASSET_URL"
           } | tee -a "$LOG_DIR/toolchain.log"
-          
-      # ── 2c. Cache toolchain ────────────────────────────────────────────────────
+
+      # ── 2c. Cache toolchain (Clang tarball) ───────────────────────────────────
       - name: Cache toolchain
         id: cache-toolchain
         uses: actions/cache@v4
@@ -420,9 +524,10 @@ jobs:
           path: ${{ env.TC_DIR }}
           key: ${{ env.TC_CACHE_KEY }}
 
-      # ── 2d. Download & extract toolchain ──────────────────────────────────────
-      # Archive-format branch handles the three formats in play across the five
-      # toolchains: .tar.gz (AOSP, ZyC), .tar.xz (korg Clang 20), .tar.zst (Neutron).
+      # ── 2d. Download & extract toolchain (Clang) ──────────────────────────────
+      # Archive-format branch handles: .tar.gz (AOSP, ZyC), .tar.xz (korg Clang 20),
+      # .tar.zst (Neutron). For clang21-eva-gcc, this step downloads only the Clang
+      # 21 tarball. Eva GCC is handled in the dedicated steps 2d-eva1/2d-eva2 below.
       - name: Download & extract toolchain
         if: steps.cache-toolchain.outputs.cache-hit != 'true'
         run: |
@@ -431,9 +536,9 @@ jobs:
           echo "=== Fetching $TC_LABEL ==="
           mkdir -p "$TC_DIR"
           ARCHIVE="$TC_DIR/$TC_ARCHIVE_NAME"
-          
+
           aria2c -x 16 -s 16 -k 1M --console-log-level=warn -d "$TC_DIR" -o "$TC_ARCHIVE_NAME" "$TC_URL"
-          
+
           test -s "$ARCHIVE" || { echo "ERROR: downloaded archive is empty: $ARCHIVE"; exit 1; }
 
           case "$TC_ARCHIVE_FMT" in
@@ -445,37 +550,92 @@ jobs:
           rm -f "$ARCHIVE"
 
           # Flatten one level if the archive extracted into a versioned subdirectory
-            # rather than directly into $TC_DIR (AOSP tarballs sometimes do this).
-            if [[ ! -x "$TC_DIR/bin/clang" ]]; then
-              if [[ -n "$TC_FLAT_ROOT_HINT" && -x "$TC_DIR/$TC_FLAT_ROOT_HINT/bin/clang" ]]; then
-                shopt -s dotglob
-                mv "$TC_DIR/$TC_FLAT_ROOT_HINT"/* "$TC_DIR/"
-                shopt -u dotglob
-                rm -rf "$TC_DIR/$TC_FLAT_ROOT_HINT"
-              else
-                # Generic fallback: find the single subdir containing bin/clang
-                CAND="$(find "$TC_DIR" -mindepth 2 -maxdepth 3 -type f -name clang -path '*/bin/clang' | head -1)"
-                if [[ -n "$CAND" ]]; then
-                  SRC_ROOT="$(dirname "$(dirname "$CAND")")"
-                  if [[ "$SRC_ROOT" != "$TC_DIR" ]]; then
-                    shopt -s dotglob
-                    mv "$SRC_ROOT"/* "$TC_DIR/"
-                    shopt -u dotglob
-                    rm -rf "$SRC_ROOT"
-                  fi
+          # rather than directly into $TC_DIR (AOSP tarballs sometimes do this).
+          if [[ ! -x "$TC_DIR/bin/clang" ]]; then
+            if [[ -n "$TC_FLAT_ROOT_HINT" && -x "$TC_DIR/$TC_FLAT_ROOT_HINT/bin/clang" ]]; then
+              shopt -s dotglob
+              mv "$TC_DIR/$TC_FLAT_ROOT_HINT"/* "$TC_DIR/"
+              shopt -u dotglob
+              rm -rf "$TC_DIR/$TC_FLAT_ROOT_HINT"
+            else
+              CAND="$(find "$TC_DIR" -mindepth 2 -maxdepth 3 -type f -name clang -path '*/bin/clang' | head -1)"
+              if [[ -n "$CAND" ]]; then
+                SRC_ROOT="$(dirname "$(dirname "$CAND")")"
+                if [[ "$SRC_ROOT" != "$TC_DIR" ]]; then
+                  shopt -s dotglob
+                  mv "$SRC_ROOT"/* "$TC_DIR/"
+                  shopt -u dotglob
+                  rm -rf "$SRC_ROOT"
                 fi
               fi
             fi
-            
+          fi
+
           test -x "$TC_DIR/bin/clang" \
             || { echo "ERROR: clang binary missing after extract — archive layout unrecognized"; find "$TC_DIR" -maxdepth 3 | head -40; exit 1; }
           "$TC_DIR/bin/clang" --version | tee -a "$LOG_DIR/toolchain.log"
           echo "OK: $TC_LABEL extracted to $TC_DIR/"
 
-      # ── 2e. Export toolchain PATH & resolve tool binary paths ────────────────
+      # ── 2d-eva1. [NEW] Cache Eva GCC toolchains (clang21-eva-gcc only) ─────────
+      # Caches both the arm64 and arm32 Eva GCC shallow clones together under
+      # eva-gcc/. Cache key is fixed and bumped manually (eva-gcc repos are
+      # infrequently updated; shallow clones are small enough that a full re-clone
+      # on a miss is fast). Bump the v1 suffix to force a fresh clone when a new
+      # Eva GCC revision is needed.
+      - name: Cache Eva GCC toolchains (clang21-eva-gcc only)
+        if: ${{ env.TC_NEEDS_EVA_GCC == 'true' }}
+        id: cache-eva-gcc
+        uses: actions/cache@v4
+        with:
+          path: eva-gcc
+          key: eva-gcc-mvaisakh-arm64arm-ubuntu-24.04-v1
+
+      # ── 2d-eva2. [NEW] Download Eva GCC toolchains (clang21-eva-gcc only) ──────
+      # Shallow-clones mvaisakh/gcc-arm64 (aarch64-elf-) and mvaisakh/gcc-arm
+      # (arm-eabi-) from GitHub. These are the Eva GCC support toolchains and are
+      # used ONLY as:
+      #   1. The assembler backend (aarch64-elf-as / arm-eabi-as) when Clang calls
+      #      out via ${CROSS_COMPILE}as under LLVM_IAS=0.
+      #   2. The GCC_TOOLCHAIN sysroot for Clang's --gcc-toolchain= flag, enabling
+      #      GNU-style compatibility discovery without Eva GCC acting as CC.
+      # Eva GCC binaries are NOT used for compilation. Clang 21 is the compiler.
+      - name: Download Eva GCC toolchains (clang21-eva-gcc only)
+        if: ${{ env.TC_NEEDS_EVA_GCC == 'true' && steps.cache-eva-gcc.outputs.cache-hit != 'true' }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p eva-gcc
+
+          echo "=== Cloning Eva GCC arm64 (mvaisakh/gcc-arm64 → aarch64-elf-) ==="
+          git clone --depth=1 https://github.com/mvaisakh/gcc-arm64.git eva-gcc/arm64 \
+            2>&1 | tail -5
+
+          echo "=== Cloning Eva GCC arm32 (mvaisakh/gcc-arm → arm-eabi-) ==="
+          git clone --depth=1 https://github.com/mvaisakh/gcc-arm.git eva-gcc/arm \
+            2>&1 | tail -5
+
+          # Sanity: verify expected binaries are present at the known prefix paths.
+          test -x eva-gcc/arm64/bin/aarch64-elf-gcc \
+            || { echo "ERROR: aarch64-elf-gcc not found — check mvaisakh/gcc-arm64 layout:"; \
+                 find eva-gcc/arm64/bin -maxdepth 1 | sort | head -20; exit 1; }
+          test -x eva-gcc/arm/bin/arm-eabi-gcc \
+            || { echo "ERROR: arm-eabi-gcc not found — check mvaisakh/gcc-arm layout:"; \
+                 find eva-gcc/arm/bin -maxdepth 1 | sort | head -20; exit 1; }
+
+          {
+            echo "EVA_GCC_ARM64_COMMIT=$(git -C eva-gcc/arm64 rev-parse HEAD)"
+            echo "EVA_GCC_ARM32_COMMIT=$(git -C eva-gcc/arm  rev-parse HEAD)"
+          } | tee -a "$LOG_DIR/toolchain.log"
+
+          eva-gcc/arm64/bin/aarch64-elf-gcc --version | head -1 | tee -a "$LOG_DIR/toolchain.log"
+          eva-gcc/arm/bin/arm-eabi-gcc      --version | head -1 | tee -a "$LOG_DIR/toolchain.log"
+          echo "OK: Eva GCC toolchains ready"
+
+      # ── 2e. Export toolchain PATH & resolve tool binary paths ─────────────────
       # Exports CC_BIN/LD_BIN/AR_BIN/NM_BIN/OBJCOPY_BIN/OBJDUMP_BIN/STRIP_BIN as
-      # concrete absolute paths so the build step never has to branch on
-      # $TOOLCHAIN again — it just uses these variables uniformly.
+      # concrete absolute paths so the build step never has to branch on $TOOLCHAIN
+      # again — it just uses these variables uniformly. For clang21-eva-gcc, this
+      # step handles the Clang 21 binaries only. Eva GCC paths are appended to
+      # GITHUB_PATH in the immediately following step 2e-eva.
       - name: Export toolchain PATH & resolve tool binaries
         run: |
           set -Eeuo pipefail
@@ -486,7 +646,8 @@ jobs:
           echo "CC_BIN=$TC_ABS/bin/clang" >> "$GITHUB_ENV"
 
           if [[ "$TC_USE_FULL_LLVM" == "true" ]]; then
-            # AOSP 19/20/21: full LLVM toolchain, all binutils from the tarball
+            # AOSP 19/20/21/22 and clang21-eva-gcc: full LLVM toolchain,
+            # all binutils from the Clang tarball.
             echo "LD_BIN=$TC_ABS/bin/ld.lld"          >> "$GITHUB_ENV"
             echo "AR_BIN=$TC_ABS/bin/llvm-ar"          >> "$GITHUB_ENV"
             echo "NM_BIN=$TC_ABS/bin/llvm-nm"          >> "$GITHUB_ENV"
@@ -524,7 +685,62 @@ jobs:
             echo "toolchain=$TC_LABEL"
             echo "full_llvm=$TC_USE_FULL_LLVM"
             echo "llvm_ias=$TC_LLVM_IAS"
+            echo "cross_compile=$TC_CROSS_COMPILE"
+            echo "cross_compile_arm32=$TC_CROSS_COMPILE_ARM32"
+            echo "hostcc=$TC_HOSTCC"
           } | tee -a "$LOG_DIR/toolchain.log"
+
+      # ── 2e-eva. [NEW] Export Eva GCC paths and set GCC_TOOLCHAIN ──────────────
+      # Adds Eva GCC arm64 and arm32 bin directories to GITHUB_PATH and exports
+      # GCC_TOOLCHAIN (arm64 sysroot dir) for the build step's make array.
+      # GCC_TOOLCHAIN is passed explicitly as a make argument → Clang picks it up
+      # in scripts/Makefile.clang as --gcc-toolchain=<path>.
+      # This step runs only for clang21-eva-gcc; for all other toolchains
+      # GCC_TOOLCHAIN remains unset and the make array appends nothing.
+      - name: Export Eva GCC paths and set GCC_TOOLCHAIN (clang21-eva-gcc only)
+        if: ${{ env.TC_NEEDS_EVA_GCC == 'true' }}
+        run: |
+          set -Eeuo pipefail
+          EVA64="$GITHUB_WORKSPACE/eva-gcc/arm64"
+          EVA32="$GITHUB_WORKSPACE/eva-gcc/arm"
+
+          test -d "$EVA64/bin" \
+            || { echo "ERROR: eva-gcc/arm64/bin missing — was download step skipped or cache broken?"; exit 1; }
+          test -d "$EVA32/bin" \
+            || { echo "ERROR: eva-gcc/arm/bin missing — was download step skipped or cache broken?"; exit 1; }
+
+          # Add both Eva GCC bin dirs to PATH. They come after the Clang 21 bin dir
+          # (already on PATH from step 2e), so ${CROSS_COMPILE}clang would resolve to
+          # the Clang binary (not Eva GCC's gcc) if something mistakenly calls it.
+          echo "$EVA64/bin" >> "$GITHUB_PATH"
+          echo "$EVA32/bin" >> "$GITHUB_PATH"
+
+          # GCC_TOOLCHAIN: points to the arm64 Eva GCC sysroot. Passed as a make
+          # argument in step 10 to supply Clang's --gcc-toolchain= flag.
+          # GCC_TOOLCHAIN_ARM32 is informational only — kbuild resolves the arm32
+          # assembler via ${CROSS_COMPILE_ARM32}as on PATH without a separate var.
+          echo "GCC_TOOLCHAIN=$EVA64"      >> "$GITHUB_ENV"
+          echo "GCC_TOOLCHAIN_ARM32=$EVA32" >> "$GITHUB_ENV"
+
+          echo "=== Eva GCC path verification ==="
+          export PATH="$EVA64/bin:$EVA32/bin:$PATH"
+
+          which aarch64-elf-gcc   || { echo "ERROR: aarch64-elf-gcc not on PATH"; exit 1; }
+          which aarch64-elf-as    || { echo "ERROR: aarch64-elf-as  not on PATH"; exit 1; }
+          which arm-eabi-gcc      || { echo "ERROR: arm-eabi-gcc     not on PATH"; exit 1; }
+          which arm-eabi-as       || { echo "ERROR: arm-eabi-as      not on PATH"; exit 1; }
+
+          aarch64-elf-gcc --version | head -1
+          arm-eabi-gcc    --version | head -1
+
+          {
+            echo "GCC_TOOLCHAIN=$EVA64"
+            echo "GCC_TOOLCHAIN_ARM32=$EVA32"
+            echo "EVA_GCC_AS_ARM64=$(which aarch64-elf-as)"
+            echo "EVA_GCC_AS_ARM32=$(which arm-eabi-as)"
+          } | tee -a "$LOG_DIR/toolchain.log"
+          echo "OK: Eva GCC paths exported and verified"
+
       # ── 3. Source Assembly: Clone kernel tree ─────────────────────────────────
       - name: Clone kernel tree
         run: |
@@ -636,8 +852,6 @@ jobs:
           echo "OK: KernelSU-Next wired at drivers/kernelsu"
 
       # ── 3d. Samsung 4.9 BSP fix: syscall_fn_t typedef ─────────────────────────
-      # Idempotent — safe regardless of whether the selected KSU source already
-      # carries this fix natively (gavdoc38 does; sidex15 may not).
       - name: Fix syscall_fn_t typedef (Samsung 4.9 BSP pointer-type fix)
         working-directory: kernel
         run: |
@@ -670,11 +884,7 @@ jobs:
             > /tmp/fix_syscall_fn_t.py
           python3 /tmp/fix_syscall_fn_t.py
 
-      # ── 3e-pre. Guard sus_memfd in supercall.c ─────────────────────────────
-      # a846bdf7 (tip of gavdoc38/ksun-susfs-legacy) supercall.c unconditionally
-      # references CMD_SUSFS_ADD_SUS_MEMFD. We exclude sus_memfd (experimental,
-      # untested on Samsung 4.9 shmem.c) and force-disable it in defconfig.
-      # This step wraps the call site in #ifdef so it compiles cleanly. Idempotent.
+      # ── 3e-pre. Guard sus_memfd in supercall.c ─────────────────────────────────
       - name: Guard sus_memfd in supercall.c (excluded feature stub-out)
         working-directory: kernel
         run: |
@@ -689,7 +899,7 @@ jobs:
           echo "ZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCmltcG9ydCByZQpwID0gUGF0aCgiS2VybmVsU1UtTmV4dC9rZXJuZWwvc3VwZXJjYWxsL3N1cGVyY2FsbC5jIikKYyA9IHAucmVhZF90ZXh0KCkKaWYgIiNpZmRlZiBDT05GSUdfS1NVX1NVU0ZTX1NVU19NRU1GRCIgaW4gYzoKICAgIHByaW50KCJPSzogc3VzX21lbWZkIGd1YXJkIGFscmVhZHkgcHJlc2VudCAoaWRlbXBvdGVudCkiKTsgcmFpc2UgU3lzdGVtRXhpdCgwKQpwYXQgPSByZS5jb21waWxlKHInKFxuWyBcdF0qaWZccypcKFxzKmNtZFxzKj09XHMqQ01EX1NVU0ZTX0FERF9TVVNfTUVNRkRccypcKVxzKlx7W159XSpcfSknLCByZS5ET1RBTEwpCm0gPSBwYXQuc2VhcmNoKGMpCmlmIG06CiAgICBibGsgPSBtLmdyb3VwKDEpCiAgICBnID0gIlxuI2lmZGVmIENPTkZJR19LU1VfU1VTRlNfU1VTX01FTUZEIiArIGJsayArICJcbiNlbmRpZiAvKiBDT05GSUdfS1NVX1NVU0ZTX1NVU19NRU1GRCAqLyIKICAgIHAud3JpdGVfdGV4dChjWzptLnN0YXJ0KCldICsgZyArIGNbbS5lbmQoKTpdKTsgcHJpbnQoIk9LOiB3cmFwcGVkIENNRF9TVVNGU19BRERfU1VTX01FTUZEIGluICNpZmRlZiIpCmVsc2U6CiAgICBsaW5lcyA9IFsiLy8gW2NoaW1lcmEtbWs4OiBzdXNfbWVtZmQgZXhjbHVkZWRdICIgKyBsIGlmICJDTURfU1VTRlNfQUREX1NVU19NRU1GRCIgaW4gbCBvciAic3VzZnNfYWRkX3N1c19tZW1mZCIgaW4gbCBlbHNlIGwgZm9yIGwgaW4gYy5zcGxpdGxpbmVzKGtlZXBlbmRzPVRydWUpXQogICAgcC53cml0ZV90ZXh0KCIiLmpvaW4obGluZXMpKTsgcHJpbnQoIldBUk46IGxpbmUtY29tbWVudCBmYWxsYmFjayBhcHBsaWVkIikK" | base64 -d > /tmp/guard_sus_memfd.py
           python3 /tmp/guard_sus_memfd.py
 
-            # ── 3e. Preflight: detect pre-integrated KSU/SUSFS ────────────────────────
+      # ── 3e. Preflight: detect pre-integrated KSU/SUSFS ────────────────────────
       - name: Preflight tree state
         working-directory: kernel
         run: |
@@ -716,6 +926,7 @@ jobs:
           else
             echo "SKIP_INTEGRATION=false" >> "$GITHUB_ENV"
           fi
+
       # ── 4. Surgical Patching: Wire KernelSU Kconfig ───────────────────────────
       - name: Wire KernelSU Kconfig
         working-directory: kernel
@@ -804,10 +1015,6 @@ jobs:
             || { echo "ERROR: missing SUSFS files"; exit 1; }
 
       # ── 4d. Surgical Patching: KernelSU Header Surgery ────────────────────────
-      # Surgery A: normalize relative includes to <kernelsu/…>
-      # Surgery B: export real KernelSU public headers into include/kernelsu/
-      # Surgery C: replace ksu.h with a kernel-safe shim
-      # Surgery D: add ksu_cred extern to shared headers
       - name: KernelSU Header Surgery
         working-directory: kernel
         run: |
@@ -1020,7 +1227,7 @@ jobs:
             > /tmp/inject_weak_fallbacks.py
           python3 /tmp/inject_weak_fallbacks.py
 
-      # ── 4g. Surgical Patching: namei.c dentry redefinition (QPR2 merge collision)
+      # ── 4g. Surgical Patching: namei.c dentry redefinition ────────────────────
       - name: Fix namei.c dentry redefinition (SUSFS/QPR2 merge collision)
         working-directory: kernel
         run: |
@@ -1038,9 +1245,8 @@ jobs:
             echo "  never existed on this tree revision. Not treated as fatal."
           fi
           sed -n '2230,2242p' "$FILE" | tee -a "../$LOG_DIR/namei-fix.log" || true
+
       # ── 5. Profile & Identity Injection: shared FORTe defconfig baseline ──────
-      # Scheduler/TCP/memory/BPF/Binder/PSI tuning is identical across both
-      # profiles — only the SUSFS spoof block (next step) diverges.
       - name: Apply defconfig tuning (FORTe Mode — shared baseline)
         working-directory: kernel
         run: |
@@ -1066,7 +1272,6 @@ jobs:
 
           echo "=== FORTe Mode: shared baseline start [$PROFILE] ===" | tee -a "$LOG"
 
-          # ─── SCHEDULER ────────────────────────────────────────────────────────
           set_cfg CONFIG_PREEMPT y
           unset_cfg CONFIG_PREEMPT_NONE
           unset_cfg CONFIG_PREEMPT_VOLUNTARY
@@ -1075,21 +1280,18 @@ jobs:
           set_cfg CONFIG_HZ_300 y
           set_cfg CONFIG_HZ 300
 
-          # ─── TCP (BBR) ────────────────────────────────────────────────────────
           set_cfg CONFIG_TCP_CONG_ADVANCED y
           set_cfg CONFIG_TCP_CONG_BBR y
           set_cfg CONFIG_TCP_CONG_CUBIC y
           sed -i '/CONFIG_DEFAULT_TCP_CONG/d' "$DEFCONFIG"
           echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> "$DEFCONFIG"
 
-          # ─── MEMORY / RUNTIME STABILITY ───────────────────────────────────────
           set_cfg CONFIG_SCHED_DEBUG y
           set_cfg CONFIG_ZRAM y
           set_cfg CONFIG_ZSMALLOC y
           set_cfg CONFIG_CRYPTO_LZ4 y
           set_cfg CONFIG_CRYPTO_LZ4HC y
 
-          # ─── CHIMERA SILENT CORE (defconfig-level gate) ───────────────────────
           set_cfg CONFIG_PRINTK y
           set_cfg CONFIG_PRINTK_SAFE_LOG_BUF y
           set_cfg CONFIG_CONSOLE_LOGLEVEL_DEFAULT 3
@@ -1102,13 +1304,11 @@ jobs:
           unset_cfg CONFIG_DEBUG_FS
           set_cfg CONFIG_LOG_BUF_SHIFT 18
 
-          # ─── CLANG STABILITY LAYER (required across all toolchains on 4.9 BSP) ─
           unset_cfg CONFIG_CC_STACKPROTECTOR_STRONG
           unset_cfg CONFIG_CC_STACKPROTECTOR_REGULAR
           set_cfg CONFIG_CC_STACKPROTECTOR_NONE y
           unset_cfg CONFIG_LOCALVERSION_AUTO
 
-          # ─── A16 QPR2 CORE SUBSYSTEMS ─────────────────────────────────────────
           set_cfg CONFIG_BPF_SYSCALL y
           set_cfg CONFIG_CGROUP_BPF y
           set_cfg CONFIG_NET_CLS_BPF y
@@ -1133,14 +1333,11 @@ jobs:
           set_cfg CONFIG_IKCONFIG_PROC y
           set_cfg CONFIG_PROC_EVENTS y
 
-          # ─── SELINUX DEVELOP MODE (bootparam override capability) ─────────────
           set_cfg CONFIG_SECURITY_SELINUX_DEVELOP y
           set_cfg CONFIG_SECURITY_SELINUX_BOOTPARAM y
 
-          # ─── SUSFS BASE (spoof block is profile-specific — next step) ─────────
           set_cfg CONFIG_KSU_SUSFS y
           set_cfg CONFIG_KSU_SUSFS_TRY_UMOUNT y
-          # sus_memfd excluded: experimental, untested on Samsung 4.9 shmem.c
           unset_cfg CONFIG_KSU_SUSFS_SUS_MEMFD
 
           if probe_kconfig CONFIG_KSU_SUSFS_SUS_MAP; then
@@ -1164,27 +1361,8 @@ jobs:
           grep -E \
             "^(CONFIG_KSU|CONFIG_KSU_SUSFS|CONFIG_PREEMPT|CONFIG_HZ|CONFIG_TCP_CONG|CONFIG_BPF|CONFIG_CGROUP|CONFIG_BINDER|CONFIG_MEMCG|CONFIG_PSI|CONFIG_NET_CLS|CONFIG_FUSE|CONFIG_OVERLAY)" \
             "$DEFCONFIG" | tee -a "$LOG"
+
       # ── 5b. Profile & Identity Injection: profile-specific policy branch ──────
-      # This is the single point where cm8 and cm8e diverge in kernel behavior:
-      #
-      #   cm8  → runtime SUSFS spoofing: SPOOF_UNAME, SPOOF_SELINUX, and
-      #          ENABLE_AVC_LOG_SPOOF are enabled (probe-gated — only set if the
-      #          selected SUSFS/KSU tree actually defines the Kconfig symbol).
-      #          The kernel itself lies to userspace at runtime.
-      #
-      #   cm8e → all four spoof-family symbols are unconditionally hard-disabled
-      #          and verified absent (build aborts if Kconfig merge silently
-      #          re-enables any of them). Nothing lies at runtime. Instead the
-      #          "Compile-Time ROM Identity Engine" sub-step patches
-      #          scripts/mkcompile_h so the kernel's own build-identity strings
-      #          (UTS_VERSION / linux_banner components) are baked in
-      #          deterministically from the brand/build_user/build_host/
-      #          build_version/build_date inputs — with no dependency on the
-      #          CI runner's whoami/hostname/git-dirty-state, which is the
-      #          actual failure mode compile-time identity is meant to close
-      #          (a stock kbuild tree falls back to runner metadata like
-      #          "runner@fv-az123-45" the moment KBUILD_BUILD_* env plumbing
-      #          breaks anywhere in a heavily-surgeried Makefile chain).
       - name: Apply profile policy — SUSFS spoof (cm8) or hard-disable + Identity Engine (cm8e)
         working-directory: kernel
         run: |
@@ -1237,7 +1415,7 @@ jobs:
             echo "IDENTITY_ENGINE_ACTIVE=false" >> "$GITHUB_ENV"
 
           elif [[ "$PROFILE" == "cm8e" ]]; then
-            echo "--- cm8e: hard-disabling all SUSFS spoof symbols (unconditional) ---" | tee -a "$LOG"
+            echo "--- cm8e: hard-disabling all SUSFS spoof symbols ---" | tee -a "$LOG"
 
             unset_cfg CONFIG_KSU_SUSFS_SPOOF_UNAME
             unset_cfg CONFIG_KSU_SUSFS_SPOOF_SELINUX
@@ -1266,24 +1444,9 @@ jobs:
             echo "IDENTITY_ENGINE_ACTIVE=true"        >> "$GITHUB_ENV"
           fi
 
-          echo "=== Profile policy applied: $PROFILE (spoof=$([[ "$PROFILE" == cm8 ]] && echo enabled || echo hard-disabled)) ===" | tee -a "$LOG"
+          echo "=== Profile policy applied: $PROFILE ===" | tee -a "$LOG"
 
       # ── 5c. Compile-Time ROM Identity Engine (cm8e only) ───────────────────────
-      # Patches scripts/mkcompile_h directly so LINUX_COMPILE_BY / LINUX_COMPILE_HOST
-      # / LINUX_COMPILE_TIME / UTS_VERSION are emitted from our BUILD_USER/
-      # BUILD_HOST/BUILD_DATE/BUILD_VERSION inputs unconditionally — bypassing
-      # mkcompile_h's normal whoami/hostname/date/git-describe fallback logic
-      # entirely, rather than merely hoping the standard KBUILD_BUILD_* env vars
-      # propagate correctly through every sub-make invocation in this heavily
-      # patched tree. UTS_RELEASE (the kernel release string itself) is already
-      # deterministic via the scripts/setlocalversion override applied in the
-      # branding step, since it's derived from LOCALVERSION only.
-      #
-      # linux_banner (init/version.c) assembles as:
-      #   "Linux version " UTS_RELEASE " (" LINUX_COMPILE_BY "@" LINUX_COMPILE_HOST
-      #   ") (" LINUX_COMPILER ") " UTS_VERSION "\n"
-      # — so patching mkcompile_h's four defines plus the setlocalversion override
-      # fully determines every component of the compiled-in identity string.
       - name: Compile-Time ROM Identity Engine (cm8e)
         if: ${{ env.IDENTITY_ENGINE_ACTIVE == 'true' }}
         working-directory: kernel
@@ -1310,22 +1473,17 @@ jobs:
             'build_version = os.environ["BUILD_VERSION"]' \
             'build_date = os.environ["KBUILD_BUILD_TIMESTAMP"]' \
             '' \
-            '# Escape for safe embedding inside a POSIX sh heredoc/double-quoted string' \
             'def esc(s):' \
             '    return s.replace("\\\\", "\\\\\\\\").replace(\'"\', \'\\\\"\')' \
             '' \
             'override_block = f\'\'\'' \
             '# {MARKER} — unconditional compile-time identity override.' \
-            '# Bypasses whoami/hostname/date/git-describe fallbacks entirely;' \
-            '# values are sourced only from workflow_dispatch inputs, never from' \
-            '# the CI runner environment.' \
             'LINUX_COMPILE_BY="{esc(build_user)}"' \
             'LINUX_COMPILE_HOST="{esc(build_host)}"' \
             'LINUX_COMPILE_TIME="{esc(build_date)}"' \
             'CHIMERA_UTS_VERSION_OVERRIDE="#{esc(build_version)} SMP PREEMPT {esc(build_date)}"' \
             '\'\'\'' \
             '' \
-            '# Insert the override block right after the shebang / initial `set` line,' \
             'lines = content.splitlines(keepends=True)' \
             'insert_at = 1' \
             'for i, l in enumerate(lines[:5]):' \
@@ -1333,9 +1491,6 @@ jobs:
             '        insert_at = i + 1' \
             'patched = "".join(lines[:insert_at]) + override_block + "".join(lines[insert_at:])' \
             '' \
-            '# Force every UTS_VERSION assignment in the script to use our override' \
-            '# instead of the computed "#N SMP PREEMPT <date>" value, and strip any' \
-            '# "+"/dirty-suffix concatenation onto UTS_VERSION or LINUX_COMPILE_BY.' \
             'patched = re.sub(' \
             '    r"UTS_VERSION=.*",' \
             '    "UTS_VERSION=\\"$CHIMERA_UTS_VERSION_OVERRIDE\\"",' \
@@ -1350,7 +1505,6 @@ jobs:
           echo "=== Patched mkcompile_h diff ===" | tee "../$LOG_DIR/identity-engine.log"
           diff -u "../$LOG_DIR/mkcompile_h.orig" "$MKC" | tee -a "../$LOG_DIR/identity-engine.log" || true
 
-          # Sanity: script must still be valid POSIX sh (syntax check only, no exec)
           sh -n "$MKC" || { echo "ERROR: patched mkcompile_h failed syntax check"; exit 1; }
           echo "OK: patched mkcompile_h passes shell syntax check" | tee -a "../$LOG_DIR/identity-engine.log"
 
@@ -1361,7 +1515,8 @@ jobs:
             echo "IDENTITY_BUILD_VERSION=$BUILD_VERSION"
             echo "IDENTITY_BUILD_DATE=$KBUILD_BUILD_TIMESTAMP"
           } | tee -a "../$LOG_DIR/identity-engine.log"
-      # ── 6. Chimera Silent Engine — injected UNCONDITIONALLY, both profiles ────
+
+      # ── 6. Chimera Silent Engine ───────────────────────────────────────────────
       - name: Apply Chimera Silent Engine (Runtime Policy Layer — all profiles)
         working-directory: kernel
         run: |
@@ -1385,7 +1540,6 @@ jobs:
           {
               if (!chimera_silent_mode)
                   return 0;
-              /* printk levels: 0=EMERG 1=ALERT 2=CRIT 3=ERR 4=WARNING */
               return level > 4;
           }
 
@@ -1425,9 +1579,6 @@ jobs:
           echo "Chimera Silent Engine injected successfully (profile=$PROFILE)"
 
       # ── 7. Samsung-stock-style branding ────────────────────────────────────────
-      # LOCALVERSION/setlocalversion override applies to both profiles — this is
-      # what makes UTS_RELEASE deterministic; the Identity Engine (cm8e) builds
-      # on top of this for the remaining banner components.
       - name: Apply Samsung-stock-style branding
         working-directory: kernel
         run: |
@@ -1539,15 +1690,18 @@ jobs:
           echo "  KSU  : ${{ inputs.ksu_repo }} @ ${{ inputs.ksu_commit }}${{ inputs.ksu_ref }}"
           echo "  SUSFS: v${SUSFS_TARGET_VERSION} @ ${{ inputs.susfs_ref }}"
           echo "  Identity Engine active: ${IDENTITY_ENGINE_ACTIVE:-false}"
+          echo "  Eva GCC active: ${TC_NEEDS_EVA_GCC}"
+          echo "  CROSS_COMPILE: ${TC_CROSS_COMPILE}"
+          echo "  CROSS_COMPILE_ARM32: ${TC_CROSS_COMPILE_ARM32}"
+          echo "  HOSTCC: ${TC_HOSTCC}"
+          echo "  GCC_TOOLCHAIN: ${GCC_TOOLCHAIN:-(not set — non-Eva toolchain)}"
           echo "  KCFLAGS: -O2 -fcommon -fno-strict-aliasing -Wno-error"
           echo "  ccache: enabled (${CCACHE_MAXSIZE} budget)"
           echo "  uname preview: Linux version 4.9.337${BRAND} (${BUILD_USER}@${BUILD_HOST}) #${BUILD_VERSION} SMP PREEMPT"
           echo "========================================"
           echo "Re-run with dry_run=false to compile and package."
+
       # ── 9b. Pre-build warning suppression ────────────────────────────────────
-      # Eliminates all actionable Clang/MODPOST warnings without touching upstream
-      # BSP sources where possible. DTC warnings suppressed globally via DTC_FLAGS.
-      # All sed operations are idempotent (guarded with grep pre-check).
       - name: Pre-build warning suppression
         if: '${{ inputs.dry_run == false }}'
         working-directory: kernel
@@ -1556,9 +1710,6 @@ jobs:
           LOG="../$LOG_DIR/warning-suppression.log"
           echo "=== Chimera Mk8 Unified — Pre-build warning suppression [$PROFILE/$TOOLCHAIN] ===" | tee "$LOG"
 
-          # ── Fix 1: fs/proc/base.c unused 'inode' variable (SUSFS 2.2.0 sus-proc) ──
-          # a846bdf7 (gavdoc38 v3.2.5-legacy) fixes this upstream; sed guard is a
-          # belt-and-suspenders fallback for trees not yet on that commit.
           if grep -q 'struct inode \*inode;' fs/proc/base.c 2>/dev/null && \
              ! grep -q 'struct inode __maybe_unused \*inode' fs/proc/base.c 2>/dev/null; then
             sed -i 's/\bstruct inode \*inode;/struct inode __maybe_unused *inode;/g' fs/proc/base.c
@@ -1567,9 +1718,6 @@ jobs:
             echo "Fix 1: fs/proc/base.c inode already suppressed or absent" | tee -a "$LOG"
           fi
 
-          # ── Fix 2: drivers/video/fbdev/exynos/panel/copr.c unused 'panel' (BSP) ──
-          # Pre-existing Samsung BSP bug. Suppress per-file via panel Makefile to
-          # avoid widening global KCFLAGS scope.
           PANEL_MK="drivers/video/fbdev/exynos/panel/Makefile"
           if [[ -f "$PANEL_MK" ]] && ! grep -q 'CFLAGS_copr' "$PANEL_MK"; then
             echo 'CFLAGS_copr.o += -Wno-unused-variable' >> "$PANEL_MK"
@@ -1578,9 +1726,6 @@ jobs:
             echo "Fix 2: copr.o suppression already present or panel Makefile absent" | tee -a "$LOG"
           fi
 
-          # ── Fix 3a: susfs_extra_works COMMON symbol (struct work_struct) ──────────
-          # Zero-brace init moves symbol from COMMON → .bss; INIT_WORK() re-initialises
-          # all fields at runtime so this is a pure linker-section placement change.
           if grep -q '^struct work_struct susfs_extra_works;' fs/susfs.c 2>/dev/null; then
             sed -i 's/^struct work_struct susfs_extra_works;$/struct work_struct susfs_extra_works = {};/' fs/susfs.c
             echo "Fix 3a applied: susfs_extra_works = {} (work_struct) in fs/susfs.c" | tee -a "$LOG"
@@ -1591,7 +1736,6 @@ jobs:
             echo "Fix 3a: susfs_extra_works already initialised or absent" | tee -a "$LOG"
           fi
 
-          # ── Fix 3b: ksu_cred COMMON symbol (struct cred pointer) ─────────────────
           KSU_CRED_SRC=""
           for candidate in \
             drivers/kernelsu/ksu.c \
@@ -1612,9 +1756,21 @@ jobs:
           echo "=== Warning suppression complete ===" | tee -a "$LOG"
 
       # ── 10. Compilation ────────────────────────────────────────────────────────
-      # Uses only the toolchain-agnostic variables exported in step 2e — this
-      # step never branches on $TOOLCHAIN directly. LLVM= / LLVM_IAS= are set
-      # from MAKE_LLVM_FLAG / LLVM_IAS_VALUE resolved earlier in the matrix.
+      # Uses only the toolchain-agnostic TC_* variables exported in steps 2 and
+      # 2e/2e-eva — this step never branches on $TOOLCHAIN directly.
+      #
+      # Key variables consumed here:
+      #   CC_BIN          — absolute path to clang (all toolchains)
+      #   LD/AR/NM/…_BIN  — LLVM tools or aarch64-linux-gnu-* depending on TC_USE_FULL_LLVM
+      #   MAKE_LLVM_FLAG  — 1 (full LLVM) or 0 (GNU binutils)
+      #   LLVM_IAS_VALUE  — 0 or 1 per-toolchain (0 for clang21-eva-gcc: Eva GCC as backend)
+      #   TC_CLANG_TRIPLE — always aarch64-linux-gnu- across all toolchains
+      #   TC_CROSS_COMPILE — aarch64-linux-gnu- (default) or aarch64-elf- (clang21-eva-gcc)
+      #   TC_CROSS_COMPILE_ARM32 — arm-linux-gnueabi- (default) or arm-eabi- (clang21-eva-gcc)
+      #   TC_HOSTCC       — gcc (default) or clang (clang21-eva-gcc)
+      #   GCC_TOOLCHAIN   — unset for all toolchains except clang21-eva-gcc, where it is
+      #                     the Eva GCC arm64 sysroot. Conditionally appended to MAKE
+      #                     array below; kbuild passes it to Clang as --gcc-toolchain=.
       - name: Build kernel
         if: '${{ inputs.dry_run == false }}'
         working-directory: kernel
@@ -1627,7 +1783,6 @@ jobs:
           export KBUILD_BUILD_VERSION="$BUILD_VERSION"
           export KBUILD_BUILD_TIMESTAMP="$KBUILD_BUILD_TIMESTAMP"
 
-          # ccache environment
           export CCACHE_DIR="$HOME/.ccache"
           export CCACHE_BASEDIR="$GITHUB_WORKSPACE"
           export CCACHE_COMPILERCHECK="content"
@@ -1636,17 +1791,27 @@ jobs:
 
           echo "=== Toolchain sanity — $TC_LABEL ($TOOLCHAIN) ==="
           "$CC_BIN" --version
-          echo "  CC:      $CC_BIN (ccache-wrapped)"
-          echo "  LD:      $LD_BIN"
-          echo "  AR:      $AR_BIN"
-          echo "  NM:      $NM_BIN"
-          echo "  OBJCOPY: $OBJCOPY_BIN"
-          echo "  OBJDUMP: $OBJDUMP_BIN"
-          echo "  STRIP:   $STRIP_BIN"
+          echo "  CC:       $CC_BIN (ccache-wrapped)"
+          echo "  LD:       $LD_BIN"
+          echo "  AR:       $AR_BIN"
+          echo "  NM:       $NM_BIN"
+          echo "  OBJCOPY:  $OBJCOPY_BIN"
+          echo "  OBJDUMP:  $OBJDUMP_BIN"
+          echo "  STRIP:    $STRIP_BIN"
           echo "  LLVM=$MAKE_LLVM_FLAG  LLVM_IAS=$LLVM_IAS_VALUE"
+          echo "  CLANG_TRIPLE=$TC_CLANG_TRIPLE"
+          echo "  CROSS_COMPILE=$TC_CROSS_COMPILE"
+          echo "  CROSS_COMPILE_ARM32=$TC_CROSS_COMPILE_ARM32"
+          echo "  HOSTCC=$TC_HOSTCC"
+          echo "  GCC_TOOLCHAIN=${GCC_TOOLCHAIN:-(not set)}"
           echo "=== ccache status (pre-build) ==="
           ccache --show-stats | head -10 || true
 
+          # ── [CHANGED] CLANG_TRIPLE/CROSS_COMPILE/CROSS_COMPILE_ARM32/HOSTCC ──
+          # Now driven by TC_* env vars rather than hardcoded strings.
+          # For all existing toolchains (aosp*, neutron19, zyc_stable) these
+          # resolve to the same aarch64-linux-gnu- / arm-linux-gnueabi- values
+          # as before. For clang21-eva-gcc they resolve to aarch64-elf- / arm-eabi-.
           MAKE=(
             make -j"$(nproc)"
             O="$GITHUB_WORKSPACE/$OUT_DIR"
@@ -1655,11 +1820,11 @@ jobs:
             LLVM="$MAKE_LLVM_FLAG"
             LLVM_IAS="$LLVM_IAS_VALUE"
             CC="ccache $CC_BIN"
-            HOSTCC=gcc
+            HOSTCC="$TC_HOSTCC"
             HOSTCXX=g++
-            CLANG_TRIPLE=aarch64-linux-gnu-
-            CROSS_COMPILE=aarch64-linux-gnu-
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+            CLANG_TRIPLE="$TC_CLANG_TRIPLE"
+            CROSS_COMPILE="$TC_CROSS_COMPILE"
+            CROSS_COMPILE_ARM32="$TC_CROSS_COMPILE_ARM32"
             LD="$LD_BIN"
             AR="$AR_BIN"
             NM="$NM_BIN"
@@ -1673,6 +1838,17 @@ jobs:
             KCFLAGS="-O2 -fcommon -fno-strict-aliasing -Wno-error"
             DTC_FLAGS="-Wno-unit_address_vs_reg"
           )
+
+          # ── [NEW] Conditionally append GCC_TOOLCHAIN for clang21-eva-gcc ──────
+          # GCC_TOOLCHAIN is unset for all other toolchains, so this block is a
+          # no-op for them. When set, kbuild's scripts/Makefile.clang translates it
+          # to Clang's --gcc-toolchain=<path> flag, giving Clang access to the Eva
+          # GCC sysroot for GNU compatibility discovery. Eva GCC is still NOT the
+          # compiler — it only provides the sysroot and assembler backend.
+          if [[ -n "${GCC_TOOLCHAIN:-}" ]]; then
+            MAKE+=("GCC_TOOLCHAIN=$GCC_TOOLCHAIN")
+            echo "INFO: GCC_TOOLCHAIN=$GCC_TOOLCHAIN appended to make args"
+          fi
 
           echo "=== Applying defconfig ==="
           "${MAKE[@]}" exynos9810-star2lte_defconfig
@@ -1729,7 +1905,7 @@ jobs:
           strings "$IMAGE" | grep -E "Linux version 4\.9\." | head -3 | tee "$GITHUB_WORKSPACE/$LOG_DIR/uname-verify.log" || true
 
           if [[ "$PROFILE" == "cm8e" ]]; then
-            echo "=== [cm8e] Identity Engine leak check — confirming no runner metadata baked in ==="
+            echo "=== [cm8e] Identity Engine leak check ==="
             LEAK=0
             for pattern in "runner@fv-az" "@fv-az" "ip-10-" "ubuntu@" "root@buildkitsandbox"; do
               if strings "$IMAGE" | grep -qF "$pattern"; then
@@ -1751,6 +1927,7 @@ jobs:
 
           echo "=== ccache stats (post-build) ==="
           ccache --show-stats | tee "$GITHUB_WORKSPACE/$LOG_DIR/ccache-stats.log" || true
+
       # ── 11. Post-build validation logs ────────────────────────────────────────
       - name: Diagnostic — print SUSFS, Binder, and profile-policy CONFIG values
         if: '${{ inputs.dry_run == false }}'
@@ -1793,16 +1970,13 @@ jobs:
             echo ""
             echo "── Toolchain used ───────────────────────────────────────────"
             echo "  $TC_LABEL — LLVM=$MAKE_LLVM_FLAG LLVM_IAS=$LLVM_IAS_VALUE"
+            echo "  CROSS_COMPILE=$TC_CROSS_COMPILE  HOSTCC=$TC_HOSTCC"
+            echo "  GCC_TOOLCHAIN=${GCC_TOOLCHAIN:-(not set)}"
             echo ""
             echo "════════════════════════════════════════════════════════"
           } | tee "$DIAG_LOG"
 
       # ── 12. Packaging: raw kernel Image ───────────────────────────────────────
-      # Unified across both profiles per the Step 6 spec — replaces cm8's
-      # AnyKernel3 zip packaging. No boot.img patching is performed here (no
-      # practical way to host a stock boot.img for the workflow to consume);
-      # inject this Image into your own dumped boot.img locally with
-      # magiskboot/AIK/mkbootimg as needed.
       - name: Stage final Image artifact
         if: '${{ inputs.dry_run == false }}'
         run: |
@@ -1867,13 +2041,21 @@ jobs:
             This build used profile **`${{ inputs.profile }}`**.
 
             ### Toolchain Matrix (all options)
-            | Toolchain | Compiler | Binutils | LLVM_IAS |
-            |---|---|---|---|
-            | `aosp19` | AOSP Clang 19 r596125 | Full LLVM | 0 |
-            | `aosp20` | korg Clang 20.1.8 | Full LLVM | 0 |
-            | `aosp21` | AOSP Clang 21 r563880c | Full LLVM | 0 |
-            | `neutron19` | Neutron Clang (catalogue) | System GNU binutils | 1 |
-            | `zyc_stable` | ZyCromerZ Clang (latest) | System GNU binutils | 0 |
+            | Toolchain | Primary Compiler | Linker / Binutils | Assembler Backend | LLVM_IAS |
+            |---|---|---|---|---|
+            | `aosp19` | AOSP Clang 19 r596125 | Full LLVM (tarball) | Clang integrated | 0 (GNU `as` via CROSS_COMPILE) |
+            | `aosp20` | korg Clang 20.1.8 | Full LLVM (tarball) | Clang integrated | 0 (GNU `as` via CROSS_COMPILE) |
+            | `aosp21` | AOSP Clang 21 r563880c | Full LLVM (tarball) | Clang integrated | 0 (GNU `as` via CROSS_COMPILE) |
+            | `aosp22` | AOSP Clang 22.0 r596125 | Full LLVM (tarball) | Clang integrated | 0 (GNU `as` via CROSS_COMPILE) |
+            | `neutron19` | Neutron Clang (catalogue) | System GNU binutils | Clang IAS | 1 |
+            | `zyc_stable` | ZyCromerZ Clang (latest) | System GNU binutils | Clang integrated | 0 (GNU `as` via CROSS_COMPILE) |
+            | `clang21-eva-gcc` | **AOSP Clang 21 r563880c** | **Full LLVM (tarball)** | **Eva GCC `aarch64-elf-as`** | **0 — Eva GCC provides GNU `as` backend** |
+
+            #### `clang21-eva-gcc` detail
+            - **Primary compiler:** AOSP Clang 21.0 r563880c — all C/C++ compilation, linking (lld), and archiving (llvm-ar/nm/objcopy/strip).
+            - **Support toolchain:** Eva GCC (mvaisakh/gcc-arm64 `aarch64-elf-` + mvaisakh/gcc-arm `arm-eabi-`) — provides the GNU assembler backend (`aarch64-elf-as`) invoked by Clang when LLVM_IAS=0, and the GCC sysroot referenced via `--gcc-toolchain` for GNU compatibility. Eva GCC is **not** the compiler.
+            - **HOSTCC:** `clang` (host-side kernel tool compilation via Clang 21 rather than system gcc).
+            - **GCC_TOOLCHAIN:** `eva-gcc/arm64` — passed as a make argument; surfaces to Clang as `--gcc-toolchain=<path>` via `scripts/Makefile.clang`.
 
             This build used toolchain **`${{ inputs.toolchain }}`** (${{ env.TC_LABEL }}).
 
@@ -1891,9 +2073,11 @@ jobs:
 
             ### Safe-Boot Diagnostics
             Post-build CONFIG verification (SUSFS, profile spoof policy, Binder, BPF/FUSE/OverlayFS,
-            toolchain) is written to `logs/safeboot-config-verify.log`. For `cm8e`, the build aborts
-            if any spoof symbol is found set=y after Kconfig merge, or if the Identity Engine marker
-            is missing from `scripts/mkcompile_h`.
+            toolchain, cross-compile prefixes, GCC_TOOLCHAIN) is written to
+            `logs/safeboot-config-verify.log`. For `cm8e`, the build aborts if any spoof symbol is
+            found set=y after Kconfig merge, or if the Identity Engine marker is missing from
+            `scripts/mkcompile_h`. For `clang21-eva-gcc`, the Eva GCC download step verifies
+            `aarch64-elf-gcc` and `arm-eabi-gcc` binary presence before the build proceeds.
 
             ### uname String
             `Linux version 4.9.337${{ env.BRAND }} (${{ env.BUILD_USER }}@${{ env.BUILD_HOST }}) #${{ env.BUILD_VERSION }} SMP PREEMPT`
