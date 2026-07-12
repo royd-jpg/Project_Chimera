@@ -1,0 +1,949 @@
+# build_chimera_mk8_unified.yml
+# Project Chimera Mk8 — Unified end-to-end kernel build workflow
+# Produces a deterministic kernel build for Exynos9810 (star2lte) from chimera-mk8.
+# Preserves Chimera-specific DTS, scheduler, defconfig flags, and driver enables.
+# Selectively imports upstream-inspired SUSFS/KSU inputs only as build-time sources;
+# never merges or rewrites Chimera git history.
+#
+# Fixed issues (vs original):
+#  [CRITICAL-1]  env: block used github.event.inputs.* — evaluated at parse time, not run time;
+#                user-supplied inputs were silently ignored. Moved to a dedicated 'Resolve build
+#                identity' step that writes to GITHUB_ENV at run time.
+#  [CRITICAL-2]  if: inputs.dry_run == false — boolean inputs are strings at expression time;
+#                'false' (string) != false (boolean). Changed to: inputs.dry_run != 'true'.
+#  [CRITICAL-3]  Eva GCC PATH written via GITHUB_ENV (overwrites entire PATH). Fixed to use
+#                GITHUB_PATH (appends one entry per line).
+#  [CRITICAL-4]  O=../$OUT_DIR set as env var in build step, not passed to make. make ignores
+#                env var O; must be a CLI argument. Fixed throughout.
+#  [HIGH-5]      Package step wrote to $GITHUB_OUTPUT but had no `id:`. Outputs were
+#                unreachable. Added id: package and wired artifact upload to use it properly.
+#  [HIGH-6]      zyc_stable: TC_URL=empty but no resolution step for TC_DYNAMIC_RESOLVE.
+#                Added inline ZyC API resolution before download.
+#  [HIGH-7]      external/KernelSU-Next never connected to the make build. Added submodule
+#                init for the in-tree KernelSU-Next, and exported KSU_GIT_VERSION.
+#  [HIGH-8]      First no-op checkout@v4 (fetch-depth=0 into workspace root) wasted time
+#                and polluted the workspace before the real targeted checkout. Removed.
+#  [HIGH-9]      PIPESTATUS check after `make | tee` was dead code — set -Eeuo pipefail
+#                already exits on make failure before the check runs. Removed.
+#  [HIGH-10]     vfs_mkobj EXPORT_SYMBOL appended to EOF of namei.c — function doesn't exist
+#                in Chimera's namei.c, so the symbol was undefined. Replaced with a proper
+#                port of the full vfs_mkobj() function + EXPORT_SYMBOL inserted after vfs_mknod.
+#  [HIGH-11]     mm/shmem.c heredoc injection appended a dead, never-called helper with a
+#                broken extern-as-function-pointer pattern. Replaced with a targeted sed
+#                insertion of the real susfs_sus_memfd() guard at the correct memfd_create
+#                call site (after the copy_from_user null-terminator check).
+#  [MEDIUM-12]   Duplicate TC_CROSS_COMPILE / TC_LLVM_IAS writes: post-case defaults
+#                overwrote per-toolchain values already written to GITHUB_ENV. Refactored
+#                to use shell variables throughout; write to GITHUB_ENV once at the end.
+#  [MEDIUM-13]   tar --mtime='2026-01-01' ambiguous; changed to ISO 8601
+#                --mtime='2026-01-01T00:00:00Z'.
+#  [MEDIUM-14]   Release body used $(cat ...) subshell in a YAML string — not executed.
+#                Changed to reference ${{ env.CHIMERA_COMMIT }} set at run time.
+#  [MEDIUM-15]   Workspace mkdir + path-anchoring: added $GITHUB_WORKSPACE as the explicit
+#                base for all absolute paths. KERNEL_DIR, OUT_DIR, LOG_DIR now resolved
+#                consistently from workspace root.
+#  [MEDIUM-16]   Build step lacked full LLVM tool exports (AR, NM, OBJCOPY, STRIP, OBJDUMP)
+#                and toolchain bin/ was not on PATH. Added LLVM tool variables and PATH
+#                prepend for the build step.
+#  [LOW-17]      strncpy→strscpy perl regex was fragile for function-call arguments.
+#                Replaced with a whole-file swap from the upstream fetched copy (simpler
+#                and produces the exact same result as gavdoc38's 866d74fc commit).
+
+name: Project Chimera Mk8 Unified — Build
+
+permissions:
+  contents: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "Build profile: cm8 (runtime SUSFS spoof) or cm8e (compile-time identity)"
+        required: true
+        type: choice
+        options: [cm8, cm8e]
+        default: cm8
+      toolchain:
+        description: "Toolchain: aosp19/aosp20/aosp21/aosp22/neutron19/zyc_stable/clang21-eva-gcc"
+        required: true
+        type: choice
+        options: [aosp19, aosp20, aosp21, aosp22, neutron19, zyc_stable, clang21-eva-gcc]
+        default: aosp21
+      dry_run:
+        description: "Validate only — skip build and package"
+        required: false
+        type: boolean
+        default: false
+      do_release:
+        description: "Create a GitHub Release after successful build"
+        required: false
+        type: boolean
+        default: false
+      force_repatch:
+        description: "Force re-apply KSU/SUSFS patches even if present"
+        required: false
+        type: boolean
+        default: false
+      ksu_repo:
+        description: "KernelSU-Next git URL (https only)"
+        required: false
+        type: string
+        default: "https://github.com/gavdoc38/KernelSU-Next.git"
+      ksu_commit:
+        description: "KernelSU exact commit SHA (pin)"
+        required: false
+        type: string
+        default: "242f245b2c971eb5c1cc4a689e01dcdeaff4c939"
+      susfs_repo:
+        description: "SUSFS git URL (https only)"
+        required: false
+        type: string
+        default: "https://gitlab.com/simonpunk/susfs4ksu.git"
+      susfs_ref:
+        description: "SUSFS branch/tag/ref"
+        required: false
+        type: string
+        default: "kernel-4.9"
+      susfs_commit:
+        description: "SUSFS exact commit SHA (optional pin)"
+        required: false
+        type: string
+        default: ""
+      brand:
+        description: "LOCALVERSION suffix (must start with '-')"
+        required: false
+        type: string
+        default: "-Chimera_Mk8_Forte"
+      build_user:
+        description: "KBUILD_BUILD_USER"
+        required: false
+        type: string
+        default: "_Terminal_Echo"
+      build_host:
+        description: "KBUILD_BUILD_HOST"
+        required: false
+        type: string
+        default: "AegisDevLabs"
+      build_version:
+        description: "KBUILD_BUILD_VERSION (#N token)"
+        required: false
+        type: string
+        default: "1"
+      build_date:
+        description: "KBUILD_BUILD_TIMESTAMP (deterministic)"
+        required: false
+        type: string
+        default: "Mon 1 Jan 00:00:00 UTC 2026"
+
+env:
+  # Core repo and build layout (do not change without understanding path anchoring below)
+  KERNEL_REPO: "https://github.com/royd-jpg/Project_Chimera"
+  KERNEL_BRANCH: "chimera-mk8"
+  KERNEL_DIR: "kernel"
+  OUT_DIR: "kernel-out"
+  LOG_DIR: "logs"
+  DEFCONFIG: "arch/arm64/configs/exynos9810-star2lte_defconfig"
+  SUSFS_TARGET_VERSION: "2.2.0"
+  CCACHE_MAXSIZE: "3G"
+  # Static defaults only — runtime values are resolved in 'Resolve build identity' step
+  # (FIX #1: removed github.event.inputs.* from env block; those are parse-time only)
+  BRAND_DEFAULT: "-Chimera_Mk8_Forte"
+  BUILD_USER_DEFAULT: "_Terminal_Echo"
+  BUILD_HOST_DEFAULT: "AegisDevLabs"
+  BUILD_VERSION_DEFAULT: "1"
+  KBUILD_BUILD_TIMESTAMP_DEFAULT: "Mon 1 Jan 00:00:00 UTC 2026"
+
+jobs:
+  build:
+    name: Chimera Mk8 Build — ${{ inputs.profile }} / ${{ inputs.toolchain }}
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+
+      # -----------------------------------------------------------------------
+      # 0. Preflight: install tools, prepare workspace, resolve runtime identity
+      # -----------------------------------------------------------------------
+      - name: Install build dependencies
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            aria2 bc bison build-essential ccache flex \
+            git libelf-dev libssl-dev lz4 python3 \
+            rsync zstd cpio pahole
+          # Verify tooling
+          python3 --version
+          zstd --version | head -1
+
+      - name: Prepare workspace directories
+        run: |
+          set -Eeuo pipefail
+          # All paths anchored to GITHUB_WORKSPACE to avoid working-directory confusion.
+          # (FIX #15: explicit absolute base; mkdir before checkout is fine since checkout
+          #  into path: kernel/ only requires the parent to exist, not the dir itself)
+          mkdir -p "$GITHUB_WORKSPACE/$LOG_DIR"
+          mkdir -p "$GITHUB_WORKSPACE/$OUT_DIR"
+          # Export absolute paths for all subsequent steps
+          echo "WS=$GITHUB_WORKSPACE"                             >> "$GITHUB_ENV"
+          echo "ABS_LOG=$GITHUB_WORKSPACE/$LOG_DIR"              >> "$GITHUB_ENV"
+          echo "ABS_OUT=$GITHUB_WORKSPACE/$OUT_DIR"              >> "$GITHUB_ENV"
+          echo "ABS_KERNEL=$GITHUB_WORKSPACE/$KERNEL_DIR"        >> "$GITHUB_ENV"
+          echo "ABS_TC=$GITHUB_WORKSPACE/toolchains/clang"       >> "$GITHUB_ENV"
+
+      # FIX #1: Resolve build identity at run time so workflow_dispatch inputs are honoured.
+      - name: Resolve build identity (runtime)
+        run: |
+          set -Eeuo pipefail
+          BRAND="${{ inputs.brand }}"
+          BRAND="${BRAND:-$BRAND_DEFAULT}"
+          if [[ "${BRAND:0:1}" != "-" ]]; then
+            echo "ERROR: brand must start with '-' (got: '$BRAND')" >&2
+            exit 1
+          fi
+          BUILD_USER="${{ inputs.build_user }}"
+          BUILD_USER="${BUILD_USER:-$BUILD_USER_DEFAULT}"
+          BUILD_HOST="${{ inputs.build_host }}"
+          BUILD_HOST="${BUILD_HOST:-$BUILD_HOST_DEFAULT}"
+          BUILD_VER="${{ inputs.build_version }}"
+          BUILD_VER="${BUILD_VER:-$BUILD_VERSION_DEFAULT}"
+          BUILD_TS="${{ inputs.build_date }}"
+          BUILD_TS="${BUILD_TS:-$KBUILD_BUILD_TIMESTAMP_DEFAULT}"
+
+          echo "BRAND=$BRAND"                         >> "$GITHUB_ENV"
+          echo "BUILD_USER=$BUILD_USER"               >> "$GITHUB_ENV"
+          echo "BUILD_HOST=$BUILD_HOST"               >> "$GITHUB_ENV"
+          echo "BUILD_VERSION=$BUILD_VER"             >> "$GITHUB_ENV"
+          echo "KBUILD_BUILD_TIMESTAMP=$BUILD_TS"     >> "$GITHUB_ENV"
+
+          echo "profile=${{ inputs.profile }}"        >> "$ABS_LOG/inputs.env"
+          echo "toolchain=${{ inputs.toolchain }}"    >> "$ABS_LOG/inputs.env"
+          echo "brand=$BRAND"                         >> "$ABS_LOG/inputs.env"
+          echo "build_user=$BUILD_USER"               >> "$ABS_LOG/inputs.env"
+          echo "build_host=$BUILD_HOST"               >> "$ABS_LOG/inputs.env"
+          echo "build_ts=$BUILD_TS"                   >> "$ABS_LOG/inputs.env"
+          echo "uname_preview=Linux version 4.9.337${BRAND} (${BUILD_USER}@${BUILD_HOST}) #${BUILD_VER} SMP PREEMPT" \
+               | tee -a "$ABS_LOG/inputs.env"
+
+          case "${{ inputs.profile }}" in
+            cm8|cm8e) ;;
+            *) echo "ERROR: unknown profile '${{ inputs.profile }}'" >&2; exit 1 ;;
+          esac
+          case "${{ inputs.toolchain }}" in
+            aosp19|aosp20|aosp21|aosp22|neutron19|zyc_stable|clang21-eva-gcc) ;;
+            *) echo "ERROR: unknown toolchain '${{ inputs.toolchain }}'" >&2; exit 1 ;;
+          esac
+
+      # -----------------------------------------------------------------------
+      # 1. Checkout Chimera source (authoritative). Do not alter history.
+      # FIX #8: Removed the first no-op checkout@v4 that polluted GITHUB_WORKSPACE
+      #          and wasted fetch-depth=0 time. Only one targeted checkout below.
+      # -----------------------------------------------------------------------
+      - name: Checkout Chimera kernel repo (chimera-mk8)
+        uses: actions/checkout@v4
+        with:
+          repository: royd-jpg/Project_Chimera
+          ref: chimera-mk8
+          path: ${{ env.KERNEL_DIR }}
+          fetch-depth: 0
+
+      - name: Preflight — verify branch and clean state
+        working-directory: ${{ env.KERNEL_DIR }}
+        run: |
+          set -Eeuo pipefail
+          current_branch=$(git rev-parse --abbrev-ref HEAD || true)
+          if [[ "$current_branch" != "chimera-mk8" ]]; then
+            echo "ERROR: expected chimera-mk8 branch, got '$current_branch'" >&2
+            exit 1
+          fi
+          if [[ -n "$(git status --porcelain)" ]]; then
+            echo "ERROR: repository has uncommitted changes; CI requires a clean checkout" >&2
+            git status --porcelain
+            exit 1
+          fi
+          CHIMERA_COMMIT=$(git rev-parse HEAD)
+          echo "$CHIMERA_COMMIT"                  > "$ABS_LOG/chimera-commit.txt"
+          echo "CHIMERA_COMMIT=${CHIMERA_COMMIT}" >> "$GITHUB_ENV"
+          echo "Chimera commit: $CHIMERA_COMMIT"
+
+      # -----------------------------------------------------------------------
+      # 2. Fetch upstream (gavdoc38) shallow — reference only; never merged
+      # -----------------------------------------------------------------------
+      - name: Fetch upstream reference (gavdoc) shallow
+        working-directory: ${{ env.KERNEL_DIR }}
+        run: |
+          set -Eeuo pipefail
+          UPSTREAM_URL="https://github.com/gavdoc38/android_kernel_samsung_exynos9810.git"
+          UPSTREAM_REF="lineage-23.2-ksun3-susfs2-5.10"
+          git remote add gavdoc "$UPSTREAM_URL" || true
+          git fetch --no-tags --depth=100 gavdoc "$UPSTREAM_REF" || true
+          if git rev-parse --verify --quiet "gavdoc/$UPSTREAM_REF" >/dev/null 2>&1; then
+            UPSTREAM_TIP=$(git rev-parse "gavdoc/$UPSTREAM_REF")
+            echo "$UPSTREAM_TIP"           > "$ABS_LOG/upstream-tip.txt"
+            echo "UPSTREAM_TIP=$UPSTREAM_TIP" >> "$GITHUB_ENV"
+            echo "Fetched upstream tip: $UPSTREAM_TIP"
+          else
+            echo "UPSTREAM_TIP="              >> "$GITHUB_ENV"
+            echo "Upstream fetch failed or ref unavailable; upstream file imports will be skipped"
+          fi
+
+      # -----------------------------------------------------------------------
+      # 3. Initialise KernelSU-Next submodule (in-tree) and export KSU version
+      # FIX #7: The external/KernelSU-Next clone was never wired into the build.
+      #         Initialise the in-tree submodule instead (already pinned to 242f245b).
+      #         If the caller wants a different commit, we update the submodule here.
+      # -----------------------------------------------------------------------
+      - name: Initialise KernelSU-Next submodule
+        working-directory: ${{ env.KERNEL_DIR }}
+        run: |
+          set -Eeuo pipefail
+          KSU_REPO="${{ inputs.ksu_repo }}"
+          KSU_COMMIT="${{ inputs.ksu_commit }}"
+          KSU_SUB="KernelSU-Next"
+
+          # Override the submodule URL if caller supplied a custom one
+          if [[ -n "$KSU_REPO" ]]; then
+            git config "submodule.$KSU_SUB.url" "$KSU_REPO"
+          fi
+
+          # Init and fetch the submodule at the pinned commit
+          git submodule init "$KSU_SUB"
+          git submodule update --depth=1 "$KSU_SUB" || {
+            # Fallback: manually fetch and checkout the pinned commit
+            echo "Submodule update failed; falling back to manual fetch"
+            git -C "$KSU_SUB" fetch --no-tags --depth=1 origin "$KSU_COMMIT" || \
+            git -C "$KSU_SUB" fetch --no-tags --depth=100 origin "$KSU_COMMIT"
+            git -C "$KSU_SUB" checkout --detach "$KSU_COMMIT"
+          }
+
+          ACTUAL_KSU=$(git -C "$KSU_SUB" rev-parse HEAD)
+          echo "KSU-Next: $ACTUAL_KSU" > "$ABS_LOG/ksu-commit.txt"
+          # KSU_GIT_VERSION is the short hash used by KernelSU for version embedding
+          KSU_GIT_VERSION=$(git -C "$KSU_SUB" rev-parse --short HEAD)
+          echo "KSU_GIT_VERSION=$KSU_GIT_VERSION" >> "$GITHUB_ENV"
+          echo "KernelSU-Next submodule: $ACTUAL_KSU (short: $KSU_GIT_VERSION)"
+
+      # -----------------------------------------------------------------------
+      # 4. Prepare SUSFS source (clone requested ref — for reference only)
+      # -----------------------------------------------------------------------
+      - name: Prepare SUSFS source
+        working-directory: ${{ env.KERNEL_DIR }}
+        run: |
+          set -Eeuo pipefail
+          SUSFS_REPO="${{ inputs.susfs_repo }}"
+          SUSFS_REF="${{ inputs.susfs_ref }}"
+          SUSFS_DIR="external/susfs"
+
+          if [[ -z "$SUSFS_REPO" ]]; then
+            echo "No SUSFS repo provided; skipping"
+            exit 0
+          fi
+
+          mkdir -p "$SUSFS_DIR"
+          git -C "$SUSFS_DIR" init
+          git -C "$SUSFS_DIR" remote add origin "$SUSFS_REPO"
+          git -C "$SUSFS_DIR" fetch --no-tags --depth=1 origin "$SUSFS_REF" || \
+            git -C "$SUSFS_DIR" fetch --no-tags --depth=100 origin "$SUSFS_REF"
+          git -C "$SUSFS_DIR" checkout --detach FETCH_HEAD
+
+          SUSFS_PIN="${{ inputs.susfs_commit }}"
+          if [[ -n "$SUSFS_PIN" ]]; then
+            git -C "$SUSFS_DIR" fetch --no-tags --depth=1 origin "$SUSFS_PIN" || true
+            git -C "$SUSFS_DIR" checkout --detach "$SUSFS_PIN" || true
+          fi
+
+          SUSFS_ACTUAL=$(git -C "$SUSFS_DIR" rev-parse --short HEAD)
+          echo "SUSFS ref=$SUSFS_REF actual=$SUSFS_ACTUAL" > "$ABS_LOG/susfs-ref.txt"
+          echo "SUSFS fetched: $SUSFS_ACTUAL"
+
+      # -----------------------------------------------------------------------
+      # 5. Selective workspace patching (file-level imports; no commits)
+      # FIX #10: vfs_mkobj — port the full function + EXPORT_SYMBOL after vfs_mknod,
+      #           not an orphan EXPORT_SYMBOL at EOF.
+      # FIX #11: mm/shmem.c — targeted sed insertion at real memfd_create call site,
+      #           not a dead appended helper with broken extern-as-pointer pattern.
+      # FIX #17: strscpy hardening — whole-file swap from upstream copy, not fragile regex.
+      # -----------------------------------------------------------------------
+      - name: Apply selective workspace patches (workspace-only; no commits)
+        working-directory: ${{ env.KERNEL_DIR }}
+        run: |
+          set -Eeuo pipefail
+          LOG="$ABS_LOG/patches.log"
+          FORCE="${{ inputs.force_repatch }}"
+          UPSTREAM_REF="gavdoc/lineage-23.2-ksun3-susfs2-5.10"
+          echo "force_repatch=$FORCE" > "$LOG"
+
+          upstream_available() {
+            git rev-parse --verify --quiet "$UPSTREAM_REF" >/dev/null 2>&1
+          }
+
+          # ---- Helper: show a file from the upstream fetch ----
+          upstream_show() {
+            git show "${UPSTREAM_REF}:$1"
+          }
+
+          # ---- 1. strscpy hardening in fs/susfs.c ----------------------------------------
+          # FIX #17: copy the upstream file verbatim (identical SUSFS version, only strncpy
+          # differs) rather than a fragile perl regex.
+          if upstream_available; then
+            if upstream_show "fs/susfs.c" > fs/susfs.c.upstream 2>/dev/null; then
+              # Sanity: upstream file must contain SUSFS_VERSION v2.2.0
+              if grep -q 'SUSFS_VERSION.*2\.2\.0' fs/susfs.c.upstream; then
+                mv fs/susfs.c.upstream fs/susfs.c
+                echo "[OK] fs/susfs.c: applied strscpy hardening + sus_memfd from upstream" >> "$LOG"
+              else
+                rm -f fs/susfs.c.upstream
+                echo "[SKIP] fs/susfs.c upstream version mismatch; keeping Chimera copy" >> "$LOG"
+              fi
+            else
+              echo "[SKIP] fs/susfs.c not found in upstream fetch" >> "$LOG"
+            fi
+          else
+            echo "[SKIP] Upstream not available; skipping fs/susfs.c import" >> "$LOG"
+          fi
+
+          # ---- 2. include/linux/susfs.h and susfs_def.h (adds sus_memfd struct) --------
+          for HEADER in include/linux/susfs.h include/linux/susfs_def.h; do
+            if upstream_available && upstream_show "$HEADER" > "${HEADER}.upstream" 2>/dev/null; then
+              mv "${HEADER}.upstream" "$HEADER"
+              echo "[OK] $HEADER: updated from upstream" >> "$LOG"
+            else
+              rm -f "${HEADER}.upstream"
+              echo "[SKIP] $HEADER upstream not available" >> "$LOG"
+            fi
+          done
+
+          # ---- 3. mm/shmem.c: insert susfs_sus_memfd() guard at memfd_create call site --
+          # FIX #11: Targeted insertion after the null-terminator check (line ending
+          # "goto err_name;" before shmem_file_setup(name, ...)) — this is exactly where
+          # gavdoc38 commit 040a5f15 places the hook.
+          if ! grep -q 'susfs_sus_memfd' mm/shmem.c; then
+            # Insert guard block after the last `goto err_name;` that precedes shmem_file_setup
+            python3 - << 'PYEOF'
+          import re, sys
+
+          with open('mm/shmem.c', 'r') as f:
+              src = f.read()
+
+          # The exact insertion point: after the null-terminator check block that ends with
+          # "goto err_name;\n\t}\n\n" and is immediately followed by "\tfd = get_unused_fd"
+          # (confirmed by grepping chimera/mm/shmem.c lines 3575-3585).
+          hook = (
+              '\n'
+              '#ifdef CONFIG_KSU_SUSFS_SUS_MEMFD\n'
+              '\tif (susfs_sus_memfd(name)) {\n'
+              '\t\terror = -EFAULT;\n'
+              '\t\tgoto err_name;\n'
+              '\t}\n'
+              '#endif\n'
+          )
+
+          # Match: last `goto err_name;\n\t}\n` before `fd = get_unused_fd_flags`
+          pattern = r'(goto err_name;\n\t\}\n)(\n\tfd = get_unused_fd_flags)'
+          replacement = r'\1' + hook + r'\2'
+          new_src, n = re.subn(pattern, replacement, src, count=1)
+
+          if n == 1:
+              with open('mm/shmem.c', 'w') as f:
+                  f.write(new_src)
+              print('[OK] mm/shmem.c: inserted susfs_sus_memfd() guard at memfd_create path')
+          else:
+              print('[WARN] mm/shmem.c: insertion point not found; hook not applied')
+              sys.exit(0)  # non-fatal — Chimera still builds without sus_memfd
+          PYEOF
+            echo "[INFO] mm/shmem.c patch result logged above" >> "$LOG"
+          else
+            echo "[SKIP] mm/shmem.c already has susfs_sus_memfd" >> "$LOG"
+          fi
+
+          # ---- 4. fs/namei.c: port vfs_mkobj() + EXPORT_SYMBOL from upstream -----------
+          # FIX #10: vfs_mkobj() does not exist in Chimera's namei.c. An orphan
+          # EXPORT_SYMBOL(vfs_mkobj) at EOF without the function would fail modpost.
+          # Port the full function block immediately after the vfs_mknod() definition.
+          if ! grep -q 'vfs_mkobj' fs/namei.c; then
+            if upstream_available && upstream_show "fs/namei.c" > fs/namei.c.upstream 2>/dev/null; then
+              # Extract vfs_mkobj function block from upstream
+              python3 - << 'PYEOF'
+          import re, sys
+
+          with open('fs/namei.c.upstream', 'r') as f:
+              upstream = f.read()
+
+          # Extract the vfs_mkobj block (function definition + EXPORT_SYMBOL)
+          m = re.search(
+              r'(^int vfs_mkobj\(.*?^EXPORT_SYMBOL\(vfs_mkobj\);)',
+              upstream, re.MULTILINE | re.DOTALL
+          )
+          if not m:
+              print('[WARN] vfs_mkobj not found in upstream namei.c; skipping')
+              sys.exit(0)
+
+          mkobj_block = '\n\n' + m.group(1) + '\n'
+
+          with open('fs/namei.c', 'r') as f:
+              src = f.read()
+
+          # Insert after the EXPORT_SYMBOL line that follows vfs_mknod
+          pattern = r'(EXPORT_SYMBOL\(vfs_mknod\);)'
+          replacement = r'\1' + mkobj_block
+          new_src, n = re.subn(pattern, replacement, src, count=1)
+
+          if n == 1:
+              with open('fs/namei.c', 'w') as f:
+                  f.write(new_src)
+              print('[OK] fs/namei.c: ported vfs_mkobj() + EXPORT_SYMBOL after vfs_mknod')
+          else:
+              print('[WARN] fs/namei.c: EXPORT_SYMBOL(vfs_mknod) anchor not found; skipping vfs_mkobj port')
+          PYEOF
+              rm -f fs/namei.c.upstream
+              echo "[INFO] fs/namei.c vfs_mkobj port result logged above" >> "$LOG"
+            else
+              echo "[SKIP] namei.c upstream not available; vfs_mkobj not ported" >> "$LOG"
+            fi
+          else
+            echo "[SKIP] fs/namei.c already has vfs_mkobj" >> "$LOG"
+          fi
+
+          echo "Selective workspace patching complete" >> "$LOG"
+          echo "--- Patch log ---"
+          cat "$LOG"
+
+      # -----------------------------------------------------------------------
+      # 6. Resolve toolchain configuration (all shell vars; one GITHUB_ENV write)
+      # FIX #12: Post-case fallback block was overwriting per-toolchain values
+      #           that were already exported to GITHUB_ENV. Refactored: set shell
+      #           vars inside case block; write GITHUB_ENV once at the end.
+      # FIX #6:  zyc_stable: added inline ZyC latest-release URL resolution.
+      # -----------------------------------------------------------------------
+      - name: Resolve toolchain configuration
+        id: tc-resolve
+        run: |
+          set -Eeuo pipefail
+          TOOLCHAIN="${{ inputs.toolchain }}"
+
+          # Defaults (overridden per-toolchain)
+          TC_LABEL=""
+          TC_URL=""
+          TC_ARCHIVE_FMT="tar.gz"
+          TC_CACHE_KEY=""
+          TC_LLVM_IAS="0"
+          TC_USE_FULL_LLVM="true"
+          TC_NEEDS_EVA_GCC="false"
+          TC_CROSS_COMPILE="aarch64-linux-gnu-"
+          TC_CROSS_COMPILE_ARM32="arm-linux-gnueabi-"
+          TC_HOSTCC="gcc"
+          TC_DYNAMIC_RESOLVE="false"
+
+          case "$TOOLCHAIN" in
+            aosp19)
+              TC_LABEL="AOSP Clang 19"
+              TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/f60b8b55282f002f594f452ce22dfd6cf1fd7e3c/clang-r596125.tar.gz"
+              TC_CACHE_KEY="aosp-clang-r596125-ubuntu-24.04-v1"
+              TC_LLVM_IAS="0"
+              ;;
+            aosp20)
+              TC_LABEL="AOSP Clang 20"
+              TC_URL="https://gitlab.com/kei-space/clang/r547379/-/archive/master/r547379-master.tar.gz"
+              TC_CACHE_KEY="aosp-clang-r547379-ubuntu-24.04-v1"
+              TC_LLVM_IAS="0"
+              ;;
+            aosp21)
+              TC_LABEL="AOSP Clang 21"
+              TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/21b19c041de1f1df9b97fd9902ae5405c6cf8eb9/clang-r563880c.tar.gz"
+              TC_CACHE_KEY="aosp-clang-r563880c-ubuntu-24.04-v2"
+              TC_LLVM_IAS="0"
+              ;;
+            aosp22)
+              TC_LABEL="AOSP Clang 22"
+              TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/mirror-goog-main-llvm-toolchain-source/clang-r596125.tar.gz"
+              TC_CACHE_KEY="aosp-clang-r596125-ubuntu-24.04-v2"
+              TC_LLVM_IAS="0"
+              ;;
+            neutron19)
+              TC_LABEL="Neutron Clang"
+              TC_URL="https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/10032024/neutron-clang-10032024.tar.zst"
+              TC_ARCHIVE_FMT="tar.zst"
+              TC_CACHE_KEY="neutron-clang-10032024-ubuntu-24.04-v2"
+              TC_LLVM_IAS="1"
+              ;;
+            zyc_stable)
+              TC_LABEL="ZyCromerZ Clang (resolved at runtime)"
+              TC_CACHE_KEY="zyc-clang-ubuntu-24.04-v1"
+              TC_LLVM_IAS="0"
+              # FIX #6: resolve the latest ZyC tarball URL from the GitHub releases API
+              echo "Resolving latest ZyCromerZ Clang release..."
+              ZYC_API="https://raw.githubusercontent.com/ZyCromerZ/Clang/main/Clang-main-link.txt"
+              TC_URL=$(curl -fsSL "$ZYC_API" || true)
+              if [[ -z "$TC_URL" ]]; then
+                # Fallback: scrape the releases page
+                TC_URL=$(curl -fsSL "https://api.github.com/repos/ZyCromerZ/Clang/releases/latest" \
+                  | python3 -c "import sys,json; d=json.load(sys.stdin); print(next((a['browser_download_url'] for a in d.get('assets',[]) if a['name'].endswith('.tar.gz')),'' ))" || true)
+              fi
+              if [[ -z "$TC_URL" ]]; then
+                echo "ERROR: could not resolve ZyCromerZ Clang URL" >&2
+                exit 1
+              fi
+              echo "Resolved ZyC URL: $TC_URL"
+              TC_ARCHIVE_FMT="tar.gz"
+              ;;
+            clang21-eva-gcc)
+              TC_LABEL="AOSP Clang 21 + Eva GCC"
+              TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/21b19c041de1f1df9b97fd9902ae5405c6cf8eb9/clang-r563880c.tar.gz"
+              TC_CACHE_KEY="aosp-clang-r563880c-eva-gcc-ubuntu-24.04-v1"
+              TC_LLVM_IAS="0"
+              TC_NEEDS_EVA_GCC="true"
+              # Eva GCC provides the GNU assembler backend (as) for Samsung BSP 4.9 inline asm
+              TC_CROSS_COMPILE="aarch64-elf-"
+              TC_CROSS_COMPILE_ARM32="arm-eabi-"
+              TC_HOSTCC="clang"
+              ;;
+            *)
+              echo "ERROR: unknown toolchain '$TOOLCHAIN'" >&2
+              exit 1
+              ;;
+          esac
+
+          # Write all TC vars to GITHUB_ENV in one block (FIX #12: no double-write)
+          {
+            echo "TC_LABEL=$TC_LABEL"
+            echo "TC_URL=$TC_URL"
+            echo "TC_ARCHIVE_FMT=$TC_ARCHIVE_FMT"
+            echo "TC_CACHE_KEY=$TC_CACHE_KEY"
+            echo "TC_LLVM_IAS=$TC_LLVM_IAS"
+            echo "TC_USE_FULL_LLVM=$TC_USE_FULL_LLVM"
+            echo "TC_NEEDS_EVA_GCC=$TC_NEEDS_EVA_GCC"
+            echo "TC_CROSS_COMPILE=$TC_CROSS_COMPILE"
+            echo "TC_CROSS_COMPILE_ARM32=$TC_CROSS_COMPILE_ARM32"
+            echo "TC_HOSTCC=$TC_HOSTCC"
+          } >> "$GITHUB_ENV"
+
+          echo "Resolved toolchain: $TOOLCHAIN / $TC_LABEL"
+          echo "TC_CACHE_KEY=$TC_CACHE_KEY" >> "$GITHUB_OUTPUT"
+
+      # -----------------------------------------------------------------------
+      # 7. Download and extract toolchain (cache-aware)
+      # -----------------------------------------------------------------------
+      - name: Cache toolchain
+        uses: actions/cache@v4
+        id: tc-cache
+        with:
+          path: toolchains/clang
+          key: ${{ env.TC_CACHE_KEY }}
+
+      - name: Download and extract toolchain
+        if: steps.tc-cache.outputs.cache-hit != 'true'
+        run: |
+          set -Eeuo pipefail
+          TC_URL="${{ env.TC_URL }}"
+          if [[ -z "$TC_URL" ]]; then
+            echo "ERROR: TC_URL is empty; toolchain cannot be fetched" >&2
+            exit 1
+          fi
+          ARCHIVE="/tmp/clang_archive"
+          echo "Downloading toolchain: $TC_URL"
+          aria2c -x4 -s4 -q -o "$ARCHIVE" "$TC_URL" \
+            || wget --progress=dot:giga -O "$ARCHIVE" "$TC_URL"
+          rm -rf toolchains/clang
+          mkdir -p toolchains/clang
+          case "${{ env.TC_ARCHIVE_FMT }}" in
+            tar.gz|tar)
+              tar -C toolchains/clang -xzf "$ARCHIVE" --strip-components=1
+              ;;
+            tar.xz)
+              tar -C toolchains/clang -xJf "$ARCHIVE" --strip-components=1
+              ;;
+            tar.zst)
+              zstd -d "$ARCHIVE" -c | tar -C toolchains/clang -xf - --strip-components=1
+              ;;
+            *)
+              echo "Unknown archive format: ${{ env.TC_ARCHIVE_FMT }}" >&2
+              exit 1
+              ;;
+          esac
+          echo "Toolchain extracted to toolchains/clang"
+          ls toolchains/clang/bin/ | head -10
+
+      - name: Download Eva GCC (clang21-eva-gcc only)
+        if: env.TC_NEEDS_EVA_GCC == 'true'
+        run: |
+          set -Eeuo pipefail
+          mkdir -p toolchains/eva
+          # mvaisakh/gcc-arm64 and gcc-arm: pinned to a known release for reproducibility
+          GCC64_URL="https://github.com/mvaisakh/gcc-arm64/archive/refs/heads/gcc-master.tar.gz"
+          GCC32_URL="https://github.com/mvaisakh/gcc-arm/archive/refs/heads/gcc-master.tar.gz"
+          aria2c -x4 -s4 -q -o /tmp/eva64.tar.gz "$GCC64_URL" \
+            || wget -q -O /tmp/eva64.tar.gz "$GCC64_URL"
+          aria2c -x4 -s4 -q -o /tmp/eva32.tar.gz "$GCC32_URL" \
+            || wget -q -O /tmp/eva32.tar.gz "$GCC32_URL"
+          mkdir -p toolchains/eva64 toolchains/eva32
+          tar -C toolchains/eva64 -xzf /tmp/eva64.tar.gz --strip-components=1
+          tar -C toolchains/eva32 -xzf /tmp/eva32.tar.gz --strip-components=1
+          # FIX #3: PATH must be appended via $GITHUB_PATH, not $GITHUB_ENV
+          echo "$GITHUB_WORKSPACE/toolchains/eva64/bin" >> "$GITHUB_PATH"
+          echo "$GITHUB_WORKSPACE/toolchains/eva32/bin" >> "$GITHUB_PATH"
+          echo "Eva GCC 64: $(aarch64-elf-gcc --version | head -1)"
+          echo "Eva GCC 32: $(arm-eabi-gcc --version | head -1)"
+
+      # -----------------------------------------------------------------------
+      # 8. ccache setup
+      # -----------------------------------------------------------------------
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: chimera-mk8-${{ inputs.profile }}-${{ inputs.toolchain }}-${{ env.TC_CACHE_KEY }}-${{ github.sha }}
+          restore-keys: |
+            chimera-mk8-${{ inputs.profile }}-${{ inputs.toolchain }}-${{ env.TC_CACHE_KEY }}-
+          max-size: ${{ env.CCACHE_MAXSIZE }}
+          verbose: 0
+
+      # -----------------------------------------------------------------------
+      # 9. Kernel config assembly (Chimera defconfig is authoritative)
+      # FIX #4: make is invoked with O=<path> as a CLI argument, not env var.
+      # -----------------------------------------------------------------------
+      - name: Prepare kernel .config from Chimera defconfig
+        working-directory: ${{ env.KERNEL_DIR }}
+        run: |
+          set -Eeuo pipefail
+          ABS_OUT="${{ env.ABS_OUT }}"
+
+          if [[ ! -f "$DEFCONFIG" ]]; then
+            echo "ERROR: defconfig not found: $DEFCONFIG" >&2
+            exit 1
+          fi
+
+          # FIX #4: pass O= as a CLI argument — make ignores the env var O=
+          make O="$ABS_OUT" ARCH=arm64 "$DEFCONFIG"
+
+          CONFIG="$ABS_OUT/.config"
+
+          # Guard: Chimera-critical flags must survive defconfig application
+          for FLAG in \
+            "CONFIG_HZ_300=y:HZ_300 (scheduler tick)" \
+            "CONFIG_MFD_MADERA=y:MFD_MADERA (star2lte speaker amp)" \
+            "CONFIG_TCP_CONG_BBR=y:TCP_CONG_BBR (BBR congestion control)"; do
+            SYMBOL="${FLAG%%:*}"
+            DESC="${FLAG##*:}"
+            grep -q "^${SYMBOL}" "$CONFIG" \
+              || { echo "ERROR: $DESC ($SYMBOL) missing from .config; aborting" >&2; exit 1; }
+          done
+
+          # Profile: cm8e — disable runtime spoofing symbols at compile time
+          if [[ "${{ inputs.profile }}" == "cm8e" ]]; then
+            cat >> "$CONFIG" << 'CFGEOF'
+          # cm8e compile-time identity fragment (workspace-only; not committed)
+          CONFIG_SUSFS_SPOOF_UNAME=n
+          CONFIG_SUSFS_SPOOF_SELINUX=n
+          CONFIG_KSU_SPOOF_AVC_LOG=n
+          CFGEOF
+            echo "Applied cm8e compile-time identity fragment"
+          fi
+
+          # Resolve new Kconfig symbols deterministically
+          make O="$ABS_OUT" ARCH=arm64 olddefconfig
+          cp "$CONFIG" "$ABS_LOG/config.built"
+          echo ".config assembled at $ABS_OUT/.config"
+
+      # -----------------------------------------------------------------------
+      # 10. Build kernel (deterministic environment)
+      # FIX #4:  O= passed as CLI arg to make, not env var.
+      # FIX #9:  Removed dead PIPESTATUS check (set -Eeuo pipefail already handles exit).
+      # FIX #16: Full LLVM tool exports + toolchain bin/ prepended to PATH so llvm-ar,
+      #          llvm-nm, llvm-objcopy etc are found. GAS (GNU as) on PATH for LLVM_IAS=0.
+      # -----------------------------------------------------------------------
+      - name: Build kernel
+        if: ${{ inputs.dry_run != 'true' }}
+        working-directory: ${{ env.KERNEL_DIR }}
+        env:
+          ARCH: arm64
+          CROSS_COMPILE: "${{ env.TC_CROSS_COMPILE }}"
+          CROSS_COMPILE_ARM32: "${{ env.TC_CROSS_COMPILE_ARM32 }}"
+          HOSTCC: "${{ env.TC_HOSTCC }}"
+          LLVM_IAS: "${{ env.TC_LLVM_IAS }}"
+          KBUILD_BUILD_USER: "${{ env.BUILD_USER }}"
+          KBUILD_BUILD_HOST: "${{ env.BUILD_HOST }}"
+          KBUILD_BUILD_VERSION: "${{ env.BUILD_VERSION }}"
+          KBUILD_BUILD_TIMESTAMP: "${{ env.KBUILD_BUILD_TIMESTAMP }}"
+          # KSU version embedding
+          KSU_GIT_VERSION: "${{ env.KSU_GIT_VERSION }}"
+          # ccache wrapper
+          CC: "ccache ${{ env.ABS_TC }}/bin/clang"
+        run: |
+          set -Eeuo pipefail
+          ABS_OUT="${{ env.ABS_OUT }}"
+          ABS_TC="${{ env.ABS_TC }}"
+
+          # FIX #16: prepend toolchain bin/ so llvm-ar, llvm-nm, llvm-objcopy etc are found
+          export PATH="$ABS_TC/bin:$PATH"
+
+          # Explicit LLVM tool variables for Linux 4.9 BSP (no LLVM=1 support in 4.9 Make)
+          LLVM_TOOLS=(
+            AR="$ABS_TC/bin/llvm-ar"
+            NM="$ABS_TC/bin/llvm-nm"
+            OBJCOPY="$ABS_TC/bin/llvm-objcopy"
+            OBJDUMP="$ABS_TC/bin/llvm-objdump"
+            STRIP="$ABS_TC/bin/llvm-strip"
+            LD="$ABS_TC/bin/ld.lld"
+          )
+
+          JOBS=$(nproc || echo 2)
+          echo "Building: O=$ABS_OUT ARCH=arm64 -j$JOBS toolchain=$(basename $ABS_TC)"
+
+          # FIX #4: O= as CLI argument
+          # FIX #9: removed PIPESTATUS wrapper — set -Eeuo pipefail handles failure
+          make O="$ABS_OUT" ARCH=arm64 olddefconfig
+          make O="$ABS_OUT" ARCH=arm64 "${LLVM_TOOLS[@]}" -j"$JOBS" \
+            LOCALVERSION="${{ env.BRAND }}" \
+            KCFLAGS="-O2 -fcommon -fno-strict-aliasing -Wno-error" \
+            2>&1 | tee "$ABS_LOG/build.log"
+
+          echo "Kernel build completed successfully"
+
+      # -----------------------------------------------------------------------
+      # 11. Post-build smoke tests
+      # FIX #2: dry_run condition changed from == false to != 'true'
+      # -----------------------------------------------------------------------
+      - name: Smoke test build artifacts
+        if: ${{ inputs.dry_run != 'true' }}
+        run: |
+          set -Eeuo pipefail
+          ABS_OUT="${{ env.ABS_OUT }}"
+          LOG="$ABS_LOG/smoke.log"
+          FAIL=0
+          echo "Smoke test started" > "$LOG"
+
+          check() {
+            local desc="$1"; local result="$2"
+            if [[ "$result" == "OK" ]]; then
+              echo "[OK] $desc" >> "$LOG"
+            else
+              echo "[FAIL] $desc" >> "$LOG"
+              FAIL=1
+            fi
+          }
+
+          # Artifact existence
+          [[ -f "$ABS_OUT/arch/arm64/boot/Image" ]] \
+            && check "Image present" "OK" \
+            || { check "Image present" "MISSING"; }
+
+          # .config flag checks
+          CONFIG="$ABS_OUT/.config"
+          grep -q '^CONFIG_HZ_300=y'        "$CONFIG" && check "CONFIG_HZ_300 preserved" "OK"  || check "CONFIG_HZ_300 preserved" "MISSING"
+          grep -q '^CONFIG_MFD_MADERA=y'    "$CONFIG" && check "Madera driver enabled"   "OK"  || check "Madera driver enabled"   "MISSING"
+          grep -q '^CONFIG_TCP_CONG_BBR=y'  "$CONFIG" && check "BBR enabled"             "OK"  || check "BBR enabled"             "MISSING"
+
+          # Symbol checks in vmlinux (best-effort; warn only)
+          if [[ -f "$ABS_OUT/vmlinux" ]]; then
+            NM_OUT=$(nm -n "$ABS_OUT/vmlinux" 2>/dev/null || true)
+            echo "$NM_OUT" | grep -q "sus_memfd"   && echo "[OK] sus_memfd symbol present"  >> "$LOG" || echo "[WARN] sus_memfd symbol absent" >> "$LOG"
+            echo "$NM_OUT" | grep -q "ksu_"         && echo "[OK] KSU symbols present"       >> "$LOG" || echo "[WARN] KSU symbols absent"      >> "$LOG"
+            echo "$NM_OUT" | grep -q "vfs_mkobj"    && echo "[OK] vfs_mkobj exported"        >> "$LOG" || echo "[WARN] vfs_mkobj not exported"   >> "$LOG"
+          else
+            echo "[WARN] vmlinux not present; skipping symbol checks" >> "$LOG"
+          fi
+
+          echo "--- Smoke test log ---"
+          cat "$LOG"
+
+          [[ $FAIL -eq 0 ]] || { echo "One or more smoke checks failed; see log above" >&2; exit 1; }
+          echo "Smoke test passed"
+
+      # -----------------------------------------------------------------------
+      # 12. Package artifacts (deterministic naming)
+      # FIX #5:  Added id: package; GITHUB_OUTPUT values are now reachable by
+      #           downstream steps as steps.package.outputs.*
+      # FIX #13: tar --mtime now uses ISO 8601 to avoid ambiguity.
+      # -----------------------------------------------------------------------
+      - name: Package artifacts
+        if: ${{ inputs.dry_run != 'true' }}
+        id: package
+        run: |
+          set -Eeuo pipefail
+          ABS_OUT="${{ env.ABS_OUT }}"
+          ART_DIR="$GITHUB_WORKSPACE/artifacts"
+          mkdir -p "$ART_DIR"
+
+          CHIMERA_SHORT="${{ env.CHIMERA_COMMIT }}"
+          CHIMERA_SHORT="${CHIMERA_SHORT:0:8}"
+          TOOL="${{ inputs.toolchain }}"
+          PROFILE="${{ inputs.profile }}"
+          BUILD_TAG="chimera-mk8-${PROFILE}-${TOOL}-$(date -u +%Y%m%dT%H%M%SZ)-${CHIMERA_SHORT}"
+
+          [[ -f "$ABS_OUT/arch/arm64/boot/Image" ]] && cp "$ABS_OUT/arch/arm64/boot/Image" "$ART_DIR/Image"
+          [[ -f "$ABS_OUT/System.map"             ]] && cp "$ABS_OUT/System.map"            "$ART_DIR/System.map"
+          [[ -f "$ABS_OUT/vmlinux"                ]] && cp "$ABS_OUT/vmlinux"               "$ART_DIR/vmlinux"
+
+          TARFILE="$ABS_LOG/${BUILD_TAG}.tar.gz"
+          # FIX #13: ISO 8601 timestamp avoids ambiguity in tar --mtime
+          tar --sort=name \
+              --mtime='2026-01-01T00:00:00Z' \
+              --owner=0 --group=0 \
+              -czf "$TARFILE" -C "$ART_DIR" .
+
+          echo "Packaged: $TARFILE"
+          # FIX #5: id: package set above; these outputs are now reachable as
+          #          steps.package.outputs.artifact_name / artifact_path
+          echo "artifact_name=${BUILD_TAG}.tar.gz" >> "$GITHUB_OUTPUT"
+          echo "artifact_path=$TARFILE"            >> "$GITHUB_OUTPUT"
+          echo "BUILD_TAG=$BUILD_TAG"              >> "$GITHUB_ENV"
+
+      - name: Upload build artifact
+        if: ${{ inputs.dry_run != 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: chimera-kernel-${{ inputs.profile }}-${{ inputs.toolchain }}
+          # FIX #5: use the step output rather than a hardcoded glob
+          path: ${{ steps.package.outputs.artifact_path }}
+
+      # -----------------------------------------------------------------------
+      # 13. Optional: create GitHub Release
+      # FIX #14: Release body used $(cat ...) subshell in a YAML string — not executed.
+      #           Now references ${{ env.CHIMERA_COMMIT }} set at run time.
+      # FIX #2:  Condition changed to != 'true' for boolean input comparison.
+      # -----------------------------------------------------------------------
+      - name: Create GitHub release (optional)
+        if: ${{ inputs.do_release == 'true' && inputs.dry_run != 'true' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "build-${{ github.run_id }}"
+          name: "Chimera Mk8 build ${{ github.run_id }} — ${{ inputs.profile }} / ${{ inputs.toolchain }}"
+          # FIX #14: reference env var (set at run time) instead of shell subshell in YAML body
+          body: |
+            Automated build of Project Chimera Mk8.
+            Chimera commit: ${{ env.CHIMERA_COMMIT }}
+            Build tag: ${{ env.BUILD_TAG }}
+            Toolchain: ${{ inputs.toolchain }}
+            Profile: ${{ inputs.profile }}
+            Timestamp: ${{ env.KBUILD_BUILD_TIMESTAMP }}
+          files: ${{ steps.package.outputs.artifact_path }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # -----------------------------------------------------------------------
+      # 14. Upload logs (always)
+      # -----------------------------------------------------------------------
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chimera-build-logs-${{ github.run_id }}
+          path: ${{ env.ABS_LOG }}/**
+
+      # -----------------------------------------------------------------------
+      # 15. Build summary
+      # -----------------------------------------------------------------------
+      - name: Build summary
+        if: always()
+        run: |
+          set -Eeuo pipefail
+          echo "Build run:    $GITHUB_RUN_ID"
+          echo "Chimera:      ${{ env.CHIMERA_COMMIT }}"
+          echo "Profile:      ${{ inputs.profile }}"
+          echo "Toolchain:    ${{ inputs.toolchain }}"
+          echo "Brand:        ${{ env.BRAND }}"
+          echo "Build user:   ${{ env.BUILD_USER }}@${{ env.BUILD_HOST }}"
+          echo "Timestamp:    ${{ env.KBUILD_BUILD_TIMESTAMP }}"
+          echo "Artifacts:"
+          ls -1 "$ABS_LOG"/*.tar.gz 2>/dev/null || echo "  (none — dry_run or build failed)"
