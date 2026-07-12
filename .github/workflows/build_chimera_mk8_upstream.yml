@@ -641,27 +641,62 @@ jobs:
             echo "ERROR: TC_URL is empty; toolchain cannot be fetched" >&2
             exit 1
           fi
-          ARCHIVE="/tmp/clang_archive"
+
+          # aria2c -o is ALWAYS relative to -d (default: cwd); it never treats -o as
+          # an absolute path. Split into -d DIR -o BASENAME to get the file where we want it.
+          ARCHIVE_DIR="/tmp"
+          ARCHIVE_BASE="clang_archive"
+          ARCHIVE="$ARCHIVE_DIR/$ARCHIVE_BASE"
+
           echo "Downloading toolchain: $TC_URL"
-          aria2c -x4 -s4 -q -o "$ARCHIVE" "$TC_URL" \
+          # aria2c: use -d and -o separately so the output path is unambiguous
+          aria2c -x4 -s4 -q -d "$ARCHIVE_DIR" -o "$ARCHIVE_BASE" "$TC_URL" \
             || wget --progress=dot:giga -O "$ARCHIVE" "$TC_URL"
+
+          # Verify the archive was actually created before attempting extraction
+          if [[ ! -s "$ARCHIVE" ]]; then
+            echo "ERROR: downloaded archive is missing or empty at $ARCHIVE" >&2
+            exit 1
+          fi
+          echo "Downloaded: $(du -h "$ARCHIVE" | cut -f1) at $ARCHIVE"
+
           rm -rf toolchains/clang
           mkdir -p toolchains/clang
-          case "${{ env.TC_ARCHIVE_FMT }}" in
+
+          # Detect top-level directory count to decide whether --strip-components=1 is safe
+          strip_flag() {
+            local fmt="$1" archive="$2"
+            case "$fmt" in
+              tar.gz|tar) local tops; tops=$(tar -tzf "$archive" 2>/dev/null | cut -d/ -f1 | sort -u | wc -l) ;;
+              tar.xz)     local tops; tops=$(tar -tJf "$archive" 2>/dev/null | cut -d/ -f1 | sort -u | wc -l) ;;
+              tar.zst)    local tops; tops=$(zstd -d "$archive" -c 2>/dev/null | tar -t 2>/dev/null | cut -d/ -f1 | sort -u | wc -l) ;;
+            esac
+            [[ "${tops:-0}" -eq 1 ]] && echo "--strip-components=1" || echo ""
+          }
+          FMT="${{ env.TC_ARCHIVE_FMT }}"
+          STRIP=$(strip_flag "$FMT" "$ARCHIVE")
+          echo "Archive format: $FMT  strip: ${STRIP:-(none)}"
+
+          case "$FMT" in
             tar.gz|tar)
-              tar -C toolchains/clang -xzf "$ARCHIVE" --strip-components=1
+              tar -C toolchains/clang -xzf "$ARCHIVE" $STRIP
               ;;
             tar.xz)
-              tar -C toolchains/clang -xJf "$ARCHIVE" --strip-components=1
+              tar -C toolchains/clang -xJf "$ARCHIVE" $STRIP
               ;;
             tar.zst)
-              zstd -d "$ARCHIVE" -c | tar -C toolchains/clang -xf - --strip-components=1
+              # Decompress to a temp file first; avoids zstd→tar pipe masking exit codes
+              DECOMPRESSED="/tmp/clang_archive.tar"
+              zstd -d "$ARCHIVE" -o "$DECOMPRESSED" --force
+              tar -C toolchains/clang -xf "$DECOMPRESSED" $STRIP
+              rm -f "$DECOMPRESSED"
               ;;
             *)
-              echo "Unknown archive format: ${{ env.TC_ARCHIVE_FMT }}" >&2
+              echo "Unknown archive format: $FMT" >&2
               exit 1
               ;;
           esac
+
           echo "Toolchain extracted to toolchains/clang"
           ls toolchains/clang/bin/ | head -10
 
@@ -673,9 +708,9 @@ jobs:
           # mvaisakh/gcc-arm64 and gcc-arm: pinned to a known release for reproducibility
           GCC64_URL="https://github.com/mvaisakh/gcc-arm64/archive/refs/heads/gcc-master.tar.gz"
           GCC32_URL="https://github.com/mvaisakh/gcc-arm/archive/refs/heads/gcc-master.tar.gz"
-          aria2c -x4 -s4 -q -o /tmp/eva64.tar.gz "$GCC64_URL" \
+          aria2c -x4 -s4 -q -d /tmp -o eva64.tar.gz "$GCC64_URL" \
             || wget -q -O /tmp/eva64.tar.gz "$GCC64_URL"
-          aria2c -x4 -s4 -q -o /tmp/eva32.tar.gz "$GCC32_URL" \
+          aria2c -x4 -s4 -q -d /tmp -o eva32.tar.gz "$GCC32_URL" \
             || wget -q -O /tmp/eva32.tar.gz "$GCC32_URL"
           mkdir -p toolchains/eva64 toolchains/eva32
           tar -C toolchains/eva64 -xzf /tmp/eva64.tar.gz --strip-components=1
