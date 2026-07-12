@@ -749,7 +749,11 @@ jobs:
           fi
 
           # FIX #4: pass O= as a CLI argument — make ignores the env var O=
-          make O="$ABS_OUT" ARCH=arm64 "$DEFCONFIG"
+          # The kernel Kconfig system prepends arch/arm64/configs/ internally, so the
+          # make target must be the bare filename only, not the full relative path.
+          # Use the full path only for the -f existence check above.
+          DEFCONFIG_TARGET="$(basename "$DEFCONFIG")"
+          make O="$ABS_OUT" ARCH=arm64 "$DEFCONFIG_TARGET"
 
           CONFIG="$ABS_OUT/.config"
 
