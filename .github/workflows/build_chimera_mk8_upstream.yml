@@ -1,3 +1,4 @@
+# build_chimera_mk8_unified.yml
 # Project Chimera Mk8 — Unified end-to-end kernel build workflow
 # Produces a deterministic kernel build for Exynos9810 (star2lte) from chimera-mk8.
 # Preserves Chimera-specific DTS, scheduler, defconfig flags, and driver enables.
@@ -138,7 +139,7 @@ env:
   # Base repo: gavdoc38 upstream. Chimera-specific changes are applied as workspace
   # overlay patches in the 'Apply Chimera overlay' step — no history rewriting.
   KERNEL_REPO: "https://github.com/gavdoc38/android_kernel_samsung_exynos9810"
-  KERNEL_BRANCH: "lineage-23.2-ksun3-susfs2-5.10"
+  KERNEL_BRANCH: "lineage-23.2-ksun3-susfs2"
   KERNEL_DIR: "kernel"
   OUT_DIR: "kernel-out"
   LOG_DIR: "logs"
@@ -241,11 +242,11 @@ jobs:
       # FIX #8: Removed the first no-op checkout@v4 that polluted GITHUB_WORKSPACE
       #          and wasted fetch-depth=0 time. Only one targeted checkout below.
       # -----------------------------------------------------------------------
-      - name: Checkout gavdoc38 kernel repo (lineage-23.2-ksun3-susfs2-5.10)
+      - name: Checkout gavdoc38 kernel repo (lineage-23.2-ksun3-susfs2)
         uses: actions/checkout@v4
         with:
           repository: gavdoc38/android_kernel_samsung_exynos9810
-          ref: lineage-23.2-ksun3-susfs2-5.10
+          ref: lineage-23.2-ksun3-susfs2
           path: ${{ env.KERNEL_DIR }}
           fetch-depth: 0
 
@@ -254,8 +255,8 @@ jobs:
         run: |
           set -Eeuo pipefail
           current_branch=$(git rev-parse --abbrev-ref HEAD || true)
-          if [[ "$current_branch" != "lineage-23.2-ksun3-susfs2-5.10" ]]; then
-            echo "ERROR: expected lineage-23.2-ksun3-susfs2-5.10 branch, got '$current_branch'" >&2
+          if [[ "$current_branch" != "lineage-23.2-ksun3-susfs2" ]]; then
+            echo "ERROR: expected lineage-23.2-ksun3-susfs2 branch, got '$current_branch'" >&2
             exit 1
           fi
           if [[ -n "$(git status --porcelain)" ]]; then
