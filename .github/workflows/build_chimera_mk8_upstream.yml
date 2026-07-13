@@ -1,4 +1,3 @@
-# build_chimera_mk8_unified.yml
 # Project Chimera Mk8 — Unified end-to-end kernel build workflow
 # Produces a deterministic kernel build for Exynos9810 (star2lte) from chimera-mk8.
 # Preserves Chimera-specific DTS, scheduler, defconfig flags, and driver enables.
@@ -136,9 +135,10 @@ on:
         default: "Mon 1 Jan 00:00:00 UTC 2026"
 
 env:
-  # Core repo and build layout (do not change without understanding path anchoring below)
-  KERNEL_REPO: "https://github.com/royd-jpg/Project_Chimera"
-  KERNEL_BRANCH: "chimera-mk8"
+  # Base repo: gavdoc38 upstream. Chimera-specific changes are applied as workspace
+  # overlay patches in the 'Apply Chimera overlay' step — no history rewriting.
+  KERNEL_REPO: "https://github.com/gavdoc38/android_kernel_samsung_exynos9810"
+  KERNEL_BRANCH: "lineage-23.2-ksun3-susfs2-5.10"
   KERNEL_DIR: "kernel"
   OUT_DIR: "kernel-out"
   LOG_DIR: "logs"
@@ -241,11 +241,11 @@ jobs:
       # FIX #8: Removed the first no-op checkout@v4 that polluted GITHUB_WORKSPACE
       #          and wasted fetch-depth=0 time. Only one targeted checkout below.
       # -----------------------------------------------------------------------
-      - name: Checkout Chimera kernel repo (chimera-mk8)
+      - name: Checkout gavdoc38 kernel repo (lineage-23.2-ksun3-susfs2-5.10)
         uses: actions/checkout@v4
         with:
-          repository: royd-jpg/Project_Chimera
-          ref: chimera-mk8
+          repository: gavdoc38/android_kernel_samsung_exynos9810
+          ref: lineage-23.2-ksun3-susfs2-5.10
           path: ${{ env.KERNEL_DIR }}
           fetch-depth: 0
 
@@ -254,8 +254,8 @@ jobs:
         run: |
           set -Eeuo pipefail
           current_branch=$(git rev-parse --abbrev-ref HEAD || true)
-          if [[ "$current_branch" != "chimera-mk8" ]]; then
-            echo "ERROR: expected chimera-mk8 branch, got '$current_branch'" >&2
+          if [[ "$current_branch" != "lineage-23.2-ksun3-susfs2-5.10" ]]; then
+            echo "ERROR: expected lineage-23.2-ksun3-susfs2-5.10 branch, got '$current_branch'" >&2
             exit 1
           fi
           if [[ -n "$(git status --porcelain)" ]]; then
@@ -263,30 +263,31 @@ jobs:
             git status --porcelain
             exit 1
           fi
-          CHIMERA_COMMIT=$(git rev-parse HEAD)
-          echo "$CHIMERA_COMMIT"                  > "$ABS_LOG/chimera-commit.txt"
-          echo "CHIMERA_COMMIT=${CHIMERA_COMMIT}" >> "$GITHUB_ENV"
-          echo "Chimera commit: $CHIMERA_COMMIT"
+          BASE_COMMIT=$(git rev-parse HEAD)
+          echo "$BASE_COMMIT"              > "$ABS_LOG/base-commit.txt"
+          echo "BASE_COMMIT=$BASE_COMMIT" >> "$GITHUB_ENV"
+          echo "Gavdoc38 base commit: $BASE_COMMIT"
 
       # -----------------------------------------------------------------------
-      # 2. Fetch upstream (gavdoc38) shallow — reference only; never merged
+      # 2. Record Chimera overlay provenance (royd-jpg/Project_Chimera reference)
+      #    Shallow-fetch Chimera only to record its tip commit for traceability.
+      #    Nothing from Project_Chimera is merged — the overlay patches below are
+      #    the canonical, hand-curated Chimera additions applied to the gavdoc38 base.
       # -----------------------------------------------------------------------
-      - name: Fetch upstream reference (gavdoc) shallow
+      - name: Record Chimera reference commit (traceability only)
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
-          UPSTREAM_URL="https://github.com/gavdoc38/android_kernel_samsung_exynos9810.git"
-          UPSTREAM_REF="lineage-23.2-ksun3-susfs2-5.10"
-          git remote add gavdoc "$UPSTREAM_URL" || true
-          git fetch --no-tags --depth=100 gavdoc "$UPSTREAM_REF" || true
-          if git rev-parse --verify --quiet "gavdoc/$UPSTREAM_REF" >/dev/null 2>&1; then
-            UPSTREAM_TIP=$(git rev-parse "gavdoc/$UPSTREAM_REF")
-            echo "$UPSTREAM_TIP"           > "$ABS_LOG/upstream-tip.txt"
-            echo "UPSTREAM_TIP=$UPSTREAM_TIP" >> "$GITHUB_ENV"
-            echo "Fetched upstream tip: $UPSTREAM_TIP"
+          git remote add chimera https://github.com/royd-jpg/Project_Chimera.git || true
+          git fetch --no-tags --depth=1 chimera chimera-mk8 || true
+          if git rev-parse --verify --quiet chimera/chimera-mk8 >/dev/null 2>&1; then
+            CHIMERA_TIP=$(git rev-parse chimera/chimera-mk8)
+            echo "$CHIMERA_TIP"                    > "$ABS_LOG/chimera-reference.txt"
+            echo "CHIMERA_COMMIT=$CHIMERA_TIP"    >> "$GITHUB_ENV"
+            echo "Chimera reference tip: $CHIMERA_TIP"
           else
-            echo "UPSTREAM_TIP="              >> "$GITHUB_ENV"
-            echo "Upstream fetch failed or ref unavailable; upstream file imports will be skipped"
+            echo "CHIMERA_COMMIT=unknown"          >> "$GITHUB_ENV"
+            echo "chimera-mk8 ref unavailable; continuing"
           fi
 
       # -----------------------------------------------------------------------
@@ -359,155 +360,280 @@ jobs:
           echo "SUSFS fetched: $SUSFS_ACTUAL"
 
       # -----------------------------------------------------------------------
-      # 5. Selective workspace patching (file-level imports; no commits)
-      # FIX #10: vfs_mkobj — port the full function + EXPORT_SYMBOL after vfs_mknod,
-      #           not an orphan EXPORT_SYMBOL at EOF.
-      # FIX #11: mm/shmem.c — targeted sed insertion at real memfd_create call site,
-      #           not a dead appended helper with broken extern-as-pointer pattern.
-      # FIX #17: strscpy hardening — whole-file swap from upstream copy, not fragile regex.
+      # 5. Apply Chimera overlay patches (workspace-only; no commits)
+      #
+      #    These are the complete, canonical Chimera-specific changes layered on
+      #    top of the gavdoc38 base.  Each patch is idempotent and self-describing.
+      #    Patch order matters where files share the same source.
+      #
+      #    Patches applied:
+      #      A. Defconfig fragment  — Madera, HZ_300, SCHED_DEBUG, Knox off, BBR
+      #      B. kernel/sched/fair.c — Chimera scheduler tuning constants
+      #      C. drivers/cpufreq/exynos-ufc.c — UFC short-circuit (disable UFC)
+      #      D. fs/proc/base.c      — SUS_MAP /proc/<pid>/mem protection
+      #      E. fs/namei.c          — sus_path sub-path forward decl + 2nd check
       # -----------------------------------------------------------------------
-      - name: Apply selective workspace patches (workspace-only; no commits)
+      - name: Apply Chimera overlay patches
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
-          LOG="$ABS_LOG/patches.log"
-          FORCE="${{ inputs.force_repatch }}"
-          UPSTREAM_REF="gavdoc/lineage-23.2-ksun3-susfs2-5.10"
-          echo "force_repatch=$FORCE" > "$LOG"
+          LOG="$ABS_LOG/overlay.log"
+          echo "Chimera overlay started at $(date -u)" > "$LOG"
 
-          upstream_available() {
-            git rev-parse --verify --quiet "$UPSTREAM_REF" >/dev/null 2>&1
-          }
+          # ---- A. Defconfig fragment ----------------------------------------
+          # Applied via merge_config.sh so Kconfig dependency resolution runs
+          # normally and no symbol is silently dropped.
+          cat > /tmp/chimera.config << 'DEFCFG'
+          # Chimera Mk8 overlay fragment
+          # Applied on top of gavdoc38 exynos9810-star2lte_defconfig
 
-          # ---- Helper: show a file from the upstream fetch ----
-          upstream_show() {
-            git show "${UPSTREAM_REF}:$1"
-          }
+          # Madera / CS47L92 codec stack (required for star2lte speaker amp)
+          CONFIG_MFD_MADERA=y
+          CONFIG_MFD_MADERA_SPI=y
+          CONFIG_MFD_CS47L92=y
+          CONFIG_PINCTRL_MADERA=y
+          CONFIG_GPIO_MADERA=y
+          CONFIG_MFD_CS47L92_GPIO=y
+          CONFIG_REGULATOR_MADERA_LDO1=y
+          CONFIG_REGULATOR_MADERA_MICSUPP=y
+          CONFIG_SND_SOC_CS47L92=y
+          CONFIG_EXTCON_MADERA=y
+          CONFIG_EXTCON_MADERA_INPUT_EVENT=y
 
-          # ---- 1. strscpy hardening in fs/susfs.c ----------------------------------------
-          # FIX #17: copy the upstream file verbatim (identical SUSFS version, only strncpy
-          # differs) rather than a fragile perl regex.
-          if upstream_available; then
-            if upstream_show "fs/susfs.c" > fs/susfs.c.upstream 2>/dev/null; then
-              # Sanity: upstream file must contain SUSFS_VERSION v2.2.0
-              if grep -q 'SUSFS_VERSION.*2\.2\.0' fs/susfs.c.upstream; then
-                mv fs/susfs.c.upstream fs/susfs.c
-                echo "[OK] fs/susfs.c: applied strscpy hardening + sus_memfd from upstream" >> "$LOG"
-              else
-                rm -f fs/susfs.c.upstream
-                echo "[SKIP] fs/susfs.c upstream version mismatch; keeping Chimera copy" >> "$LOG"
-              fi
-            else
-              echo "[SKIP] fs/susfs.c not found in upstream fetch" >> "$LOG"
-            fi
+          # Scheduler tick rate and debug
+          CONFIG_HZ_300=y
+          # CONFIG_HZ_100 is not set
+          CONFIG_SCHED_DEBUG=y
+
+          # Knox / DEFEX — off
+          # CONFIG_SECURITY_DEFEX is not set
+          # CONFIG_FIVE is not set
+          # CONFIG_KNOX_KAP is not set
+          # CONFIG_RKP_CFP_ROPP is not set
+          # CONFIG_RKP_CFP_FP is not set
+
+          # TCP / congestion control
+          CONFIG_TCP_CONG_ADVANCED=y
+          CONFIG_TCP_CONG_BBR=y
+          CONFIG_DEFAULT_TCP_CONG="bbr"
+          CONFIG_CRC32_ARMV8_CRC=y
+
+          # Optional: TC BPF classifier
+          CONFIG_NET_ACT_BPF=y
+
+          # KSU debug off
+          # CONFIG_KSU_DEBUG is not set
+          DEFCFG
+
+          # merge_config.sh requires the base .config to already exist under O=
+          # Run defconfig first into OUT, then merge the fragment
+          make O="$ABS_OUT" ARCH=arm64 "$(basename "$DEFCONFIG")" \
+            >> "$LOG" 2>&1
+          scripts/kconfig/merge_config.sh -m -O "$ABS_OUT" \
+            "$ABS_OUT/.config" /tmp/chimera.config \
+            >> "$LOG" 2>&1
+          echo "[OK] Defconfig fragment merged" | tee -a "$LOG"
+
+          # ---- B. kernel/sched/fair.c — scheduler tuning constants ----------
+          # gavdoc38 ships conservative values; Chimera uses higher latency
+          # targets suited to the Exynos9810's big-core media decode patterns.
+          FAIR="kernel/sched/fair.c"
+          if grep -q '750000ULL' "$FAIR"; then
+            sed -i 's/\(normalized_sysctl_sched_min_granularity\s*=\s*\)750000ULL/\15000000ULL/' "$FAIR"
+            echo "[OK] fair.c: normalized_sysctl_sched_min_granularity → 5000000ULL" | tee -a "$LOG"
           else
-            echo "[SKIP] Upstream not available; skipping fs/susfs.c import" >> "$LOG"
+            echo "[WARN] fair.c: 750000ULL anchor not found; value may have changed upstream" | tee -a "$LOG"
+          fi
+          if grep -q '500000UL;' "$FAIR"; then
+            sed -i 's/\(sysctl_sched_migration_cost\s*=\s*\)500000UL/\12000000UL/' "$FAIR"
+            echo "[OK] fair.c: sysctl_sched_migration_cost → 2000000UL" | tee -a "$LOG"
+          else
+            echo "[WARN] fair.c: 500000UL anchor not found; value may have changed upstream" | tee -a "$LOG"
           fi
 
-          # ---- 2. include/linux/susfs.h and susfs_def.h (adds sus_memfd struct) --------
-          for HEADER in include/linux/susfs.h include/linux/susfs_def.h; do
-            if upstream_available && upstream_show "$HEADER" > "${HEADER}.upstream" 2>/dev/null; then
-              mv "${HEADER}.upstream" "$HEADER"
-              echo "[OK] $HEADER: updated from upstream" >> "$LOG"
-            else
-              rm -f "${HEADER}.upstream"
-              echo "[SKIP] $HEADER upstream not available" >> "$LOG"
-            fi
-          done
-
-          # ---- 3. mm/shmem.c: insert susfs_sus_memfd() guard at memfd_create call site --
-          # FIX #11: Targeted insertion after the null-terminator check (line ending
-          # "goto err_name;" before shmem_file_setup(name, ...)) — this is exactly where
-          # gavdoc38 commit 040a5f15 places the hook.
-          if ! grep -q 'susfs_sus_memfd' mm/shmem.c; then
-            # Insert guard block after the last `goto err_name;` that precedes shmem_file_setup
+          # ---- C. drivers/cpufreq/exynos-ufc.c — UFC short-circuit ---------
+          # Disables UFC (User Frequency Control) by returning immediately from
+          # the init function. UFC causes latency spikes under AegisCore's custom
+          # cpuset/schedtune management. Safe to remove; kernel boots without it.
+          UFC="drivers/cpufreq/exynos-ufc.c"
+          if ! grep -q 'Chimera: UFC disabled' "$UFC"; then
             python3 - << 'PYEOF'
-          import re, sys
+          import re
+          with open('drivers/cpufreq/exynos-ufc.c') as f:
+              src = f.read()
+          # Insert early return immediately after the opening brace of exynos_ufc_init
+          # Anchor: the function signature + opening brace + first local variable line
+          pattern = r'(static int __init exynos_ufc_init\(void\)\n\{)'
+          replacement = (
+              r'\1\n'
+              r'\t/* Chimera: UFC disabled — AegisCore manages CPU freq policy directly */\n'
+              r'\treturn 0;\n'
+          )
+          new_src, n = re.subn(pattern, replacement, src, count=1)
+          if n == 1:
+              with open('drivers/cpufreq/exynos-ufc.c', 'w') as f:
+                  f.write(new_src)
+              print('[OK] exynos-ufc.c: UFC short-circuit applied')
+          else:
+              print('[WARN] exynos-ufc.c: exynos_ufc_init anchor not found; patch not applied')
+          PYEOF
+          else
+            echo "[SKIP] exynos-ufc.c: UFC short-circuit already present" | tee -a "$LOG"
+          fi
 
-          with open('mm/shmem.c', 'r') as f:
+          # ---- D. fs/proc/base.c — SUS_MAP /proc/<pid>/mem protection -------
+          # Adds a check inside mem_rw() that returns -EFAULT (write) or -EIO (read)
+          # when the accessed VMA's inode is marked as sus_map.  This prevents root
+          # detectors from reading or writing through /proc/<pid>/mem into regions
+          # that have been sus_map'd by KernelSU/SUSFS.
+          if ! grep -q 'CONFIG_KSU_SUSFS_SUS_MAP' fs/proc/base.c; then
+            python3 - << 'PYEOF'
+          import re
+
+          with open('fs/proc/base.c') as f:
               src = f.read()
 
-          # The exact insertion point: after the null-terminator check block that ends with
-          # "goto err_name;\n\t}\n\n" and is immediately followed by "\tfd = get_unused_fd"
-          # (confirmed by grepping chimera/mm/shmem.c lines 3575-3585).
-          hook = (
-              '\n'
-              '#ifdef CONFIG_KSU_SUSFS_SUS_MEMFD\n'
-              '\tif (susfs_sus_memfd(name)) {\n'
-              '\t\terror = -EFAULT;\n'
-              '\t\tgoto err_name;\n'
-              '\t}\n'
+          # Insertion point A: add `struct vm_area_struct *vma;` declaration
+          # after the existing `unsigned int flags;` local variable declaration
+          # inside mem_rw().  Anchor is unambiguous — only one mem_rw in this file.
+          decl_anchor = '\tunsigned int flags;\n'
+          decl_insert = (
+              '\tunsigned int flags;\n'
+              '#ifdef CONFIG_KSU_SUSFS_SUS_MAP\n'
+              '\tstruct vm_area_struct *vma;\n'
               '#endif\n'
           )
+          if decl_anchor not in src:
+              print('[WARN] proc/base.c: flags decl anchor not found; skipping SUS_MAP patch')
+              exit(0)
+          src = src.replace(decl_anchor, decl_insert, 1)
 
-          # Match: last `goto err_name;\n\t}\n` before `fd = get_unused_fd_flags`
-          pattern = r'(goto err_name;\n\t\}\n)(\n\tfd = get_unused_fd_flags)'
-          replacement = r'\1' + hook + r'\2'
-          new_src, n = re.subn(pattern, replacement, src, count=1)
+          # Insertion point B: add vma check at the top of the while loop body,
+          # before `if (write && copy_from_user(...))`.
+          # Anchor: the while loop body opener + this_len assignment.
+          loop_anchor = (
+              '\t\tsize_t this_len = min_t(size_t, count, PAGE_SIZE);\n'
+              '\t\tif (write && copy_from_user(page, buf, this_len)) {\n'
+          )
+          loop_insert = (
+              '\t\tsize_t this_len = min_t(size_t, count, PAGE_SIZE);\n'
+              '#ifdef CONFIG_KSU_SUSFS_SUS_MAP\n'
+              '\t\tvma = find_vma(mm, addr);\n'
+              '\t\tif (vma && vma->vm_file) {\n'
+              '\t\t\tstruct inode *inode = file_inode(vma->vm_file);\n'
+              '\t\t\tif (SUSFS_IS_INODE_SUS_MAP(inode)) {\n'
+              '\t\t\t\tif (write) {\n'
+              '\t\t\t\t\tcopied = -EFAULT;\n'
+              '\t\t\t\t} else {\n'
+              '\t\t\t\t\tcopied = -EIO;\n'
+              '\t\t\t\t}\n'
+              '\t\t\t\tbreak;\n'
+              '\t\t\t}\n'
+              '\t\t}\n'
+              '#endif\n'
+              '\t\tif (write && copy_from_user(page, buf, this_len)) {\n'
+          )
+          if loop_anchor not in src:
+              print('[WARN] proc/base.c: loop body anchor not found; skipping SUS_MAP patch')
+              exit(0)
+          src = src.replace(loop_anchor, loop_insert, 1)
 
-          if n == 1:
-              with open('mm/shmem.c', 'w') as f:
-                  f.write(new_src)
-              print('[OK] mm/shmem.c: inserted susfs_sus_memfd() guard at memfd_create path')
-          else:
-              print('[WARN] mm/shmem.c: insertion point not found; hook not applied')
-              sys.exit(0)  # non-fatal — Chimera still builds without sus_memfd
+          with open('fs/proc/base.c', 'w') as f:
+              f.write(src)
+          print('[OK] fs/proc/base.c: SUS_MAP /proc/<pid>/mem protection applied')
           PYEOF
-            echo "[INFO] mm/shmem.c patch result logged above" >> "$LOG"
           else
-            echo "[SKIP] mm/shmem.c already has susfs_sus_memfd" >> "$LOG"
+            echo "[SKIP] fs/proc/base.c: SUS_MAP block already present" | tee -a "$LOG"
           fi
 
-          # ---- 4. fs/namei.c: port vfs_mkobj() + EXPORT_SYMBOL from upstream -----------
-          # FIX #10: vfs_mkobj() does not exist in Chimera's namei.c. An orphan
-          # EXPORT_SYMBOL(vfs_mkobj) at EOF without the function would fail modpost.
-          # Port the full function block immediately after the vfs_mknod() definition.
-          if ! grep -q 'vfs_mkobj' fs/namei.c; then
-            if upstream_available && upstream_show "fs/namei.c" > fs/namei.c.upstream 2>/dev/null; then
-              # Extract vfs_mkobj function block from upstream
-              python3 - << 'PYEOF'
-          import re, sys
+          # ---- E. fs/namei.c — sus_path sub-path forward decl + 2nd check ---
+          # gavdoc38 already has ONE sus_path check inside the walk loop (at the
+          # top, using a combined `struct dentry *dentry = nd->path.dentry;`).
+          # Chimera adds:
+          #   1. A forward declaration so `dentry` is available across both checks.
+          #   2. Converts the existing declaration+assignment to assignment-only
+          #      (since the var is now pre-declared at the top of the loop body).
+          #   3. A second check AFTER may_lookup() so sub-paths are denied even
+          #      when lookup advances past the sus_path inode.
+          if ! grep -q 'Chimera: sus_path second check' fs/namei.c; then
+            python3 - << 'PYEOF'
+          import re
 
-          with open('fs/namei.c.upstream', 'r') as f:
-              upstream = f.read()
-
-          # Extract the vfs_mkobj block (function definition + EXPORT_SYMBOL)
-          m = re.search(
-              r'(^int vfs_mkobj\(.*?^EXPORT_SYMBOL\(vfs_mkobj\);)',
-              upstream, re.MULTILINE | re.DOTALL
-          )
-          if not m:
-              print('[WARN] vfs_mkobj not found in upstream namei.c; skipping')
-              sys.exit(0)
-
-          mkobj_block = '\n\n' + m.group(1) + '\n'
-
-          with open('fs/namei.c', 'r') as f:
+          with open('fs/namei.c') as f:
               src = f.read()
 
-          # Insert after the EXPORT_SYMBOL line that follows vfs_mknod
-          pattern = r'(EXPORT_SYMBOL\(vfs_mknod\);)'
-          replacement = r'\1' + mkobj_block
-          new_src, n = re.subn(pattern, replacement, src, count=1)
+          # Step 1: In the for(;;) loop body, the existing gavdoc38 sus_path block is:
+          #   #ifdef CONFIG_KSU_SUSFS_SUS_PATH
+          #   \tstruct dentry *dentry = nd->path.dentry;
+          #   \tif (dentry->d_inode && ...) { return -ENOENT; }
+          #   #endif
+          # Replace `struct dentry *dentry =` with just `dentry =` (becomes assignment)
+          # AND prepend a forward declaration before this block.
+          existing_block = (
+              '#ifdef CONFIG_KSU_SUSFS_SUS_PATH\n'
+              '\t\tstruct dentry *dentry = nd->path.dentry;\n'
+              '\t\tif (dentry->d_inode && susfs_is_inode_sus_path(dentry->d_inode)) {\n'
+              '\t\t\t// - No need to dput() here\n'
+              '\t\t\t// - return -ENOENT here since it is walking the sub path of sus path\n'
+              '\t\t\treturn -ENOENT;\n'
+              '\t\t}\n'
+              '#endif'
+          )
+          replacement_block = (
+              '/* Chimera: forward declaration so dentry is visible to second check below */\n'
+              '#ifdef CONFIG_KSU_SUSFS_SUS_PATH\n'
+              '\t\tstruct dentry *dentry;\n'
+              '#endif\n'
+              '#ifdef CONFIG_KSU_SUSFS_SUS_PATH\n'
+              '\t\tdentry = nd->path.dentry;\n'
+              '\t\tif (dentry->d_inode && susfs_is_inode_sus_path(dentry->d_inode)) {\n'
+              '\t\t\t// - No need to dput() here\n'
+              '\t\t\t// - return -ENOENT here since it is walking the sub path of sus path\n'
+              '\t\t\treturn -ENOENT;\n'
+              '\t\t}\n'
+              '#endif'
+          )
+          if existing_block not in src:
+              print('[WARN] fs/namei.c: existing sus_path block not found; skipping patch')
+              exit(0)
+          src = src.replace(existing_block, replacement_block, 1)
 
-          if n == 1:
-              with open('fs/namei.c', 'w') as f:
-                  f.write(new_src)
-              print('[OK] fs/namei.c: ported vfs_mkobj() + EXPORT_SYMBOL after vfs_mknod')
-          else:
-              print('[WARN] fs/namei.c: EXPORT_SYMBOL(vfs_mknod) anchor not found; skipping vfs_mkobj port')
+          # Step 2: Add second check after `may_lookup()` error return.
+          # Anchor: the may_lookup block that immediately follows the sus_path block.
+          after_lookup_anchor = (
+              '\t\terr = may_lookup(nd);\n'
+              '\t\tif (err)\n'
+              '\t\t\treturn err;\n'
+          )
+          after_lookup_insert = (
+              '\t\terr = may_lookup(nd);\n'
+              '\t\tif (err)\n'
+              '\t\t\treturn err;\n'
+              '/* Chimera: sus_path second check — deny sub-path traversal after may_lookup */\n'
+              '#ifdef CONFIG_KSU_SUSFS_SUS_PATH\n'
+              '\t\tdentry = nd->path.dentry;\n'
+              '\t\tif (dentry->d_inode && susfs_is_inode_sus_path(dentry->d_inode)) {\n'
+              '\t\t\t// - No need to dput() here\n'
+              '\t\t\t// - return -ENOENT here since it is walking the sub path of sus path\n'
+              '\t\t\treturn -ENOENT;\n'
+              '\t\t}\n'
+              '#endif\n'
+          )
+          if after_lookup_anchor not in src:
+              print('[WARN] fs/namei.c: may_lookup anchor not found; second check not applied')
+              exit(0)
+          src = src.replace(after_lookup_anchor, after_lookup_insert, 1)
+
+          with open('fs/namei.c', 'w') as f:
+              f.write(src)
+          print('[OK] fs/namei.c: sus_path forward decl + second check applied')
           PYEOF
-              rm -f fs/namei.c.upstream
-              echo "[INFO] fs/namei.c vfs_mkobj port result logged above" >> "$LOG"
-            else
-              echo "[SKIP] namei.c upstream not available; vfs_mkobj not ported" >> "$LOG"
-            fi
           else
-            echo "[SKIP] fs/namei.c already has vfs_mkobj" >> "$LOG"
+            echo "[SKIP] fs/namei.c: sus_path second check already present" | tee -a "$LOG"
           fi
 
-          echo "Selective workspace patching complete" >> "$LOG"
-          echo "--- Patch log ---"
+          echo "Chimera overlay complete at $(date -u)" | tee -a "$LOG"
+          echo "--- Overlay log ---"
           cat "$LOG"
 
       # -----------------------------------------------------------------------
@@ -737,46 +863,36 @@ jobs:
       # 9. Kernel config assembly (Chimera defconfig is authoritative)
       # FIX #4: make is invoked with O=<path> as a CLI argument, not env var.
       # -----------------------------------------------------------------------
-      - name: Prepare kernel .config from Chimera defconfig
+      - name: Finalise kernel .config (olddefconfig + Chimera flag guards)
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
           ABS_OUT="${{ env.ABS_OUT }}"
 
-          if [[ ! -f "$DEFCONFIG" ]]; then
-            echo "ERROR: defconfig not found: $DEFCONFIG" >&2
-            exit 1
-          fi
-
-          # FIX #4: pass O= as a CLI argument — make ignores the env var O=
-          # The kernel Kconfig system prepends arch/arm64/configs/ internally, so the
-          # make target must be the bare filename only, not the full relative path.
-          # Use the full path only for the -f existence check above.
-          DEFCONFIG_TARGET="$(basename "$DEFCONFIG")"
-          
-          export PATH="$GITHUB_WORKSPACE/toolchains/clang/bin:$PATH"
-          export CC=clang
-          export HOSTCC=clang
-          export LLVM=1
-          export CROSS_COMPILE="${TC_CROSS_COMPILE}"
-          export CROSS_COMPILE_ARM32="${TC_CROSS_COMPILE_ARM32}"
-          
-          echo "CC=$CC HOSTCC=$HOSTCC LLVM=$LLVM CROSS_COMPILE=$CROSS_COMPILE"
-          
-          make O="$ABS_OUT" ARCH=arm64 "$DEFCONFIG_TARGET"
+          # The overlay step already ran `make <defconfig>` and merged the Chimera
+          # fragment via merge_config.sh.  Run olddefconfig here to resolve any
+          # newly introduced Kconfig dependencies deterministically.
+          make O="$ABS_OUT" ARCH=arm64 olddefconfig
 
           CONFIG="$ABS_OUT/.config"
 
-          # Guard: Chimera-critical flags must survive defconfig application
-          for FLAG in \
-            "CONFIG_HZ_300=y:HZ_300 (scheduler tick)" \
-            "CONFIG_MFD_MADERA=y:MFD_MADERA (star2lte speaker amp)" \
-            "CONFIG_TCP_CONG_BBR=y:TCP_CONG_BBR (BBR congestion control)"; do
-            SYMBOL="${FLAG%%:*}"
-            DESC="${FLAG##*:}"
-            grep -q "^${SYMBOL}" "$CONFIG" \
-              || { echo "ERROR: $DESC ($SYMBOL) missing from .config; aborting" >&2; exit 1; }
-          done
+          # Guard: all Chimera-critical flags must survive defconfig + fragment merge
+          FAIL=0
+          check_config() {
+            local sym="$1" desc="$2"
+            if grep -q "^${sym}" "$CONFIG"; then
+              echo "[OK] $desc ($sym)"
+            else
+              echo "ERROR: $desc ($sym) missing from .config after merge — aborting" >&2
+              FAIL=1
+            fi
+          }
+          check_config "CONFIG_HZ_300=y"         "Scheduler HZ_300"
+          check_config "CONFIG_MFD_MADERA=y"     "Madera codec (star2lte speaker)"
+          check_config "CONFIG_MFD_CS47L92=y"    "CS47L92 sub-device"
+          check_config "CONFIG_TCP_CONG_BBR=y"   "BBR congestion control"
+          check_config "CONFIG_SCHED_DEBUG=y"    "SCHED_DEBUG"
+          [[ $FAIL -eq 0 ]] || exit 1
 
           # Profile: cm8e — disable runtime spoofing symbols at compile time
           if [[ "${{ inputs.profile }}" == "cm8e" ]]; then
@@ -786,13 +902,12 @@ jobs:
           CONFIG_SUSFS_SPOOF_SELINUX=n
           CONFIG_KSU_SPOOF_AVC_LOG=n
           CFGEOF
+            make O="$ABS_OUT" ARCH=arm64 olddefconfig
             echo "Applied cm8e compile-time identity fragment"
           fi
 
-          # Resolve new Kconfig symbols deterministically
-          make O="$ABS_OUT" ARCH=arm64 olddefconfig
           cp "$CONFIG" "$ABS_LOG/config.built"
-          echo ".config assembled at $ABS_OUT/.config"
+          echo ".config finalised at $ABS_OUT/.config"
 
       # -----------------------------------------------------------------------
       # 10. Build kernel (deterministic environment)
@@ -807,8 +922,8 @@ jobs:
         env:
           ARCH: arm64
           CROSS_COMPILE: "${{ env.TC_CROSS_COMPILE }}"
-          # CROSS_COMPILE_ARM32: "${{ env.TC_CROSS_COMPILE_ARM32 }}"
-          # HOSTCC: "${{ env.TC_HOSTCC }}"
+          CROSS_COMPILE_ARM32: "${{ env.TC_CROSS_COMPILE_ARM32 }}"
+          HOSTCC: "${{ env.TC_HOSTCC }}"
           LLVM_IAS: "${{ env.TC_LLVM_IAS }}"
           KBUILD_BUILD_USER: "${{ env.BUILD_USER }}"
           KBUILD_BUILD_HOST: "${{ env.BUILD_HOST }}"
@@ -825,11 +940,6 @@ jobs:
 
           # FIX #16: prepend toolchain bin/ so llvm-ar, llvm-nm, llvm-objcopy etc are found
           export PATH="$ABS_TC/bin:$PATH"
-          
-          export HOSTCC=clang
-          export CROSS_COMPILE=
-          export CROSS_COMPILE_ARM32=
-          export CC="ccache $ABS_TC/bin/clang"
 
           # Explicit LLVM tool variables for Linux 4.9 BSP (no LLVM=1 support in 4.9 Make)
           LLVM_TOOLS=(
@@ -919,7 +1029,7 @@ jobs:
           ART_DIR="$GITHUB_WORKSPACE/artifacts"
           mkdir -p "$ART_DIR"
 
-          CHIMERA_SHORT="${{ env.CHIMERA_COMMIT }}"
+          CHIMERA_SHORT="${{ env.BASE_COMMIT }}"
           CHIMERA_SHORT="${CHIMERA_SHORT:0:8}"
           TOOL="${{ inputs.toolchain }}"
           PROFILE="${{ inputs.profile }}"
@@ -966,7 +1076,8 @@ jobs:
           # FIX #14: reference env var (set at run time) instead of shell subshell in YAML body
           body: |
             Automated build of Project Chimera Mk8.
-            Chimera commit: ${{ env.CHIMERA_COMMIT }}
+            Gavdoc38 base: ${{ env.BASE_COMMIT }}
+            Chimera ref: ${{ env.CHIMERA_COMMIT }}
             Build tag: ${{ env.BUILD_TAG }}
             Toolchain: ${{ inputs.toolchain }}
             Profile: ${{ inputs.profile }}
@@ -992,12 +1103,13 @@ jobs:
         if: always()
         run: |
           set -Eeuo pipefail
-          echo "Build run:    $GITHUB_RUN_ID"
-          echo "Chimera:      ${{ env.CHIMERA_COMMIT }}"
-          echo "Profile:      ${{ inputs.profile }}"
-          echo "Toolchain:    ${{ inputs.toolchain }}"
-          echo "Brand:        ${{ env.BRAND }}"
-          echo "Build user:   ${{ env.BUILD_USER }}@${{ env.BUILD_HOST }}"
-          echo "Timestamp:    ${{ env.KBUILD_BUILD_TIMESTAMP }}"
+          echo "Build run:      $GITHUB_RUN_ID"
+          echo "Gavdoc38 base:  ${{ env.BASE_COMMIT }}"
+          echo "Chimera ref:    ${{ env.CHIMERA_COMMIT }}"
+          echo "Profile:        ${{ inputs.profile }}"
+          echo "Toolchain:      ${{ inputs.toolchain }}"
+          echo "Brand:          ${{ env.BRAND }}"
+          echo "Build user:     ${{ env.BUILD_USER }}@${{ env.BUILD_HOST }}"
+          echo "Timestamp:      ${{ env.KBUILD_BUILD_TIMESTAMP }}"
           echo "Artifacts:"
           ls -1 "$ABS_LOG"/*.tar.gz 2>/dev/null || echo "  (none — dry_run or build failed)"
