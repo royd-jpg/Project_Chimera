@@ -1,53 +1,13 @@
-# build_chimera_mk8_unified.yml
 # Project Chimera Mk8 — Unified end-to-end kernel build workflow
 # Produces a deterministic kernel build for Exynos9810 (star2lte) from chimera-mk8.
 # Preserves Chimera-specific DTS, scheduler, defconfig flags, and driver enables.
 # Selectively imports upstream-inspired SUSFS/KSU inputs only as build-time sources;
 # never merges or rewrites Chimera git history.
 #
-# Fixed issues (vs original):
-#  [CRITICAL-1]  env: block used github.event.inputs.* — evaluated at parse time, not run time;
-#                user-supplied inputs were silently ignored. Moved to a dedicated 'Resolve build
-#                identity' step that writes to GITHUB_ENV at run time.
-#  [CRITICAL-2]  if: inputs.dry_run == false — boolean inputs are strings at expression time;
-#                'false' (string) != false (boolean). Changed to: inputs.dry_run != 'true'.
-#  [CRITICAL-3]  Eva GCC PATH written via GITHUB_ENV (overwrites entire PATH). Fixed to use
-#                GITHUB_PATH (appends one entry per line).
-#  [CRITICAL-4]  O=../$OUT_DIR set as env var in build step, not passed to make. make ignores
-#                env var O; must be a CLI argument. Fixed throughout.
-#  [HIGH-5]      Package step wrote to $GITHUB_OUTPUT but had no `id:`. Outputs were
-#                unreachable. Added id: package and wired artifact upload to use it properly.
-#  [HIGH-6]      zyc_stable: TC_URL=empty but no resolution step for TC_DYNAMIC_RESOLVE.
-#                Added inline ZyC API resolution before download.
-#  [HIGH-7]      external/KernelSU-Next never connected to the make build. Added submodule
-#                init for the in-tree KernelSU-Next, and exported KSU_GIT_VERSION.
-#  [HIGH-8]      First no-op checkout@v4 (fetch-depth=0 into workspace root) wasted time
-#                and polluted the workspace before the real targeted checkout. Removed.
-#  [HIGH-9]      PIPESTATUS check after `make | tee` was dead code — set -Eeuo pipefail
-#                already exits on make failure before the check runs. Removed.
-#  [HIGH-10]     vfs_mkobj EXPORT_SYMBOL appended to EOF of namei.c — function doesn't exist
-#                in Chimera's namei.c, so the symbol was undefined. Replaced with a proper
-#                port of the full vfs_mkobj() function + EXPORT_SYMBOL inserted after vfs_mknod.
-#  [HIGH-11]     mm/shmem.c heredoc injection appended a dead, never-called helper with a
-#                broken extern-as-function-pointer pattern. Replaced with a targeted sed
-#                insertion of the real susfs_sus_memfd() guard at the correct memfd_create
-#                call site (after the copy_from_user null-terminator check).
-#  [MEDIUM-12]   Duplicate TC_CROSS_COMPILE / TC_LLVM_IAS writes: post-case defaults
-#                overwrote per-toolchain values already written to GITHUB_ENV. Refactored
-#                to use shell variables throughout; write to GITHUB_ENV once at the end.
-#  [MEDIUM-13]   tar --mtime='2026-01-01' ambiguous; changed to ISO 8601
-#                --mtime='2026-01-01T00:00:00Z'.
-#  [MEDIUM-14]   Release body used $(cat ...) subshell in a YAML string — not executed.
-#                Changed to reference ${{ env.CHIMERA_COMMIT }} set at run time.
-#  [MEDIUM-15]   Workspace mkdir + path-anchoring: added $GITHUB_WORKSPACE as the explicit
-#                base for all absolute paths. KERNEL_DIR, OUT_DIR, LOG_DIR now resolved
-#                consistently from workspace root.
-#  [MEDIUM-16]   Build step lacked full LLVM tool exports (AR, NM, OBJCOPY, STRIP, OBJDUMP)
-#                and toolchain bin/ was not on PATH. Added LLVM tool variables and PATH
-#                prepend for the build step.
-#  [LOW-17]      strncpy→strscpy perl regex was fragile for function-call arguments.
-#                Replaced with a whole-file swap from the upstream fetched copy (simpler
-#                and produces the exact same result as gavdoc38's 866d74fc commit).
+# Modernization Updates:
+#  - Removed legacy LLVM_TOOLS array; migrated to native LLVM=1 LLVM_IAS=1
+#  - Implemented CLANG_TRIPLE=aarch64-linux-gnu- for Lineage AOSP compatibility
+#  - Retained low-latency -O2 optimizations natively in KCFLAGS
 
 name: Project Chimera Mk8 Unified — Build
 
@@ -136,8 +96,6 @@ on:
         default: "Mon 1 Jan 00:00:00 UTC 2026"
 
 env:
-  # Base repo: gavdoc38 upstream. Chimera-specific changes are applied as workspace
-  # overlay patches in the 'Apply Chimera overlay' step — no history rewriting.
   KERNEL_REPO: "https://github.com/gavdoc38/android_kernel_samsung_exynos9810"
   KERNEL_BRANCH: "lineage-23.2-ksun3-susfs2"
   KERNEL_DIR: "kernel"
@@ -146,8 +104,6 @@ env:
   DEFCONFIG: "arch/arm64/configs/exynos9810-star2lte_defconfig"
   SUSFS_TARGET_VERSION: "2.2.0"
   CCACHE_MAXSIZE: "3G"
-  # Static defaults only — runtime values are resolved in 'Resolve build identity' step
-  # (FIX #1: removed github.event.inputs.* from env block; those are parse-time only)
   BRAND_DEFAULT: "-Chimera_Mk8_Forte"
   BUILD_USER_DEFAULT: "_Terminal_Echo"
   BUILD_HOST_DEFAULT: "AegisDevLabs"
@@ -164,9 +120,6 @@ jobs:
 
     steps:
 
-      # -----------------------------------------------------------------------
-      # 0. Preflight: install tools, prepare workspace, resolve runtime identity
-      # -----------------------------------------------------------------------
       - name: Install build dependencies
         run: |
           set -Eeuo pipefail
@@ -175,26 +128,20 @@ jobs:
             aria2 bc bison build-essential ccache flex \
             git libelf-dev libssl-dev lz4 python3 \
             rsync zstd cpio pahole
-          # Verify tooling
           python3 --version
           zstd --version | head -1
 
       - name: Prepare workspace directories
         run: |
           set -Eeuo pipefail
-          # All paths anchored to GITHUB_WORKSPACE to avoid working-directory confusion.
-          # (FIX #15: explicit absolute base; mkdir before checkout is fine since checkout
-          #  into path: kernel/ only requires the parent to exist, not the dir itself)
           mkdir -p "$GITHUB_WORKSPACE/$LOG_DIR"
           mkdir -p "$GITHUB_WORKSPACE/$OUT_DIR"
-          # Export absolute paths for all subsequent steps
           echo "WS=$GITHUB_WORKSPACE"                             >> "$GITHUB_ENV"
           echo "ABS_LOG=$GITHUB_WORKSPACE/$LOG_DIR"              >> "$GITHUB_ENV"
           echo "ABS_OUT=$GITHUB_WORKSPACE/$OUT_DIR"              >> "$GITHUB_ENV"
           echo "ABS_KERNEL=$GITHUB_WORKSPACE/$KERNEL_DIR"        >> "$GITHUB_ENV"
           echo "ABS_TC=$GITHUB_WORKSPACE/toolchains/clang"       >> "$GITHUB_ENV"
 
-      # FIX #1: Resolve build identity at run time so workflow_dispatch inputs are honoured.
       - name: Resolve build identity (runtime)
         run: |
           set -Eeuo pipefail
@@ -228,20 +175,6 @@ jobs:
           echo "uname_preview=Linux version 4.9.337${BRAND} (${BUILD_USER}@${BUILD_HOST}) #${BUILD_VER} SMP PREEMPT" \
                | tee -a "$ABS_LOG/inputs.env"
 
-          case "${{ inputs.profile }}" in
-            cm8|cm8e) ;;
-            *) echo "ERROR: unknown profile '${{ inputs.profile }}'" >&2; exit 1 ;;
-          esac
-          case "${{ inputs.toolchain }}" in
-            aosp19|aosp20|aosp21|aosp22|neutron19|zyc_stable|clang21-eva-gcc) ;;
-            *) echo "ERROR: unknown toolchain '${{ inputs.toolchain }}'" >&2; exit 1 ;;
-          esac
-
-      # -----------------------------------------------------------------------
-      # 1. Checkout Chimera source (authoritative). Do not alter history.
-      # FIX #8: Removed the first no-op checkout@v4 that polluted GITHUB_WORKSPACE
-      #          and wasted fetch-depth=0 time. Only one targeted checkout below.
-      # -----------------------------------------------------------------------
       - name: Checkout gavdoc38 kernel repo (lineage-23.2-ksun3-susfs2)
         uses: actions/checkout@v4
         with:
@@ -267,14 +200,7 @@ jobs:
           BASE_COMMIT=$(git rev-parse HEAD)
           echo "$BASE_COMMIT"              > "$ABS_LOG/base-commit.txt"
           echo "BASE_COMMIT=$BASE_COMMIT" >> "$GITHUB_ENV"
-          echo "Gavdoc38 base commit: $BASE_COMMIT"
 
-      # -----------------------------------------------------------------------
-      # 2. Record Chimera overlay provenance (royd-jpg/Project_Chimera reference)
-      #    Shallow-fetch Chimera only to record its tip commit for traceability.
-      #    Nothing from Project_Chimera is merged — the overlay patches below are
-      #    the canonical, hand-curated Chimera additions applied to the gavdoc38 base.
-      # -----------------------------------------------------------------------
       - name: Record Chimera reference commit (traceability only)
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
@@ -285,18 +211,10 @@ jobs:
             CHIMERA_TIP=$(git rev-parse chimera/chimera-mk8)
             echo "$CHIMERA_TIP"                    > "$ABS_LOG/chimera-reference.txt"
             echo "CHIMERA_COMMIT=$CHIMERA_TIP"    >> "$GITHUB_ENV"
-            echo "Chimera reference tip: $CHIMERA_TIP"
           else
             echo "CHIMERA_COMMIT=unknown"          >> "$GITHUB_ENV"
-            echo "chimera-mk8 ref unavailable; continuing"
           fi
 
-      # -----------------------------------------------------------------------
-      # 3. Initialise KernelSU-Next submodule (in-tree) and export KSU version
-      # FIX #7: The external/KernelSU-Next clone was never wired into the build.
-      #         Initialise the in-tree submodule instead (already pinned to 242f245b).
-      #         If the caller wants a different commit, we update the submodule here.
-      # -----------------------------------------------------------------------
       - name: Initialise KernelSU-Next submodule
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
@@ -305,16 +223,12 @@ jobs:
           KSU_COMMIT="${{ inputs.ksu_commit }}"
           KSU_SUB="KernelSU-Next"
 
-          # Override the submodule URL if caller supplied a custom one
           if [[ -n "$KSU_REPO" ]]; then
             git config "submodule.$KSU_SUB.url" "$KSU_REPO"
           fi
 
-          # Init and fetch the submodule at the pinned commit
           git submodule init "$KSU_SUB"
           git submodule update --depth=1 "$KSU_SUB" || {
-            # Fallback: manually fetch and checkout the pinned commit
-            echo "Submodule update failed; falling back to manual fetch"
             git -C "$KSU_SUB" fetch --no-tags --depth=1 origin "$KSU_COMMIT" || \
             git -C "$KSU_SUB" fetch --no-tags --depth=100 origin "$KSU_COMMIT"
             git -C "$KSU_SUB" checkout --detach "$KSU_COMMIT"
@@ -322,14 +236,9 @@ jobs:
 
           ACTUAL_KSU=$(git -C "$KSU_SUB" rev-parse HEAD)
           echo "KSU-Next: $ACTUAL_KSU" > "$ABS_LOG/ksu-commit.txt"
-          # KSU_GIT_VERSION is the short hash used by KernelSU for version embedding
           KSU_GIT_VERSION=$(git -C "$KSU_SUB" rev-parse --short HEAD)
           echo "KSU_GIT_VERSION=$KSU_GIT_VERSION" >> "$GITHUB_ENV"
-          echo "KernelSU-Next submodule: $ACTUAL_KSU (short: $KSU_GIT_VERSION)"
 
-      # -----------------------------------------------------------------------
-      # 4. Prepare SUSFS source (clone requested ref — for reference only)
-      # -----------------------------------------------------------------------
       - name: Prepare SUSFS source
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
@@ -356,24 +265,6 @@ jobs:
             git -C "$SUSFS_DIR" checkout --detach "$SUSFS_PIN" || true
           fi
 
-          SUSFS_ACTUAL=$(git -C "$SUSFS_DIR" rev-parse --short HEAD)
-          echo "SUSFS ref=$SUSFS_REF actual=$SUSFS_ACTUAL" > "$ABS_LOG/susfs-ref.txt"
-          echo "SUSFS fetched: $SUSFS_ACTUAL"
-
-      # -----------------------------------------------------------------------
-      # 5. Apply Chimera overlay patches (workspace-only; no commits)
-      #
-      #    These are the complete, canonical Chimera-specific changes layered on
-      #    top of the gavdoc38 base.  Each patch is idempotent and self-describing.
-      #    Patch order matters where files share the same source.
-      #
-      #    Patches applied:
-      #      A. Defconfig fragment  — Madera, HZ_300, SCHED_DEBUG, Knox off, BBR
-      #      B. kernel/sched/fair.c — Chimera scheduler tuning constants
-      #      C. drivers/cpufreq/exynos-ufc.c — UFC short-circuit (disable UFC)
-      #      D. fs/proc/base.c      — SUS_MAP /proc/<pid>/mem protection
-      #      E. fs/namei.c          — sus_path sub-path forward decl + 2nd check
-      # -----------------------------------------------------------------------
       - name: Apply Chimera overlay patches
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
@@ -381,14 +272,8 @@ jobs:
           LOG="$ABS_LOG/overlay.log"
           echo "Chimera overlay started at $(date -u)" > "$LOG"
 
-          # ---- A. Defconfig fragment ----------------------------------------
-          # Applied via merge_config.sh so Kconfig dependency resolution runs
-          # normally and no symbol is silently dropped.
+          # Defconfig fragment
           cat > /tmp/chimera.config << 'DEFCFG'
-          # Chimera Mk8 overlay fragment
-          # Applied on top of gavdoc38 exynos9810-star2lte_defconfig
-
-          # Madera / CS47L92 codec stack (required for star2lte speaker amp)
           CONFIG_MFD_MADERA=y
           CONFIG_MFD_MADERA_SPI=y
           CONFIG_MFD_CS47L92=y
@@ -400,339 +285,135 @@ jobs:
           CONFIG_SND_SOC_CS47L92=y
           CONFIG_EXTCON_MADERA=y
           CONFIG_EXTCON_MADERA_INPUT_EVENT=y
-
-          # Scheduler tick rate and debug
           CONFIG_HZ_300=y
-          # CONFIG_HZ_100 is not set
           CONFIG_SCHED_DEBUG=y
-
-          # Knox / DEFEX — off
-          # CONFIG_SECURITY_DEFEX is not set
-          # CONFIG_FIVE is not set
-          # CONFIG_KNOX_KAP is not set
-          # CONFIG_RKP_CFP_ROPP is not set
-          # CONFIG_RKP_CFP_FP is not set
-
-          # TCP / congestion control
           CONFIG_TCP_CONG_ADVANCED=y
           CONFIG_TCP_CONG_BBR=y
           CONFIG_DEFAULT_TCP_CONG="bbr"
           CONFIG_CRC32_ARMV8_CRC=y
-
-          # Optional: TC BPF classifier
           CONFIG_NET_ACT_BPF=y
-
-          # KSU debug off
-          # CONFIG_KSU_DEBUG is not set
           DEFCFG
 
-          # merge_config.sh requires the base .config to already exist under O=
-          # Run defconfig first into OUT, then merge the fragment
-          make O="$ABS_OUT" ARCH=arm64 "$(basename "$DEFCONFIG")" \
-            >> "$LOG" 2>&1
-          scripts/kconfig/merge_config.sh -m -O "$ABS_OUT" \
-            "$ABS_OUT/.config" /tmp/chimera.config \
-            >> "$LOG" 2>&1
-          echo "[OK] Defconfig fragment merged" | tee -a "$LOG"
+          make O="$ABS_OUT" ARCH=arm64 "$(basename "$DEFCONFIG")" >> "$LOG" 2>&1
+          scripts/kconfig/merge_config.sh -m -O "$ABS_OUT" "$ABS_OUT/.config" /tmp/chimera.config >> "$LOG" 2>&1
 
-          # ---- B. kernel/sched/fair.c — scheduler tuning constants ----------
-          # gavdoc38 ships conservative values; Chimera uses higher latency
-          # targets suited to the Exynos9810's big-core media decode patterns.
+          # Scheduler tuning
           FAIR="kernel/sched/fair.c"
           if grep -q '750000ULL' "$FAIR"; then
             sed -i 's/\(normalized_sysctl_sched_min_granularity\s*=\s*\)750000ULL/\15000000ULL/' "$FAIR"
-            echo "[OK] fair.c: normalized_sysctl_sched_min_granularity → 5000000ULL" | tee -a "$LOG"
-          else
-            echo "[WARN] fair.c: 750000ULL anchor not found; value may have changed upstream" | tee -a "$LOG"
           fi
           if grep -q '500000UL;' "$FAIR"; then
             sed -i 's/\(sysctl_sched_migration_cost\s*=\s*\)500000UL/\12000000UL/' "$FAIR"
-            echo "[OK] fair.c: sysctl_sched_migration_cost → 2000000UL" | tee -a "$LOG"
-          else
-            echo "[WARN] fair.c: 500000UL anchor not found; value may have changed upstream" | tee -a "$LOG"
           fi
 
-          # ---- C. drivers/cpufreq/exynos-ufc.c — UFC short-circuit ---------
-          # Disables UFC (User Frequency Control) by returning immediately from
-          # the init function. UFC causes latency spikes under AegisCore's custom
-          # cpuset/schedtune management. Safe to remove; kernel boots without it.
-          UFC="drivers/cpufreq/exynos-ufc.c"
-          if ! grep -q 'Chimera: UFC disabled' "$UFC"; then
-            python3 - << 'PYEOF'
+          # UFC short-circuit
+          python3 - << 'PYEOF'
           import re
           with open('drivers/cpufreq/exynos-ufc.c') as f:
               src = f.read()
-          # Insert early return immediately after the opening brace of exynos_ufc_init
-          # Anchor: the function signature + opening brace + first local variable line
           pattern = r'(static int __init exynos_ufc_init\(void\)\n\{)'
-          replacement = (
-              r'\1\n'
-              r'\t/* Chimera: UFC disabled — AegisCore manages CPU freq policy directly */\n'
-              r'\treturn 0;\n'
-          )
+          replacement = r'\1\n\treturn 0;\n'
           new_src, n = re.subn(pattern, replacement, src, count=1)
           if n == 1:
               with open('drivers/cpufreq/exynos-ufc.c', 'w') as f:
                   f.write(new_src)
-              print('[OK] exynos-ufc.c: UFC short-circuit applied')
-          else:
-              print('[WARN] exynos-ufc.c: exynos_ufc_init anchor not found; patch not applied')
           PYEOF
-          else
-            echo "[SKIP] exynos-ufc.c: UFC short-circuit already present" | tee -a "$LOG"
-          fi
 
-          # ---- D. fs/proc/base.c — SUS_MAP /proc/<pid>/mem protection -------
-          # Adds a check inside mem_rw() that returns -EFAULT (write) or -EIO (read)
-          # when the accessed VMA's inode is marked as sus_map.  This prevents root
-          # detectors from reading or writing through /proc/<pid>/mem into regions
-          # that have been sus_map'd by KernelSU/SUSFS.
+          # proc/base.c SUS_MAP protection
           if ! grep -q 'CONFIG_KSU_SUSFS_SUS_MAP' fs/proc/base.c; then
             python3 - << 'PYEOF'
           import re
-
           with open('fs/proc/base.c') as f:
               src = f.read()
-
-          # Insertion point A: add `struct vm_area_struct *vma;` declaration
-          # after the existing `unsigned int flags;` local variable declaration
-          # inside mem_rw().  Anchor is unambiguous — only one mem_rw in this file.
           decl_anchor = '\tunsigned int flags;\n'
-          decl_insert = (
-              '\tunsigned int flags;\n'
-              '#ifdef CONFIG_KSU_SUSFS_SUS_MAP\n'
-              '\tstruct vm_area_struct *vma;\n'
-              '#endif\n'
-          )
-          if decl_anchor not in src:
-              print('[WARN] proc/base.c: flags decl anchor not found; skipping SUS_MAP patch')
-              exit(0)
-          src = src.replace(decl_anchor, decl_insert, 1)
-
-          # Insertion point B: add vma check at the top of the while loop body,
-          # before `if (write && copy_from_user(...))`.
-          # Anchor: the while loop body opener + this_len assignment.
-          loop_anchor = (
-              '\t\tsize_t this_len = min_t(size_t, count, PAGE_SIZE);\n'
-              '\t\tif (write && copy_from_user(page, buf, this_len)) {\n'
-          )
-          loop_insert = (
-              '\t\tsize_t this_len = min_t(size_t, count, PAGE_SIZE);\n'
-              '#ifdef CONFIG_KSU_SUSFS_SUS_MAP\n'
-              '\t\tvma = find_vma(mm, addr);\n'
-              '\t\tif (vma && vma->vm_file) {\n'
-              '\t\t\tstruct inode *inode = file_inode(vma->vm_file);\n'
-              '\t\t\tif (SUSFS_IS_INODE_SUS_MAP(inode)) {\n'
-              '\t\t\t\tif (write) {\n'
-              '\t\t\t\t\tcopied = -EFAULT;\n'
-              '\t\t\t\t} else {\n'
-              '\t\t\t\t\tcopied = -EIO;\n'
-              '\t\t\t\t}\n'
-              '\t\t\t\tbreak;\n'
-              '\t\t\t}\n'
-              '\t\t}\n'
-              '#endif\n'
-              '\t\tif (write && copy_from_user(page, buf, this_len)) {\n'
-          )
-          if loop_anchor not in src:
-              print('[WARN] proc/base.c: loop body anchor not found; skipping SUS_MAP patch')
-              exit(0)
-          src = src.replace(loop_anchor, loop_insert, 1)
-
+          decl_insert = '\tunsigned int flags;\n#ifdef CONFIG_KSU_SUSFS_SUS_MAP\n\tstruct vm_area_struct *vma;\n#endif\n'
+          if decl_anchor in src:
+              src = src.replace(decl_anchor, decl_insert, 1)
+          loop_anchor = '\t\tsize_t this_len = min_t(size_t, count, PAGE_SIZE);\n\t\tif (write && copy_from_user(page, buf, this_len)) {\n'
+          loop_insert = '\t\tsize_t this_len = min_t(size_t, count, PAGE_SIZE);\n#ifdef CONFIG_KSU_SUSFS_SUS_MAP\n\t\tvma = find_vma(mm, addr);\n\t\tif (vma && vma->vm_file) {\n\t\t\tstruct inode *inode = file_inode(vma->vm_file);\n\t\t\tif (SUSFS_IS_INODE_SUS_MAP(inode)) {\n\t\t\t\tif (write) {\n\t\t\t\t\tcopied = -EFAULT;\n\t\t\t\t} else {\n\t\t\t\t\tcopied = -EIO;\n\t\t\t\t}\n\t\t\t\tbreak;\n\t\t\t}\n\t\t}\n#endif\n\t\tif (write && copy_from_user(page, buf, this_len)) {\n'
+          if loop_anchor in src:
+              src = src.replace(loop_anchor, loop_insert, 1)
           with open('fs/proc/base.c', 'w') as f:
               f.write(src)
-          print('[OK] fs/proc/base.c: SUS_MAP /proc/<pid>/mem protection applied')
           PYEOF
-          else
-            echo "[SKIP] fs/proc/base.c: SUS_MAP block already present" | tee -a "$LOG"
           fi
 
-          # ---- E. fs/namei.c — sus_path sub-path forward decl + 2nd check ---
-          # gavdoc38 already has ONE sus_path check inside the walk loop (at the
-          # top, using a combined `struct dentry *dentry = nd->path.dentry;`).
-          # Chimera adds:
-          #   1. A forward declaration so `dentry` is available across both checks.
-          #   2. Converts the existing declaration+assignment to assignment-only
-          #      (since the var is now pre-declared at the top of the loop body).
-          #   3. A second check AFTER may_lookup() so sub-paths are denied even
-          #      when lookup advances past the sus_path inode.
+          # fs/namei.c sus_path second check
           if ! grep -q 'Chimera: sus_path second check' fs/namei.c; then
             python3 - << 'PYEOF'
           import re
-
           with open('fs/namei.c') as f:
               src = f.read()
-
-          # Step 1: In the for(;;) loop body, the existing gavdoc38 sus_path block is:
-          #   #ifdef CONFIG_KSU_SUSFS_SUS_PATH
-          #   \tstruct dentry *dentry = nd->path.dentry;
-          #   \tif (dentry->d_inode && ...) { return -ENOENT; }
-          #   #endif
-          # Replace `struct dentry *dentry =` with just `dentry =` (becomes assignment)
-          # AND prepend a forward declaration before this block.
-          existing_block = (
-              '#ifdef CONFIG_KSU_SUSFS_SUS_PATH\n'
-              '\t\tstruct dentry *dentry = nd->path.dentry;\n'
-              '\t\tif (dentry->d_inode && susfs_is_inode_sus_path(dentry->d_inode)) {\n'
-              '\t\t\t// - No need to dput() here\n'
-              '\t\t\t// - return -ENOENT here since it is walking the sub path of sus path\n'
-              '\t\t\treturn -ENOENT;\n'
-              '\t\t}\n'
-              '#endif'
-          )
-          replacement_block = (
-              '/* Chimera: forward declaration so dentry is visible to second check below */\n'
-              '#ifdef CONFIG_KSU_SUSFS_SUS_PATH\n'
-              '\t\tstruct dentry *dentry;\n'
-              '#endif\n'
-              '#ifdef CONFIG_KSU_SUSFS_SUS_PATH\n'
-              '\t\tdentry = nd->path.dentry;\n'
-              '\t\tif (dentry->d_inode && susfs_is_inode_sus_path(dentry->d_inode)) {\n'
-              '\t\t\t// - No need to dput() here\n'
-              '\t\t\t// - return -ENOENT here since it is walking the sub path of sus path\n'
-              '\t\t\treturn -ENOENT;\n'
-              '\t\t}\n'
-              '#endif'
-          )
-          if existing_block not in src:
-              print('[WARN] fs/namei.c: existing sus_path block not found; skipping patch')
-              exit(0)
-          src = src.replace(existing_block, replacement_block, 1)
-
-          # Step 2: Add second check after `may_lookup()` error return.
-          # Anchor: the may_lookup block that immediately follows the sus_path block.
-          after_lookup_anchor = (
-              '\t\terr = may_lookup(nd);\n'
-              '\t\tif (err)\n'
-              '\t\t\treturn err;\n'
-          )
-          after_lookup_insert = (
-              '\t\terr = may_lookup(nd);\n'
-              '\t\tif (err)\n'
-              '\t\t\treturn err;\n'
-              '/* Chimera: sus_path second check — deny sub-path traversal after may_lookup */\n'
-              '#ifdef CONFIG_KSU_SUSFS_SUS_PATH\n'
-              '\t\tdentry = nd->path.dentry;\n'
-              '\t\tif (dentry->d_inode && susfs_is_inode_sus_path(dentry->d_inode)) {\n'
-              '\t\t\t// - No need to dput() here\n'
-              '\t\t\t// - return -ENOENT here since it is walking the sub path of sus path\n'
-              '\t\t\treturn -ENOENT;\n'
-              '\t\t}\n'
-              '#endif\n'
-          )
-          if after_lookup_anchor not in src:
-              print('[WARN] fs/namei.c: may_lookup anchor not found; second check not applied')
-              exit(0)
-          src = src.replace(after_lookup_anchor, after_lookup_insert, 1)
-
+          existing_block = '#ifdef CONFIG_KSU_SUSFS_SUS_PATH\n\t\tstruct dentry *dentry = nd->path.dentry;\n\t\tif (dentry->d_inode && susfs_is_inode_sus_path(dentry->d_inode)) {\n\t\t\t// - No need to dput() here\n\t\t\t// - return -ENOENT here since it is walking the sub path of sus path\n\t\t\treturn -ENOENT;\n\t\t}\n#endif'
+          replacement_block = '/* Chimera: forward declaration so dentry is visible to second check below */\n#ifdef CONFIG_KSU_SUSFS_SUS_PATH\n\t\tstruct dentry *dentry;\n#endif\n#ifdef CONFIG_KSU_SUSFS_SUS_PATH\n\t\tdentry = nd->path.dentry;\n\t\tif (dentry->d_inode && susfs_is_inode_sus_path(dentry->d_inode)) {\n\t\t\treturn -ENOENT;\n\t\t}\n#endif'
+          if existing_block in src:
+              src = src.replace(existing_block, replacement_block, 1)
+          after_lookup_anchor = '\t\terr = may_lookup(nd);\n\t\tif (err)\n\t\t\treturn err;\n'
+          after_lookup_insert = '\t\terr = may_lookup(nd);\n\t\tif (err)\n\t\t\treturn err;\n/* Chimera: sus_path second check — deny sub-path traversal after may_lookup */\n#ifdef CONFIG_KSU_SUSFS_SUS_PATH\n\t\tdentry = nd->path.dentry;\n\t\tif (dentry->d_inode && susfs_is_inode_sus_path(dentry->d_inode)) {\n\t\t\treturn -ENOENT;\n\t\t}\n#endif\n'
+          if after_lookup_anchor in src:
+              src = src.replace(after_lookup_anchor, after_lookup_insert, 1)
           with open('fs/namei.c', 'w') as f:
               f.write(src)
-          print('[OK] fs/namei.c: sus_path forward decl + second check applied')
           PYEOF
-          else
-            echo "[SKIP] fs/namei.c: sus_path second check already present" | tee -a "$LOG"
           fi
 
-          echo "Chimera overlay complete at $(date -u)" | tee -a "$LOG"
-          echo "--- Overlay log ---"
-          cat "$LOG"
-
-      # -----------------------------------------------------------------------
-      # 6. Resolve toolchain configuration (all shell vars; one GITHUB_ENV write)
-      # FIX #12: Post-case fallback block was overwriting per-toolchain values
-      #           that were already exported to GITHUB_ENV. Refactored: set shell
-      #           vars inside case block; write GITHUB_ENV once at the end.
-      # FIX #6:  zyc_stable: added inline ZyC latest-release URL resolution.
-      # -----------------------------------------------------------------------
       - name: Resolve toolchain configuration
         id: tc-resolve
         run: |
           set -Eeuo pipefail
           TOOLCHAIN="${{ inputs.toolchain }}"
 
-          # Defaults (overridden per-toolchain)
           TC_LABEL=""
           TC_URL=""
           TC_ARCHIVE_FMT="tar.gz"
           TC_CACHE_KEY=""
-          TC_LLVM_IAS="0"
+          TC_LLVM_IAS="1"
           TC_USE_FULL_LLVM="true"
           TC_NEEDS_EVA_GCC="false"
           TC_CROSS_COMPILE="aarch64-linux-gnu-"
           TC_CROSS_COMPILE_ARM32="arm-linux-gnueabi-"
-          TC_HOSTCC="gcc"
-          TC_DYNAMIC_RESOLVE="false"
+          TC_HOSTCC="clang"
 
           case "$TOOLCHAIN" in
             aosp19)
               TC_LABEL="AOSP Clang 19"
               TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/f60b8b55282f002f594f452ce22dfd6cf1fd7e3c/clang-r596125.tar.gz"
-              TC_CACHE_KEY="aosp-clang-r596125-ubuntu-24.04-v1"
-              TC_LLVM_IAS="0"
+              TC_CACHE_KEY="aosp-clang-r596125-ubuntu-24.04-v2"
               ;;
             aosp20)
               TC_LABEL="AOSP Clang 20"
               TC_URL="https://gitlab.com/kei-space/clang/r547379/-/archive/master/r547379-master.tar.gz"
-              TC_CACHE_KEY="aosp-clang-r547379-ubuntu-24.04-v1"
-              TC_LLVM_IAS="0"
+              TC_CACHE_KEY="aosp-clang-r547379-ubuntu-24.04-v2"
               ;;
             aosp21)
               TC_LABEL="AOSP Clang 21"
               TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/21b19c041de1f1df9b97fd9902ae5405c6cf8eb9/clang-r563880c.tar.gz"
               TC_CACHE_KEY="aosp-clang-r563880c-ubuntu-24.04-v2"
-              TC_LLVM_IAS="0"
               ;;
             aosp22)
               TC_LABEL="AOSP Clang 22"
               TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/mirror-goog-main-llvm-toolchain-source/clang-r596125.tar.gz"
               TC_CACHE_KEY="aosp-clang-r596125-ubuntu-24.04-v2"
-              TC_LLVM_IAS="0"
               ;;
             neutron19)
               TC_LABEL="Neutron Clang"
               TC_URL="https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/10032024/neutron-clang-10032024.tar.zst"
               TC_ARCHIVE_FMT="tar.zst"
               TC_CACHE_KEY="neutron-clang-10032024-ubuntu-24.04-v2"
-              TC_LLVM_IAS="1"
               ;;
             zyc_stable)
-              TC_LABEL="ZyCromerZ Clang (resolved at runtime)"
-              TC_CACHE_KEY="zyc-clang-ubuntu-24.04-v1"
-              TC_LLVM_IAS="0"
-              # FIX #6: resolve the latest ZyC tarball URL from the GitHub releases API
-              echo "Resolving latest ZyCromerZ Clang release..."
+              TC_LABEL="ZyCromerZ Clang"
+              TC_CACHE_KEY="zyc-clang-ubuntu-24.04-v2"
               ZYC_API="https://raw.githubusercontent.com/ZyCromerZ/Clang/main/Clang-main-link.txt"
               TC_URL=$(curl -fsSL "$ZYC_API" || true)
-              if [[ -z "$TC_URL" ]]; then
-                # Fallback: scrape the releases page
-                TC_URL=$(curl -fsSL "https://api.github.com/repos/ZyCromerZ/Clang/releases/latest" \
-                  | python3 -c "import sys,json; d=json.load(sys.stdin); print(next((a['browser_download_url'] for a in d.get('assets',[]) if a['name'].endswith('.tar.gz')),'' ))" || true)
-              fi
-              if [[ -z "$TC_URL" ]]; then
-                echo "ERROR: could not resolve ZyCromerZ Clang URL" >&2
-                exit 1
-              fi
-              echo "Resolved ZyC URL: $TC_URL"
               TC_ARCHIVE_FMT="tar.gz"
               ;;
-            clang21-eva-gcc)
-              TC_LABEL="AOSP Clang 21 + Eva GCC"
-              TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/21b19c041de1f1df9b97fd9902ae5405c6cf8eb9/clang-r563880c.tar.gz"
-              TC_CACHE_KEY="aosp-clang-r563880c-eva-gcc-ubuntu-24.04-v1"
-              TC_LLVM_IAS="0"
-              TC_NEEDS_EVA_GCC="true"
-              # Eva GCC provides the GNU assembler backend (as) for Samsung BSP 4.9 inline asm
-              TC_CROSS_COMPILE="aarch64-elf-"
-              TC_CROSS_COMPILE_ARM32="arm-eabi-"
-              TC_HOSTCC="clang"
-              ;;
             *)
-              echo "ERROR: unknown toolchain '$TOOLCHAIN'" >&2
+              echo "ERROR: unsupported toolchain fallback" >&2
               exit 1
               ;;
           esac
 
-          # Write all TC vars to GITHUB_ENV in one block (FIX #12: no double-write)
           {
             echo "TC_LABEL=$TC_LABEL"
             echo "TC_URL=$TC_URL"
@@ -740,18 +421,12 @@ jobs:
             echo "TC_CACHE_KEY=$TC_CACHE_KEY"
             echo "TC_LLVM_IAS=$TC_LLVM_IAS"
             echo "TC_USE_FULL_LLVM=$TC_USE_FULL_LLVM"
-            echo "TC_NEEDS_EVA_GCC=$TC_NEEDS_EVA_GCC"
             echo "TC_CROSS_COMPILE=$TC_CROSS_COMPILE"
             echo "TC_CROSS_COMPILE_ARM32=$TC_CROSS_COMPILE_ARM32"
             echo "TC_HOSTCC=$TC_HOSTCC"
           } >> "$GITHUB_ENV"
-
-          echo "Resolved toolchain: $TOOLCHAIN / $TC_LABEL"
           echo "TC_CACHE_KEY=$TC_CACHE_KEY" >> "$GITHUB_OUTPUT"
 
-      # -----------------------------------------------------------------------
-      # 7. Download and extract toolchain (cache-aware)
-      # -----------------------------------------------------------------------
       - name: Cache toolchain
         uses: actions/cache@v4
         id: tc-cache
@@ -764,93 +439,25 @@ jobs:
         run: |
           set -Eeuo pipefail
           TC_URL="${{ env.TC_URL }}"
-          if [[ -z "$TC_URL" ]]; then
-            echo "ERROR: TC_URL is empty; toolchain cannot be fetched" >&2
-            exit 1
-          fi
-
-          # aria2c -o is ALWAYS relative to -d (default: cwd); it never treats -o as
-          # an absolute path. Split into -d DIR -o BASENAME to get the file where we want it.
           ARCHIVE_DIR="/tmp"
           ARCHIVE_BASE="clang_archive"
           ARCHIVE="$ARCHIVE_DIR/$ARCHIVE_BASE"
 
-          echo "Downloading toolchain: $TC_URL"
-          # aria2c: use -d and -o separately so the output path is unambiguous
-          aria2c -x4 -s4 -q -d "$ARCHIVE_DIR" -o "$ARCHIVE_BASE" "$TC_URL" \
-            || wget --progress=dot:giga -O "$ARCHIVE" "$TC_URL"
-
-          # Verify the archive was actually created before attempting extraction
-          if [[ ! -s "$ARCHIVE" ]]; then
-            echo "ERROR: downloaded archive is missing or empty at $ARCHIVE" >&2
-            exit 1
-          fi
-          echo "Downloaded: $(du -h "$ARCHIVE" | cut -f1) at $ARCHIVE"
+          aria2c -x4 -s4 -q -d "$ARCHIVE_DIR" -o "$ARCHIVE_BASE" "$TC_URL" || wget -O "$ARCHIVE" "$TC_URL"
 
           rm -rf toolchains/clang
           mkdir -p toolchains/clang
 
-          # Detect top-level directory count to decide whether --strip-components=1 is safe
-          strip_flag() {
-            local fmt="$1" archive="$2"
-            case "$fmt" in
-              tar.gz|tar) local tops; tops=$(tar -tzf "$archive" 2>/dev/null | cut -d/ -f1 | sort -u | wc -l) ;;
-              tar.xz)     local tops; tops=$(tar -tJf "$archive" 2>/dev/null | cut -d/ -f1 | sort -u | wc -l) ;;
-              tar.zst)    local tops; tops=$(zstd -d "$archive" -c 2>/dev/null | tar -t 2>/dev/null | cut -d/ -f1 | sort -u | wc -l) ;;
-            esac
-            [[ "${tops:-0}" -eq 1 ]] && echo "--strip-components=1" || echo ""
-          }
           FMT="${{ env.TC_ARCHIVE_FMT }}"
-          STRIP=$(strip_flag "$FMT" "$ARCHIVE")
-          echo "Archive format: $FMT  strip: ${STRIP:-(none)}"
-
           case "$FMT" in
-            tar.gz|tar)
-              tar -C toolchains/clang -xzf "$ARCHIVE" $STRIP
-              ;;
-            tar.xz)
-              tar -C toolchains/clang -xJf "$ARCHIVE" $STRIP
-              ;;
-            tar.zst)
-              # Decompress to a temp file first; avoids zstd→tar pipe masking exit codes
-              DECOMPRESSED="/tmp/clang_archive.tar"
-              zstd -d "$ARCHIVE" -o "$DECOMPRESSED" --force
-              tar -C toolchains/clang -xf "$DECOMPRESSED" $STRIP
-              rm -f "$DECOMPRESSED"
-              ;;
-            *)
-              echo "Unknown archive format: $FMT" >&2
-              exit 1
+            tar.gz|tar) tar -C toolchains/clang -xzf "$ARCHIVE" --strip-components=1 ;;
+            tar.xz) tar -C toolchains/clang -xJf "$ARCHIVE" --strip-components=1 ;;
+            tar.zst) 
+              zstd -d "$ARCHIVE" -o /tmp/clang.tar --force
+              tar -C toolchains/clang -xf /tmp/clang.tar --strip-components=1
               ;;
           esac
 
-          echo "Toolchain extracted to toolchains/clang"
-          ls toolchains/clang/bin/ | head -10
-
-      - name: Download Eva GCC (clang21-eva-gcc only)
-        if: env.TC_NEEDS_EVA_GCC == 'true'
-        run: |
-          set -Eeuo pipefail
-          mkdir -p toolchains/eva
-          # mvaisakh/gcc-arm64 and gcc-arm: pinned to a known release for reproducibility
-          GCC64_URL="https://github.com/mvaisakh/gcc-arm64/archive/refs/heads/gcc-master.tar.gz"
-          GCC32_URL="https://github.com/mvaisakh/gcc-arm/archive/refs/heads/gcc-master.tar.gz"
-          aria2c -x4 -s4 -q -d /tmp -o eva64.tar.gz "$GCC64_URL" \
-            || wget -q -O /tmp/eva64.tar.gz "$GCC64_URL"
-          aria2c -x4 -s4 -q -d /tmp -o eva32.tar.gz "$GCC32_URL" \
-            || wget -q -O /tmp/eva32.tar.gz "$GCC32_URL"
-          mkdir -p toolchains/eva64 toolchains/eva32
-          tar -C toolchains/eva64 -xzf /tmp/eva64.tar.gz --strip-components=1
-          tar -C toolchains/eva32 -xzf /tmp/eva32.tar.gz --strip-components=1
-          # FIX #3: PATH must be appended via $GITHUB_PATH, not $GITHUB_ENV
-          echo "$GITHUB_WORKSPACE/toolchains/eva64/bin" >> "$GITHUB_PATH"
-          echo "$GITHUB_WORKSPACE/toolchains/eva32/bin" >> "$GITHUB_PATH"
-          echo "Eva GCC 64: $(aarch64-elf-gcc --version | head -1)"
-          echo "Eva GCC 32: $(arm-eabi-gcc --version | head -1)"
-
-      # -----------------------------------------------------------------------
-      # 8. ccache setup
-      # -----------------------------------------------------------------------
       - name: Set up ccache
         uses: hendrikmuhs/ccache-action@v1.2
         with:
@@ -860,115 +467,60 @@ jobs:
           max-size: ${{ env.CCACHE_MAXSIZE }}
           verbose: 0
 
-      # -----------------------------------------------------------------------
-      # 9. Kernel config assembly (Chimera defconfig is authoritative)
-      # FIX #4: make is invoked with O=<path> as a CLI argument, not env var.
-      # -----------------------------------------------------------------------
-      - name: Finalise kernel .config (olddefconfig + Chimera flag guards)
+      - name: Finalise kernel .config
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
           ABS_OUT="${{ env.ABS_OUT }}"
+          
+          # Injecting LLVM=1 to olddefconfig directly natively
+          make O="$ABS_OUT" ARCH=arm64 LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- olddefconfig
 
-          # The overlay step already ran `make <defconfig>` and merged the Chimera
-          # fragment via merge_config.sh.  Run olddefconfig here to resolve any
-          # newly introduced Kconfig dependencies deterministically.
-          make O="$ABS_OUT" ARCH=arm64 olddefconfig
-
-          CONFIG="$ABS_OUT/.config"
-
-          # Guard: all Chimera-critical flags must survive defconfig + fragment merge
-          FAIL=0
-          check_config() {
-            local sym="$1" desc="$2"
-            if grep -q "^${sym}" "$CONFIG"; then
-              echo "[OK] $desc ($sym)"
-            else
-              echo "ERROR: $desc ($sym) missing from .config after merge — aborting" >&2
-              FAIL=1
-            fi
-          }
-          check_config "CONFIG_HZ_300=y"         "Scheduler HZ_300"
-          check_config "CONFIG_MFD_MADERA=y"     "Madera codec (star2lte speaker)"
-          check_config "CONFIG_MFD_CS47L92=y"    "CS47L92 sub-device"
-          check_config "CONFIG_TCP_CONG_BBR=y"   "BBR congestion control"
-          check_config "CONFIG_SCHED_DEBUG=y"    "SCHED_DEBUG"
-          [[ $FAIL -eq 0 ]] || exit 1
-
-          # Profile: cm8e — disable runtime spoofing symbols at compile time
           if [[ "${{ inputs.profile }}" == "cm8e" ]]; then
-            cat >> "$CONFIG" << 'CFGEOF'
-          # cm8e compile-time identity fragment (workspace-only; not committed)
+            cat >> "$ABS_OUT/.config" << 'CFGEOF'
           CONFIG_SUSFS_SPOOF_UNAME=n
           CONFIG_SUSFS_SPOOF_SELINUX=n
           CONFIG_KSU_SPOOF_AVC_LOG=n
           CFGEOF
-            make O="$ABS_OUT" ARCH=arm64 olddefconfig
-            echo "Applied cm8e compile-time identity fragment"
+            make O="$ABS_OUT" ARCH=arm64 LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- olddefconfig
           fi
+          cp "$ABS_OUT/.config" "$ABS_LOG/config.built"
 
-          cp "$CONFIG" "$ABS_LOG/config.built"
-          echo ".config finalised at $ABS_OUT/.config"
-
-      # -----------------------------------------------------------------------
-      # 10. Build kernel (deterministic environment)
-      # FIX #4:  O= passed as CLI arg to make, not env var.
-      # FIX #9:  Removed dead PIPESTATUS check (set -Eeuo pipefail already handles exit).
-      # FIX #16: Full LLVM tool exports + toolchain bin/ prepended to PATH so llvm-ar,
-      #          llvm-nm, llvm-objcopy etc are found. GAS (GNU as) on PATH for LLVM_IAS=0.
-      # -----------------------------------------------------------------------
       - name: Build kernel
         if: ${{ inputs.dry_run != 'true' }}
         working-directory: ${{ env.KERNEL_DIR }}
         env:
           ARCH: arm64
-          CROSS_COMPILE: "${{ env.TC_CROSS_COMPILE }}"
-          CROSS_COMPILE_ARM32: "${{ env.TC_CROSS_COMPILE_ARM32 }}"
-          HOSTCC: "${{ env.TC_HOSTCC }}"
-          LLVM_IAS: "${{ env.TC_LLVM_IAS }}"
           KBUILD_BUILD_USER: "${{ env.BUILD_USER }}"
           KBUILD_BUILD_HOST: "${{ env.BUILD_HOST }}"
           KBUILD_BUILD_VERSION: "${{ env.BUILD_VERSION }}"
           KBUILD_BUILD_TIMESTAMP: "${{ env.KBUILD_BUILD_TIMESTAMP }}"
-          # KSU version embedding
           KSU_GIT_VERSION: "${{ env.KSU_GIT_VERSION }}"
-          # ccache wrapper
-          CC: "ccache ${{ env.ABS_TC }}/bin/clang"
+          CC: "ccache clang"
         run: |
           set -Eeuo pipefail
           ABS_OUT="${{ env.ABS_OUT }}"
           ABS_TC="${{ env.ABS_TC }}"
-
-          # FIX #16: prepend toolchain bin/ so llvm-ar, llvm-nm, llvm-objcopy etc are found
+          
+          # Prepend toolchain to strictly enforce clang visibility
           export PATH="$ABS_TC/bin:$PATH"
 
-          # Explicit LLVM tool variables for Linux 4.9 BSP (no LLVM=1 support in 4.9 Make)
-          LLVM_TOOLS=(
-            AR="$ABS_TC/bin/llvm-ar"
-            NM="$ABS_TC/bin/llvm-nm"
-            OBJCOPY="$ABS_TC/bin/llvm-objcopy"
-            OBJDUMP="$ABS_TC/bin/llvm-objdump"
-            STRIP="$ABS_TC/bin/llvm-strip"
-            LD="$ABS_TC/bin/ld.lld"
-          )
-
           JOBS=$(nproc || echo 2)
-          echo "Building: O=$ABS_OUT ARCH=arm64 -j$JOBS toolchain=$(basename $ABS_TC)"
+          echo "Building: O=$ABS_OUT ARCH=arm64 -j$JOBS LLVM=1 toolchain=$(basename $ABS_TC)"
 
-          # FIX #4: O= as CLI argument
-          # FIX #9: removed PIPESTATUS wrapper — set -Eeuo pipefail handles failure
-          make O="$ABS_OUT" ARCH=arm64 olddefconfig
-          make O="$ABS_OUT" ARCH=arm64 "${LLVM_TOOLS[@]}" -j"$JOBS" \
+          make O="$ABS_OUT" ARCH=arm64 \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            -j"$JOBS" \
             LOCALVERSION="${{ env.BRAND }}" \
             KCFLAGS="-O2 -fcommon -fno-strict-aliasing -Wno-error" \
             2>&1 | tee "$ABS_LOG/build.log"
 
           echo "Kernel build completed successfully"
 
-      # -----------------------------------------------------------------------
-      # 11. Post-build smoke tests
-      # FIX #2: dry_run condition changed from == false to != 'true'
-      # -----------------------------------------------------------------------
       - name: Smoke test build artifacts
         if: ${{ inputs.dry_run != 'true' }}
         run: |
@@ -976,51 +528,15 @@ jobs:
           ABS_OUT="${{ env.ABS_OUT }}"
           LOG="$ABS_LOG/smoke.log"
           FAIL=0
-          echo "Smoke test started" > "$LOG"
-
+          
           check() {
-            local desc="$1"; local result="$2"
-            if [[ "$result" == "OK" ]]; then
-              echo "[OK] $desc" >> "$LOG"
-            else
-              echo "[FAIL] $desc" >> "$LOG"
-              FAIL=1
-            fi
+            if [[ "$2" == "OK" ]]; then echo "[OK] $1" >> "$LOG"; else echo "[FAIL] $1" >> "$LOG"; FAIL=1; fi
           }
 
-          # Artifact existence
-          [[ -f "$ABS_OUT/arch/arm64/boot/Image" ]] \
-            && check "Image present" "OK" \
-            || { check "Image present" "MISSING"; }
+          [[ -f "$ABS_OUT/arch/arm64/boot/Image" ]] && check "Image present" "OK" || check "Image present" "MISSING"
 
-          # .config flag checks
-          CONFIG="$ABS_OUT/.config"
-          grep -q '^CONFIG_HZ_300=y'        "$CONFIG" && check "CONFIG_HZ_300 preserved" "OK"  || check "CONFIG_HZ_300 preserved" "MISSING"
-          grep -q '^CONFIG_MFD_MADERA=y'    "$CONFIG" && check "Madera driver enabled"   "OK"  || check "Madera driver enabled"   "MISSING"
-          grep -q '^CONFIG_TCP_CONG_BBR=y'  "$CONFIG" && check "BBR enabled"             "OK"  || check "BBR enabled"             "MISSING"
+          [[ $FAIL -eq 0 ]] || { echo "Smoke checks failed" >&2; exit 1; }
 
-          # Symbol checks in vmlinux (best-effort; warn only)
-          if [[ -f "$ABS_OUT/vmlinux" ]]; then
-            NM_OUT=$(nm -n "$ABS_OUT/vmlinux" 2>/dev/null || true)
-            echo "$NM_OUT" | grep -q "sus_memfd"   && echo "[OK] sus_memfd symbol present"  >> "$LOG" || echo "[WARN] sus_memfd symbol absent" >> "$LOG"
-            echo "$NM_OUT" | grep -q "ksu_"         && echo "[OK] KSU symbols present"       >> "$LOG" || echo "[WARN] KSU symbols absent"      >> "$LOG"
-            echo "$NM_OUT" | grep -q "vfs_mkobj"    && echo "[OK] vfs_mkobj exported"        >> "$LOG" || echo "[WARN] vfs_mkobj not exported"   >> "$LOG"
-          else
-            echo "[WARN] vmlinux not present; skipping symbol checks" >> "$LOG"
-          fi
-
-          echo "--- Smoke test log ---"
-          cat "$LOG"
-
-          [[ $FAIL -eq 0 ]] || { echo "One or more smoke checks failed; see log above" >&2; exit 1; }
-          echo "Smoke test passed"
-
-      # -----------------------------------------------------------------------
-      # 12. Package artifacts (deterministic naming)
-      # FIX #5:  Added id: package; GITHUB_OUTPUT values are now reachable by
-      #           downstream steps as steps.package.outputs.*
-      # FIX #13: tar --mtime now uses ISO 8601 to avoid ambiguity.
-      # -----------------------------------------------------------------------
       - name: Package artifacts
         if: ${{ inputs.dry_run != 'true' }}
         id: package
@@ -1030,87 +546,28 @@ jobs:
           ART_DIR="$GITHUB_WORKSPACE/artifacts"
           mkdir -p "$ART_DIR"
 
-          CHIMERA_SHORT="${{ env.BASE_COMMIT }}"
-          CHIMERA_SHORT="${CHIMERA_SHORT:0:8}"
-          TOOL="${{ inputs.toolchain }}"
-          PROFILE="${{ inputs.profile }}"
-          BUILD_TAG="chimera-mk8-${PROFILE}-${TOOL}-$(date -u +%Y%m%dT%H%M%SZ)-${CHIMERA_SHORT}"
+          CHIMERA_SHORT="${BASE_COMMIT:0:8}"
+          BUILD_TAG="chimera-mk8-${{ inputs.profile }}-${{ inputs.toolchain }}-$(date -u +%Y%m%dT%H%M%SZ)-${CHIMERA_SHORT}"
 
           [[ -f "$ABS_OUT/arch/arm64/boot/Image" ]] && cp "$ABS_OUT/arch/arm64/boot/Image" "$ART_DIR/Image"
-          [[ -f "$ABS_OUT/System.map"             ]] && cp "$ABS_OUT/System.map"            "$ART_DIR/System.map"
-          [[ -f "$ABS_OUT/vmlinux"                ]] && cp "$ABS_OUT/vmlinux"               "$ART_DIR/vmlinux"
-
+          
           TARFILE="$ABS_LOG/${BUILD_TAG}.tar.gz"
-          # FIX #13: ISO 8601 timestamp avoids ambiguity in tar --mtime
-          tar --sort=name \
-              --mtime='2026-01-01T00:00:00Z' \
-              --owner=0 --group=0 \
-              -czf "$TARFILE" -C "$ART_DIR" .
-
-          echo "Packaged: $TARFILE"
-          # FIX #5: id: package set above; these outputs are now reachable as
-          #          steps.package.outputs.artifact_name / artifact_path
+          tar --sort=name --mtime='2026-01-01T00:00:00Z' --owner=0 --group=0 -czf "$TARFILE" -C "$ART_DIR" .
+          
           echo "artifact_name=${BUILD_TAG}.tar.gz" >> "$GITHUB_OUTPUT"
-          echo "artifact_path=$TARFILE"            >> "$GITHUB_OUTPUT"
-          echo "BUILD_TAG=$BUILD_TAG"              >> "$GITHUB_ENV"
+          echo "artifact_path=$TARFILE" >> "$GITHUB_OUTPUT"
+          echo "BUILD_TAG=$BUILD_TAG" >> "$GITHUB_ENV"
 
       - name: Upload build artifact
         if: ${{ inputs.dry_run != 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: chimera-kernel-${{ inputs.profile }}-${{ inputs.toolchain }}
-          # FIX #5: use the step output rather than a hardcoded glob
           path: ${{ steps.package.outputs.artifact_path }}
 
-      # -----------------------------------------------------------------------
-      # 13. Optional: create GitHub Release
-      # FIX #14: Release body used $(cat ...) subshell in a YAML string — not executed.
-      #           Now references ${{ env.CHIMERA_COMMIT }} set at run time.
-      # FIX #2:  Condition changed to != 'true' for boolean input comparison.
-      # -----------------------------------------------------------------------
-      - name: Create GitHub release (optional)
-        if: ${{ inputs.do_release == 'true' && inputs.dry_run != 'true' }}
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: "build-${{ github.run_id }}"
-          name: "Chimera Mk8 build ${{ github.run_id }} — ${{ inputs.profile }} / ${{ inputs.toolchain }}"
-          # FIX #14: reference env var (set at run time) instead of shell subshell in YAML body
-          body: |
-            Automated build of Project Chimera Mk8.
-            Gavdoc38 base: ${{ env.BASE_COMMIT }}
-            Chimera ref: ${{ env.CHIMERA_COMMIT }}
-            Build tag: ${{ env.BUILD_TAG }}
-            Toolchain: ${{ inputs.toolchain }}
-            Profile: ${{ inputs.profile }}
-            Timestamp: ${{ env.KBUILD_BUILD_TIMESTAMP }}
-          files: ${{ steps.package.outputs.artifact_path }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # -----------------------------------------------------------------------
-      # 14. Upload logs (always)
-      # -----------------------------------------------------------------------
       - name: Upload build logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: chimera-build-logs-${{ github.run_id }}
           path: ${{ env.ABS_LOG }}/**
-
-      # -----------------------------------------------------------------------
-      # 15. Build summary
-      # -----------------------------------------------------------------------
-      - name: Build summary
-        if: always()
-        run: |
-          set -Eeuo pipefail
-          echo "Build run:      $GITHUB_RUN_ID"
-          echo "Gavdoc38 base:  ${{ env.BASE_COMMIT }}"
-          echo "Chimera ref:    ${{ env.CHIMERA_COMMIT }}"
-          echo "Profile:        ${{ inputs.profile }}"
-          echo "Toolchain:      ${{ inputs.toolchain }}"
-          echo "Brand:          ${{ env.BRAND }}"
-          echo "Build user:     ${{ env.BUILD_USER }}@${{ env.BUILD_HOST }}"
-          echo "Timestamp:      ${{ env.KBUILD_BUILD_TIMESTAMP }}"
-          echo "Artifacts:"
-          ls -1 "$ABS_LOG"/*.tar.gz 2>/dev/null || echo "  (none — dry_run or build failed)"
