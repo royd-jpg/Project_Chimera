@@ -807,8 +807,8 @@ jobs:
         env:
           ARCH: arm64
           CROSS_COMPILE: "${{ env.TC_CROSS_COMPILE }}"
-          CROSS_COMPILE_ARM32: "${{ env.TC_CROSS_COMPILE_ARM32 }}"
-          HOSTCC: "${{ env.TC_HOSTCC }}"
+          # CROSS_COMPILE_ARM32: "${{ env.TC_CROSS_COMPILE_ARM32 }}"
+          # HOSTCC: "${{ env.TC_HOSTCC }}"
           LLVM_IAS: "${{ env.TC_LLVM_IAS }}"
           KBUILD_BUILD_USER: "${{ env.BUILD_USER }}"
           KBUILD_BUILD_HOST: "${{ env.BUILD_HOST }}"
@@ -825,6 +825,11 @@ jobs:
 
           # FIX #16: prepend toolchain bin/ so llvm-ar, llvm-nm, llvm-objcopy etc are found
           export PATH="$ABS_TC/bin:$PATH"
+          
+          export HOSTCC=clang
+          export CROSS_COMPILE=
+          export CROSS_COMPILE_ARM32=
+          export CC="ccache $ABS_TC/bin/clang"
 
           # Explicit LLVM tool variables for Linux 4.9 BSP (no LLVM=1 support in 4.9 Make)
           LLVM_TOOLS=(
