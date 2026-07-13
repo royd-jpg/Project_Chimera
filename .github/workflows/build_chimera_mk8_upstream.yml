@@ -1,14 +1,3 @@
-# Project Chimera Mk8 — Unified end-to-end kernel build workflow
-# Produces a deterministic kernel build for Exynos9810 (star2lte) from chimera-mk8.
-# Preserves Chimera-specific DTS, scheduler, defconfig flags, and driver enables.
-# Selectively imports upstream-inspired SUSFS/KSU inputs only as build-time sources;
-# never merges or rewrites Chimera git history.
-#
-# Modernization Updates:
-#  - Removed legacy LLVM_TOOLS array; migrated to native LLVM=1 LLVM_IAS=1
-#  - Implemented CLANG_TRIPLE=aarch64-linux-gnu- for Lineage AOSP compatibility
-#  - Retained low-latency -O2 optimizations natively in KCFLAGS
-
 name: Project Chimera Mk8 Unified — Build
 
 permissions:
@@ -78,7 +67,7 @@ on:
         description: "KBUILD_BUILD_USER"
         required: false
         type: string
-        default: "_Terminal_Echo"
+        default: "C43L4N"
       build_host:
         description: "KBUILD_BUILD_HOST"
         required: false
@@ -109,6 +98,10 @@ env:
   BUILD_HOST_DEFAULT: "AegisDevLabs"
   BUILD_VERSION_DEFAULT: "1"
   KBUILD_BUILD_TIMESTAMP_DEFAULT: "Mon 1 Jan 00:00:00 UTC 2026"
+  # Exposed for the branding and identity scripts to read globally
+  PROFILE: ${{ inputs.profile }}
+  TOOLCHAIN: ${{ inputs.toolchain }}
+  IDENTITY_ENGINE_ACTIVE: ${{ inputs.profile == 'cm8e' }}
 
 jobs:
   build:
@@ -272,7 +265,6 @@ jobs:
           LOG="$ABS_LOG/overlay.log"
           echo "Chimera overlay started at $(date -u)" > "$LOG"
 
-          # Defconfig fragment
           cat > /tmp/chimera.config << 'DEFCFG'
           CONFIG_MFD_MADERA=y
           CONFIG_MFD_MADERA_SPI=y
@@ -297,7 +289,6 @@ jobs:
           make O="$ABS_OUT" ARCH=arm64 "$(basename "$DEFCONFIG")" >> "$LOG" 2>&1
           scripts/kconfig/merge_config.sh -m -O "$ABS_OUT" "$ABS_OUT/.config" /tmp/chimera.config >> "$LOG" 2>&1
 
-          # Scheduler tuning
           FAIR="kernel/sched/fair.c"
           if grep -q '750000ULL' "$FAIR"; then
             sed -i 's/\(normalized_sysctl_sched_min_granularity\s*=\s*\)750000ULL/\15000000ULL/' "$FAIR"
@@ -306,7 +297,6 @@ jobs:
             sed -i 's/\(sysctl_sched_migration_cost\s*=\s*\)500000UL/\12000000UL/' "$FAIR"
           fi
 
-          # UFC short-circuit
           python3 - << 'PYEOF'
           import re
           with open('drivers/cpufreq/exynos-ufc.c') as f:
@@ -319,7 +309,6 @@ jobs:
                   f.write(new_src)
           PYEOF
 
-          # proc/base.c SUS_MAP protection
           if ! grep -q 'CONFIG_KSU_SUSFS_SUS_MAP' fs/proc/base.c; then
             python3 - << 'PYEOF'
           import re
@@ -338,7 +327,6 @@ jobs:
           PYEOF
           fi
 
-          # fs/namei.c sus_path second check
           if ! grep -q 'Chimera: sus_path second check' fs/namei.c; then
             python3 - << 'PYEOF'
           import re
@@ -356,6 +344,438 @@ jobs:
               f.write(src)
           PYEOF
           fi
+
+      # ── 5. Profile & Identity Injection: shared FORTe defconfig baseline ──────
+      - name: Apply defconfig tuning (FORTe Mode — shared baseline)
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          test -f "$DEFCONFIG" || { echo "ERROR: $DEFCONFIG not found"; exit 1; }
+          LOG="../$LOG_DIR/defconfig-forte.log"
+          : > "$LOG"
+
+          set_cfg() {
+            local k="$1"; local v="$2"
+            sed -i "/^${k}=.*/d;/^# ${k} is not set/d" "$DEFCONFIG"
+            echo "${k}=${v}" >> "$DEFCONFIG"
+          }
+          unset_cfg() {
+            local k="$1"
+            sed -i "/^${k}=.*/d;/^# ${k} is not set/d" "$DEFCONFIG"
+            echo "# ${k} is not set" >> "$DEFCONFIG"
+          }
+          probe_kconfig() {
+            grep -qE "^[[:space:]]*config[[:space:]]+${1#CONFIG_}[[:space:]]*$" \
+              KernelSU-Next/kernel/Kconfig 2>/dev/null
+          }
+
+          echo "=== FORTe Mode: shared baseline start [$PROFILE] ===" | tee -a "$LOG"
+
+          set_cfg CONFIG_PREEMPT y
+          unset_cfg CONFIG_PREEMPT_NONE
+          unset_cfg CONFIG_PREEMPT_VOLUNTARY
+          unset_cfg CONFIG_HZ_100
+          unset_cfg CONFIG_HZ_250
+          set_cfg CONFIG_HZ_300 y
+          set_cfg CONFIG_HZ 300
+
+          set_cfg CONFIG_TCP_CONG_ADVANCED y
+          set_cfg CONFIG_TCP_CONG_BBR y
+          set_cfg CONFIG_TCP_CONG_CUBIC y
+          sed -i '/CONFIG_DEFAULT_TCP_CONG/d' "$DEFCONFIG"
+          echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> "$DEFCONFIG"
+
+          set_cfg CONFIG_SCHED_DEBUG y
+          set_cfg CONFIG_ZRAM y
+          set_cfg CONFIG_ZSMALLOC y
+          set_cfg CONFIG_CRYPTO_LZ4 y
+          set_cfg CONFIG_CRYPTO_LZ4HC y
+
+          set_cfg CONFIG_PRINTK y
+          set_cfg CONFIG_PRINTK_SAFE_LOG_BUF y
+          set_cfg CONFIG_CONSOLE_LOGLEVEL_DEFAULT 3
+          set_cfg CONFIG_MESSAGE_LOGLEVEL_DEFAULT 3
+          set_cfg CONFIG_DEFAULT_MESSAGE_LOGLEVEL 3
+          unset_cfg CONFIG_PRINTK_TIME
+          unset_cfg CONFIG_PRINTK_CALLER
+          unset_cfg CONFIG_DYNAMIC_DEBUG
+          unset_cfg CONFIG_DYNAMIC_DEBUG_CORE
+          unset_cfg CONFIG_DEBUG_FS
+          set_cfg CONFIG_LOG_BUF_SHIFT 18
+
+          unset_cfg CONFIG_CC_STACKPROTECTOR_STRONG
+          unset_cfg CONFIG_CC_STACKPROTECTOR_REGULAR
+          set_cfg CONFIG_CC_STACKPROTECTOR_NONE y
+          unset_cfg CONFIG_LOCALVERSION_AUTO
+
+          set_cfg CONFIG_BPF_SYSCALL y
+          set_cfg CONFIG_CGROUP_BPF y
+          set_cfg CONFIG_NET_CLS_BPF y
+          set_cfg CONFIG_FUSE_FS y
+          set_cfg CONFIG_OVERLAY_FS y
+          set_cfg CONFIG_ANDROID_BINDER_IPC y
+          set_cfg CONFIG_ANDROID_BINDERFS y
+          sed -i '/CONFIG_ANDROID_BINDER_DEVICES/d' "$DEFCONFIG"
+          echo 'CONFIG_ANDROID_BINDER_DEVICES="binder,hwbinder,vndbinder"' >> "$DEFCONFIG"
+          unset_cfg CONFIG_ANDROID_BINDER_IPC_SELFTEST
+          set_cfg CONFIG_MEMCG y
+          set_cfg CONFIG_MEMCG_SWAP y
+          set_cfg CONFIG_PSI y
+          set_cfg CONFIG_CGROUPS y
+          set_cfg CONFIG_CGROUP_SCHED y
+          set_cfg CONFIG_FAIR_GROUP_SCHED y
+          set_cfg CONFIG_RT_GROUP_SCHED y
+          set_cfg CONFIG_NET_CLS_CGROUP y
+          set_cfg CONFIG_NETFILTER_XT_MATCH_CGROUP y
+          set_cfg CONFIG_VETH y
+          set_cfg CONFIG_IKCONFIG y
+          set_cfg CONFIG_IKCONFIG_PROC y
+          set_cfg CONFIG_PROC_EVENTS y
+
+          set_cfg CONFIG_SECURITY_SELINUX_DEVELOP y
+          set_cfg CONFIG_SECURITY_SELINUX_BOOTPARAM y
+
+          set_cfg CONFIG_KSU_SUSFS y
+          set_cfg CONFIG_KSU_SUSFS_TRY_UMOUNT y
+          unset_cfg CONFIG_KSU_SUSFS_SUS_MEMFD
+
+          if probe_kconfig CONFIG_KSU_SUSFS_SUS_MAP; then
+            set_cfg CONFIG_KSU_SUSFS_SUS_MAP y
+          else
+            echo "SKIP: SUS_MAP not present in tree" | tee -a "$LOG"
+          fi
+          if probe_kconfig CONFIG_KSU_SUSFS_HIDE_MAGISK_EVIL; then
+            set_cfg CONFIG_KSU_SUSFS_HIDE_MAGISK_EVIL y
+          else
+            echo "SKIP: HIDE_MAGISK_EVIL not present" | tee -a "$LOG"
+          fi
+          if grep -qr 'config LRU_GEN' mm/ 2>/dev/null; then
+            set_cfg CONFIG_LRU_GEN y
+            set_cfg CONFIG_LRU_GEN_ENABLED y
+            set_cfg CONFIG_LRU_GEN_STATS y
+            echo "INFO: MGLRU enabled" | tee -a "$LOG"
+          fi
+
+          echo "=== FORTe Mode: shared baseline complete ===" | tee -a "$LOG"
+          grep -E \
+            "^(CONFIG_KSU|CONFIG_KSU_SUSFS|CONFIG_PREEMPT|CONFIG_HZ|CONFIG_TCP_CONG|CONFIG_BPF|CONFIG_CGROUP|CONFIG_BINDER|CONFIG_MEMCG|CONFIG_PSI|CONFIG_NET_CLS|CONFIG_FUSE|CONFIG_OVERLAY)" \
+            "$DEFCONFIG" | tee -a "$LOG"
+
+      # ── 5b. Profile & Identity Injection: profile-specific policy branch ──────
+      - name: Apply profile policy — SUSFS spoof (cm8) or hard-disable + Identity Engine (cm8e)
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          LOG="../$LOG_DIR/profile-policy.log"
+          : > "$LOG"
+
+          set_cfg() {
+            local k="$1"; local v="$2"
+            sed -i "/^${k}=.*/d;/^# ${k} is not set/d" "$DEFCONFIG"
+            echo "${k}=${v}" >> "$DEFCONFIG"
+          }
+          unset_cfg() {
+            local k="$1"
+            sed -i "/^${k}=.*/d;/^# ${k} is not set/d" "$DEFCONFIG"
+            echo "# ${k} is not set" >> "$DEFCONFIG"
+          }
+          probe_kconfig() {
+            grep -qE "^[[:space:]]*config[[:space:]]+${1#CONFIG_}[[:space:]]*$" \
+              KernelSU-Next/kernel/Kconfig 2>/dev/null
+          }
+
+          echo "=== Profile policy: $PROFILE ===" | tee -a "$LOG"
+
+          if [[ "$PROFILE" == "cm8" ]]; then
+            echo "--- cm8: enabling runtime SUSFS spoofing (probe-gated) ---" | tee -a "$LOG"
+
+            if probe_kconfig CONFIG_KSU_SUSFS_SPOOF_UNAME; then
+              set_cfg CONFIG_KSU_SUSFS_SPOOF_UNAME y
+              echo "ENABLED: CONFIG_KSU_SUSFS_SPOOF_UNAME" | tee -a "$LOG"
+            else
+              echo "SKIP: SPOOF_UNAME not present in tree" | tee -a "$LOG"
+            fi
+
+            if probe_kconfig CONFIG_KSU_SUSFS_SPOOF_SELINUX; then
+              set_cfg CONFIG_KSU_SUSFS_SPOOF_SELINUX y
+              echo "ENABLED: CONFIG_KSU_SUSFS_SPOOF_SELINUX" | tee -a "$LOG"
+            else
+              echo "SKIP: SPOOF_SELINUX not present in tree" | tee -a "$LOG"
+            fi
+
+            if probe_kconfig CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOF; then
+              set_cfg CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOF y
+              echo "ENABLED: CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOF" | tee -a "$LOG"
+            else
+              echo "SKIP: ENABLE_AVC_LOG_SPOOF not present in tree" | tee -a "$LOG"
+            fi
+
+            echo "PROFILE_SPOOF_STATE=enabled" >> "$GITHUB_ENV"
+            echo "IDENTITY_ENGINE_ACTIVE=false" >> "$GITHUB_ENV"
+
+          elif [[ "$PROFILE" == "cm8e" ]]; then
+            echo "--- cm8e: hard-disabling all SUSFS spoof symbols ---" | tee -a "$LOG"
+
+            unset_cfg CONFIG_KSU_SUSFS_SPOOF_UNAME
+            unset_cfg CONFIG_KSU_SUSFS_SPOOF_SELINUX
+            unset_cfg CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOF
+            unset_cfg CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOFING
+            unset_cfg CONFIG_KSU_SUSFS_AVC_LOG_SPOOF
+
+            SPOOF_FAIL=0
+            for sym in \
+              CONFIG_KSU_SUSFS_SPOOF_UNAME \
+              CONFIG_KSU_SUSFS_SPOOF_SELINUX \
+              CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOF \
+              CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOFING \
+              CONFIG_KSU_SUSFS_AVC_LOG_SPOOF; do
+              if grep -qE "^${sym}=y" "$DEFCONFIG"; then
+                echo "FATAL: ${sym} still set=y after hard-disable — aborting" | tee -a "$LOG"
+                SPOOF_FAIL=1
+              else
+                echo "VERIFIED not set: ${sym}" | tee -a "$LOG"
+              fi
+            done
+            [[ "$SPOOF_FAIL" -eq 0 ]] \
+              || { echo "ERROR: cm8e spoof hard-disable verification failed"; exit 1; }
+
+            echo "PROFILE_SPOOF_STATE=hard-disabled" >> "$GITHUB_ENV"
+            echo "IDENTITY_ENGINE_ACTIVE=true"        >> "$GITHUB_ENV"
+          fi
+
+          echo "=== Profile policy applied: $PROFILE ===" | tee -a "$LOG"
+
+      # ── 5c. Compile-Time ROM Identity Engine (cm8e only) ───────────────────────
+      - name: Compile-Time ROM Identity Engine (cm8e)
+        if: ${{ env.IDENTITY_ENGINE_ACTIVE == 'true' }}
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          MKC="scripts/mkcompile_h"
+          test -f "$MKC" || { echo "ERROR: $MKC not found — cannot patch identity engine"; exit 1; }
+          cp "$MKC" "../$LOG_DIR/mkcompile_h.orig"
+
+          printf '%s\n' \
+            'import re' \
+            'from pathlib import Path' \
+            'import os' \
+            '' \
+            'path = Path("scripts/mkcompile_h")' \
+            'content = path.read_text()' \
+            'MARKER = "CHIMERA_MK8E_IDENTITY_ENGINE"' \
+            'if MARKER in content:' \
+            '    print("OK: identity engine already patched (idempotent)")' \
+            '    raise SystemExit(0)' \
+            '' \
+            'build_user = os.environ["BUILD_USER"]' \
+            'build_host = os.environ["BUILD_HOST"]' \
+            'build_version = os.environ["BUILD_VERSION"]' \
+            'build_date = os.environ["KBUILD_BUILD_TIMESTAMP"]' \
+            '' \
+            'def esc(s):' \
+            '    return s.replace("\\\\", "\\\\\\\\").replace(\'"\', \'\\\\"\')' \
+            '' \
+            'override_block = f\'\'\'' \
+            '# {MARKER} — unconditional compile-time identity override.' \
+            'LINUX_COMPILE_BY="{esc(build_user)}"' \
+            'LINUX_COMPILE_HOST="{esc(build_host)}"' \
+            'LINUX_COMPILE_TIME="{esc(build_date)}"' \
+            'CHIMERA_UTS_VERSION_OVERRIDE="#{esc(build_version)} SMP PREEMPT {esc(build_date)}"' \
+            '\'\'\'' \
+            '' \
+            'lines = content.splitlines(keepends=True)' \
+            'insert_at = 1' \
+            'for i, l in enumerate(lines[:5]):' \
+            '    if l.startswith("#!"):' \
+            '        insert_at = i + 1' \
+            'patched = "".join(lines[:insert_at]) + override_block + "".join(lines[insert_at:])' \
+            '' \
+            'patched = re.sub(' \
+            '    r"UTS_VERSION=.*",' \
+            '    "UTS_VERSION=\\"$CHIMERA_UTS_VERSION_OVERRIDE\\"",' \
+            '    patched' \
+            ')' \
+            '' \
+            'path.write_text(patched)' \
+            'print("OK: scripts/mkcompile_h patched with static identity override")' \
+            > /tmp/patch_mkcompile_h.py
+          python3 /tmp/patch_mkcompile_h.py
+
+          echo "=== Patched mkcompile_h diff ===" | tee "../$LOG_DIR/identity-engine.log"
+          diff -u "../$LOG_DIR/mkcompile_h.orig" "$MKC" | tee -a "../$LOG_DIR/identity-engine.log" || true
+
+          sh -n "$MKC" || { echo "ERROR: patched mkcompile_h failed syntax check"; exit 1; }
+          echo "OK: patched mkcompile_h passes shell syntax check" | tee -a "../$LOG_DIR/identity-engine.log"
+
+          {
+            echo "IDENTITY_ENGINE=applied"
+            echo "IDENTITY_BUILD_USER=$BUILD_USER"
+            echo "IDENTITY_BUILD_HOST=$BUILD_HOST"
+            echo "IDENTITY_BUILD_VERSION=$BUILD_VERSION"
+            echo "IDENTITY_BUILD_DATE=$KBUILD_BUILD_TIMESTAMP"
+          } | tee -a "../$LOG_DIR/identity-engine.log"
+
+      # ── 6. Chimera Silent Engine ───────────────────────────────────────────────
+      - name: Apply Chimera Silent Engine (Runtime Policy Layer — all profiles)
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          mkdir -p kernel/chimera
+          cat > kernel/chimera/silent_core.c << 'EOF'
+          #include <linux/kernel.h>
+          #include <linux/sysctl.h>
+          #include <linux/init.h>
+          #include <linux/printk.h>
+
+          /*
+           * Chimera Mk8 Unified Silent Engine
+           * WARN+ERROR only gate (non-invasive policy layer)
+           * Injected regardless of build profile (cm8 / cm8e).
+           */
+
+          int chimera_silent_mode = 1;
+
+          static int __maybe_unused chimera_should_silence(int level)
+          {
+              if (!chimera_silent_mode)
+                  return 0;
+              return level > 4;
+          }
+
+          static struct ctl_table chimera_table[] = {
+              {
+                  .procname     = "silent",
+                  .data         = &chimera_silent_mode,
+                  .maxlen       = sizeof(int),
+                  .mode         = 0644,
+                  .proc_handler = proc_dointvec,
+              },
+              { }
+          };
+
+          static struct ctl_table chimera_root[] = {
+              {
+                  .procname = "chimera",
+                  .mode     = 0555,
+                  .child    = chimera_table,
+              },
+              { }
+          };
+
+          static int __init chimera_init(void)
+          {
+              register_sysctl_table(chimera_root);
+              pr_info("Chimera Mk8 Unified Silent Engine initialized (mode=%d)\n",
+                      chimera_silent_mode);
+              return 0;
+          }
+
+          subsys_initcall(chimera_init);
+          EOF
+
+          grep -q "chimera/silent_core.o" kernel/Makefile || \
+            echo "obj-y += chimera/silent_core.o" >> kernel/Makefile
+          echo "Chimera Silent Engine injected successfully (profile=$PROFILE)"
+
+      # ── 7. Samsung-stock-style branding ────────────────────────────────────────
+      - name: Apply Samsung-stock-style branding
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          sed -i '/^CONFIG_LOCALVERSION=/d;/^CONFIG_DEFAULT_HOSTNAME=/d' "$DEFCONFIG"
+          printf 'CONFIG_LOCALVERSION="%s"\nCONFIG_DEFAULT_HOSTNAME="%s"\n' "$BRAND" "$BUILD_HOST" >> "$DEFCONFIG"
+          printf '#!/bin/sh\nprintf "%%s" "%s"\n' "$BRAND" > scripts/setlocalversion
+          chmod +x scripts/setlocalversion
+          echo "$BRAND" > localversion
+          echo "CHIMERA_BRAND=$BRAND"          >> "$GITHUB_ENV"
+          echo "KBUILD_HOST=$BUILD_HOST"       >> "$GITHUB_ENV"
+          echo "KBUILD_USER=$BUILD_USER"       >> "$GITHUB_ENV"
+          echo "KBUILD_VERSION=$BUILD_VERSION" >> "$GITHUB_ENV"
+          {
+            echo "BRAND=$BRAND"
+            echo "BUILD_USER=$BUILD_USER"
+            echo "BUILD_HOST=$BUILD_HOST"
+            echo "BUILD_VERSION=$BUILD_VERSION"
+            echo "PROFILE=$PROFILE"
+            echo "TOOLCHAIN=$TOOLCHAIN"
+            echo "RUN=${GITHUB_RUN_NUMBER}"
+            echo "UNAME_PREVIEW=Linux version 4.9.337${BRAND} (${BUILD_USER}@${BUILD_HOST}) #${BUILD_VERSION} SMP PREEMPT"
+          } | tee "../$LOG_DIR/branding.env"
+          echo "=== setlocalversion ===" | tee "../$LOG_DIR/scm-dirty.log"
+          cat scripts/setlocalversion | tee -a "../$LOG_DIR/scm-dirty.log"
+          echo "uname preview: Linux version 4.9.337${BRAND} (${BUILD_USER}@${BUILD_HOST}) #${BUILD_VERSION} SMP PREEMPT"
+
+      # ── 8. Pre-build sanity check (profile-aware) ──────────────────────────────
+      - name: SUSFS + profile pre-build sanity check
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          LOG="../$LOG_DIR/susfs-sanity.log"
+          echo "=== Pre-build sanity — Chimera Mk8 Unified [$PROFILE / $TOOLCHAIN] ===" | tee "$LOG"
+          FAIL=0
+          for f in fs/susfs.c fs/sus_su.c include/linux/susfs.h include/linux/susfs_def.h include/linux/sus_su.h; do
+            [[ -f "$f" ]] \
+              && echo "OK: $f ($(wc -l < "$f") lines)" | tee -a "$LOG" \
+              || { echo "FAIL: $f MISSING" | tee -a "$LOG"; FAIL=1; }
+          done
+          VER="$(grep -oP 'SUSFS_VERSION\s+"\K[^"]+' include/linux/susfs.h 2>/dev/null || echo unknown)"
+          echo "SUSFS_VERSION_IN_TREE=$VER (target: $SUSFS_TARGET_VERSION)" | tee -a "$LOG"
+
+          if grep -q 'CHIMERA_MK8_UNIFIED_SUSFS_PRCTL_BRIDGE' kernel/sys.c 2>/dev/null; then
+            echo "OK: prctl bridge present in kernel/sys.c" | tee -a "$LOG"
+          else
+            echo "WARN: prctl bridge not found in kernel/sys.c" | tee -a "$LOG"
+          fi
+
+          echo "=== Profile-specific spoof verification [$PROFILE] ===" | tee -a "$LOG"
+          if [[ "$PROFILE" == "cm8" ]]; then
+            for sym in CONFIG_KSU_SUSFS_SPOOF_UNAME CONFIG_KSU_SUSFS_SPOOF_SELINUX CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOF; do
+              result="$(grep -E "(^${sym}=|^# ${sym} is not set)" "$DEFCONFIG" || true)"
+              if [[ -z "$result" ]]; then
+                echo "  INFO: ${sym} absent from tree (symbol not defined in this SUSFS source)" | tee -a "$LOG"
+              else
+                echo "  $result" | tee -a "$LOG"
+              fi
+            done
+          else
+            SPOOF_FAIL=0
+            for sym in \
+              CONFIG_KSU_SUSFS_SPOOF_UNAME \
+              CONFIG_KSU_SUSFS_SPOOF_SELINUX \
+              CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOF \
+              CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOFING \
+              CONFIG_KSU_SUSFS_AVC_LOG_SPOOF; do
+              if grep -qE "^${sym}=y" "$DEFCONFIG"; then
+                echo "FATAL [cm8e]: ${sym}=y still present — this WILL leak spoof behavior" | tee -a "$LOG"
+                SPOOF_FAIL=1
+              else
+                echo "OK [cm8e]: ${sym} confirmed not set" | tee -a "$LOG"
+              fi
+            done
+            [[ "$SPOOF_FAIL" -eq 0 ]] \
+              || { echo "ERROR: cm8e spoof sanity failed — aborting build"; exit 1; }
+
+            if grep -q 'CHIMERA_MK8E_IDENTITY_ENGINE' scripts/mkcompile_h 2>/dev/null; then
+              echo "OK [cm8e]: Compile-Time ROM Identity Engine patch present in mkcompile_h" | tee -a "$LOG"
+            else
+              echo "ERROR [cm8e]: Identity Engine marker missing from mkcompile_h — aborting" | tee -a "$LOG"
+              FAIL=1
+            fi
+          fi
+
+          if grep -q "^# CONFIG_SECURITY_SELINUX_DEVELOP is not set" "$DEFCONFIG"; then
+            echo "OK: SELinux DEVELOP unset — enforcing locked" | tee -a "$LOG"
+          else
+            echo "WARN: CONFIG_SECURITY_SELINUX_DEVELOP may still be set" | tee -a "$LOG"
+          fi
+
+          MK="$(cat fs/Makefile)"
+          [[ "$MK" == *"susfs.o"* ]]  && echo "OK: fs/Makefile has susfs.o"  | tee -a "$LOG" || { echo "FAIL: fs/Makefile missing susfs.o"  | tee -a "$LOG"; FAIL=1; }
+          [[ "$MK" == *"sus_su.o"* ]] && echo "OK: fs/Makefile has sus_su.o" | tee -a "$LOG" || { echo "FAIL: fs/Makefile missing sus_su.o" | tee -a "$LOG"; FAIL=1; }
+
+          echo "uname preview: Linux version 4.9.337${BRAND} (${KBUILD_USER}@${KBUILD_HOST}) #${KBUILD_VERSION} SMP PREEMPT" | tee -a "$LOG"
+          [[ "$FAIL" -eq 0 ]] || { echo "ERROR: sanity check failed"; exit 1; }
+          echo "=== Sanity check PASSED [$PROFILE / $TOOLCHAIN] ===" | tee -a "$LOG"
 
       - name: Resolve toolchain configuration
         id: tc-resolve
@@ -473,7 +893,6 @@ jobs:
           set -Eeuo pipefail
           ABS_OUT="${{ env.ABS_OUT }}"
           
-          # Injecting LLVM=1 to olddefconfig directly natively
           make O="$ABS_OUT" ARCH=arm64 LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- olddefconfig
 
           if [[ "${{ inputs.profile }}" == "cm8e" ]]; then
