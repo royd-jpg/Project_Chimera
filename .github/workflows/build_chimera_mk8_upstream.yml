@@ -502,6 +502,15 @@ jobs:
           ABS_OUT="${{ env.ABS_OUT }}"
           ABS_TC="${{ env.ABS_TC }}"
           
+          # Put LLVM name tags on the tools to trick legacy 4.9 Makefiles
+          for tool in ar nm objcopy objdump strip; do
+            ln -sf "$ABS_TC/bin/llvm-$tool" "$ABS_TC/bin/aarch64-linux-gnu-$tool"
+            ln -sf "$ABS_TC/bin/llvm-$tool" "$ABS_TC/bin/arm-linux-gnueabi-$tool"
+          done
+          ln -sf "$ABS_TC/bin/ld.lld" "$ABS_TC/bin/aarch64-linux-gnu-ld"
+          ln -sf "$ABS_TC/bin/ld.lld" "$ABS_TC/bin/arm-linux-gnueabi-ld"
+          ln -sf "$ABS_TC/bin/ld.lld" "$ABS_TC/bin/ld"
+
           # Prepend toolchain to strictly enforce clang visibility
           export PATH="$ABS_TC/bin:$PATH"
 
