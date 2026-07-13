@@ -753,6 +753,16 @@ jobs:
           # make target must be the bare filename only, not the full relative path.
           # Use the full path only for the -f existence check above.
           DEFCONFIG_TARGET="$(basename "$DEFCONFIG")"
+          
+          export PATH="$GITHUB_WORKSPACE/toolchains/clang/bin:$PATH"
+          export CC=clang
+          export HOSTCC=clang
+          export LLVM=1
+          export CROSS_COMPILE="${TC_CROSS_COMPILE}"
+          export CROSS_COMPILE_ARM32="${TC_CROSS_COMPILE_ARM32}"
+          
+          echo "CC=$CC HOSTCC=$HOSTCC LLVM=$LLVM CROSS_COMPILE=$CROSS_COMPILE"
+          
           make O="$ABS_OUT" ARCH=arm64 "$DEFCONFIG_TARGET"
 
           CONFIG="$ABS_OUT/.config"
