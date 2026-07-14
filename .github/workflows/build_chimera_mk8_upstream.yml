@@ -98,7 +98,6 @@ env:
   BUILD_HOST_DEFAULT: "AegisDevLabs"
   BUILD_VERSION_DEFAULT: "1"
   KBUILD_BUILD_TIMESTAMP_DEFAULT: "Mon 1 Jan 00:00:00 UTC 2026"
-  # Exposed for the branding and identity scripts to read globally
   PROFILE: ${{ inputs.profile }}
   TOOLCHAIN: ${{ inputs.toolchain }}
   IDENTITY_ENGINE_ACTIVE: ${{ inputs.profile == 'cm8e' }}
@@ -152,13 +151,11 @@ jobs:
           BUILD_VER="${BUILD_VER:-$BUILD_VERSION_DEFAULT}"
           BUILD_TS="${{ inputs.build_date }}"
           BUILD_TS="${BUILD_TS:-$KBUILD_BUILD_TIMESTAMP_DEFAULT}"
-
           echo "BRAND=$BRAND"                         >> "$GITHUB_ENV"
           echo "BUILD_USER=$BUILD_USER"               >> "$GITHUB_ENV"
           echo "BUILD_HOST=$BUILD_HOST"               >> "$GITHUB_ENV"
           echo "BUILD_VERSION=$BUILD_VER"             >> "$GITHUB_ENV"
           echo "KBUILD_BUILD_TIMESTAMP=$BUILD_TS"     >> "$GITHUB_ENV"
-
           echo "profile=${{ inputs.profile }}"        >> "$ABS_LOG/inputs.env"
           echo "toolchain=${{ inputs.toolchain }}"    >> "$ABS_LOG/inputs.env"
           echo "brand=$BRAND"                         >> "$ABS_LOG/inputs.env"
@@ -215,18 +212,15 @@ jobs:
           KSU_REPO="${{ inputs.ksu_repo }}"
           KSU_COMMIT="${{ inputs.ksu_commit }}"
           KSU_SUB="KernelSU-Next"
-
           if [[ -n "$KSU_REPO" ]]; then
             git config "submodule.$KSU_SUB.url" "$KSU_REPO"
           fi
-
           git submodule init "$KSU_SUB"
           git submodule update --depth=1 "$KSU_SUB" || {
             git -C "$KSU_SUB" fetch --no-tags --depth=1 origin "$KSU_COMMIT" || \
             git -C "$KSU_SUB" fetch --no-tags --depth=100 origin "$KSU_COMMIT"
             git -C "$KSU_SUB" checkout --detach "$KSU_COMMIT"
           }
-
           ACTUAL_KSU=$(git -C "$KSU_SUB" rev-parse HEAD)
           echo "KSU-Next: $ACTUAL_KSU" > "$ABS_LOG/ksu-commit.txt"
           KSU_GIT_VERSION=$(git -C "$KSU_SUB" rev-parse --short HEAD)
@@ -239,19 +233,16 @@ jobs:
           SUSFS_REPO="${{ inputs.susfs_repo }}"
           SUSFS_REF="${{ inputs.susfs_ref }}"
           SUSFS_DIR="external/susfs"
-
           if [[ -z "$SUSFS_REPO" ]]; then
             echo "No SUSFS repo provided; skipping"
             exit 0
           fi
-
           mkdir -p "$SUSFS_DIR"
           git -C "$SUSFS_DIR" init
           git -C "$SUSFS_DIR" remote add origin "$SUSFS_REPO"
           git -C "$SUSFS_DIR" fetch --no-tags --depth=1 origin "$SUSFS_REF" || \
             git -C "$SUSFS_DIR" fetch --no-tags --depth=100 origin "$SUSFS_REF"
           git -C "$SUSFS_DIR" checkout --detach FETCH_HEAD
-
           SUSFS_PIN="${{ inputs.susfs_commit }}"
           if [[ -n "$SUSFS_PIN" ]]; then
             git -C "$SUSFS_DIR" fetch --no-tags --depth=1 origin "$SUSFS_PIN" || true
@@ -264,7 +255,6 @@ jobs:
           set -Eeuo pipefail
           LOG="$ABS_LOG/overlay.log"
           echo "Chimera overlay started at $(date -u)" > "$LOG"
-
           cat > /tmp/chimera.config << 'DEFCFG'
           CONFIG_MFD_MADERA=y
           CONFIG_MFD_MADERA_SPI=y
@@ -285,10 +275,8 @@ jobs:
           CONFIG_CRC32_ARMV8_CRC=y
           CONFIG_NET_ACT_BPF=y
           DEFCFG
-
           make O="$ABS_OUT" ARCH=arm64 "$(basename "$DEFCONFIG")" >> "$LOG" 2>&1
           scripts/kconfig/merge_config.sh -m -O "$ABS_OUT" "$ABS_OUT/.config" /tmp/chimera.config >> "$LOG" 2>&1
-
           FAIR="kernel/sched/fair.c"
           if grep -q '750000ULL' "$FAIR"; then
             sed -i 's/\(normalized_sysctl_sched_min_granularity\s*=\s*\)750000ULL/\15000000ULL/' "$FAIR"
@@ -296,7 +284,6 @@ jobs:
           if grep -q '500000UL;' "$FAIR"; then
             sed -i 's/\(sysctl_sched_migration_cost\s*=\s*\)500000UL/\12000000UL/' "$FAIR"
           fi
-
           python3 - << 'PYEOF'
           import re
           with open('drivers/cpufreq/exynos-ufc.c') as f:
@@ -308,7 +295,6 @@ jobs:
               with open('drivers/cpufreq/exynos-ufc.c', 'w') as f:
                   f.write(new_src)
           PYEOF
-
           if ! grep -q 'CONFIG_KSU_SUSFS_SUS_MAP' fs/proc/base.c; then
             python3 - << 'PYEOF'
           import re
@@ -326,7 +312,6 @@ jobs:
               f.write(src)
           PYEOF
           fi
-
           if ! grep -q 'Chimera: sus_path second check' fs/namei.c; then
             python3 - << 'PYEOF'
           import re
@@ -345,7 +330,6 @@ jobs:
           PYEOF
           fi
 
-      # ── 5. Profile & Identity Injection: shared FORTe defconfig baseline ──────
       - name: Apply defconfig tuning (FORTe Mode — shared baseline)
         working-directory: kernel
         run: |
@@ -353,7 +337,6 @@ jobs:
           test -f "$DEFCONFIG" || { echo "ERROR: $DEFCONFIG not found"; exit 1; }
           LOG="../$LOG_DIR/defconfig-forte.log"
           : > "$LOG"
-
           set_cfg() {
             local k="$1"; local v="$2"
             sed -i "/^${k}=.*/d;/^# ${k} is not set/d" "$DEFCONFIG"
@@ -368,9 +351,7 @@ jobs:
             grep -qE "^[[:space:]]*config[[:space:]]+${1#CONFIG_}[[:space:]]*$" \
               KernelSU-Next/kernel/Kconfig 2>/dev/null
           }
-
           echo "=== FORTe Mode: shared baseline start [$PROFILE] ===" | tee -a "$LOG"
-
           set_cfg CONFIG_PREEMPT y
           unset_cfg CONFIG_PREEMPT_NONE
           unset_cfg CONFIG_PREEMPT_VOLUNTARY
@@ -378,19 +359,16 @@ jobs:
           unset_cfg CONFIG_HZ_250
           set_cfg CONFIG_HZ_300 y
           set_cfg CONFIG_HZ 300
-
           set_cfg CONFIG_TCP_CONG_ADVANCED y
           set_cfg CONFIG_TCP_CONG_BBR y
           set_cfg CONFIG_TCP_CONG_CUBIC y
           sed -i '/CONFIG_DEFAULT_TCP_CONG/d' "$DEFCONFIG"
           echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> "$DEFCONFIG"
-
           set_cfg CONFIG_SCHED_DEBUG y
           set_cfg CONFIG_ZRAM y
           set_cfg CONFIG_ZSMALLOC y
           set_cfg CONFIG_CRYPTO_LZ4 y
           set_cfg CONFIG_CRYPTO_LZ4HC y
-
           set_cfg CONFIG_PRINTK y
           set_cfg CONFIG_PRINTK_SAFE_LOG_BUF y
           set_cfg CONFIG_CONSOLE_LOGLEVEL_DEFAULT 3
@@ -402,12 +380,10 @@ jobs:
           unset_cfg CONFIG_DYNAMIC_DEBUG_CORE
           unset_cfg CONFIG_DEBUG_FS
           set_cfg CONFIG_LOG_BUF_SHIFT 18
-
           unset_cfg CONFIG_CC_STACKPROTECTOR_STRONG
           unset_cfg CONFIG_CC_STACKPROTECTOR_REGULAR
           set_cfg CONFIG_CC_STACKPROTECTOR_NONE y
           unset_cfg CONFIG_LOCALVERSION_AUTO
-
           set_cfg CONFIG_BPF_SYSCALL y
           set_cfg CONFIG_CGROUP_BPF y
           set_cfg CONFIG_NET_CLS_BPF y
@@ -431,14 +407,11 @@ jobs:
           set_cfg CONFIG_IKCONFIG y
           set_cfg CONFIG_IKCONFIG_PROC y
           set_cfg CONFIG_PROC_EVENTS y
-
           set_cfg CONFIG_SECURITY_SELINUX_DEVELOP y
           set_cfg CONFIG_SECURITY_SELINUX_BOOTPARAM y
-
           set_cfg CONFIG_KSU_SUSFS y
           set_cfg CONFIG_KSU_SUSFS_TRY_UMOUNT y
           unset_cfg CONFIG_KSU_SUSFS_SUS_MEMFD
-
           if probe_kconfig CONFIG_KSU_SUSFS_SUS_MAP; then
             set_cfg CONFIG_KSU_SUSFS_SUS_MAP y
           else
@@ -455,20 +428,17 @@ jobs:
             set_cfg CONFIG_LRU_GEN_STATS y
             echo "INFO: MGLRU enabled" | tee -a "$LOG"
           fi
-
           echo "=== FORTe Mode: shared baseline complete ===" | tee -a "$LOG"
           grep -E \
             "^(CONFIG_KSU|CONFIG_KSU_SUSFS|CONFIG_PREEMPT|CONFIG_HZ|CONFIG_TCP_CONG|CONFIG_BPF|CONFIG_CGROUP|CONFIG_BINDER|CONFIG_MEMCG|CONFIG_PSI|CONFIG_NET_CLS|CONFIG_FUSE|CONFIG_OVERLAY)" \
             "$DEFCONFIG" | tee -a "$LOG"
 
-      # ── 5b. Profile & Identity Injection: profile-specific policy branch ──────
       - name: Apply profile policy — SUSFS spoof (cm8) or hard-disable + Identity Engine (cm8e)
         working-directory: kernel
         run: |
           set -Eeuo pipefail
           LOG="../$LOG_DIR/profile-policy.log"
           : > "$LOG"
-
           set_cfg() {
             local k="$1"; local v="$2"
             sed -i "/^${k}=.*/d;/^# ${k} is not set/d" "$DEFCONFIG"
@@ -483,45 +453,36 @@ jobs:
             grep -qE "^[[:space:]]*config[[:space:]]+${1#CONFIG_}[[:space:]]*$" \
               KernelSU-Next/kernel/Kconfig 2>/dev/null
           }
-
           echo "=== Profile policy: $PROFILE ===" | tee -a "$LOG"
-
           if [[ "$PROFILE" == "cm8" ]]; then
             echo "--- cm8: enabling runtime SUSFS spoofing (probe-gated) ---" | tee -a "$LOG"
-
             if probe_kconfig CONFIG_KSU_SUSFS_SPOOF_UNAME; then
               set_cfg CONFIG_KSU_SUSFS_SPOOF_UNAME y
               echo "ENABLED: CONFIG_KSU_SUSFS_SPOOF_UNAME" | tee -a "$LOG"
             else
               echo "SKIP: SPOOF_UNAME not present in tree" | tee -a "$LOG"
             fi
-
             if probe_kconfig CONFIG_KSU_SUSFS_SPOOF_SELINUX; then
               set_cfg CONFIG_KSU_SUSFS_SPOOF_SELINUX y
               echo "ENABLED: CONFIG_KSU_SUSFS_SPOOF_SELINUX" | tee -a "$LOG"
             else
               echo "SKIP: SPOOF_SELINUX not present in tree" | tee -a "$LOG"
             fi
-
             if probe_kconfig CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOF; then
               set_cfg CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOF y
               echo "ENABLED: CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOF" | tee -a "$LOG"
             else
               echo "SKIP: ENABLE_AVC_LOG_SPOOF not present in tree" | tee -a "$LOG"
             fi
-
             echo "PROFILE_SPOOF_STATE=enabled" >> "$GITHUB_ENV"
             echo "IDENTITY_ENGINE_ACTIVE=false" >> "$GITHUB_ENV"
-
           elif [[ "$PROFILE" == "cm8e" ]]; then
             echo "--- cm8e: hard-disabling all SUSFS spoof symbols ---" | tee -a "$LOG"
-
             unset_cfg CONFIG_KSU_SUSFS_SPOOF_UNAME
             unset_cfg CONFIG_KSU_SUSFS_SPOOF_SELINUX
             unset_cfg CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOF
             unset_cfg CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOFING
             unset_cfg CONFIG_KSU_SUSFS_AVC_LOG_SPOOF
-
             SPOOF_FAIL=0
             for sym in \
               CONFIG_KSU_SUSFS_SPOOF_UNAME \
@@ -538,14 +499,11 @@ jobs:
             done
             [[ "$SPOOF_FAIL" -eq 0 ]] \
               || { echo "ERROR: cm8e spoof hard-disable verification failed"; exit 1; }
-
             echo "PROFILE_SPOOF_STATE=hard-disabled" >> "$GITHUB_ENV"
             echo "IDENTITY_ENGINE_ACTIVE=true"        >> "$GITHUB_ENV"
           fi
-
           echo "=== Profile policy applied: $PROFILE ===" | tee -a "$LOG"
 
-      # ── 5c. Compile-Time ROM Identity Engine (cm8e only) ───────────────────────
       - name: Compile-Time ROM Identity Engine (cm8e)
         if: ${{ env.IDENTITY_ENGINE_ACTIVE == 'true' }}
         working-directory: kernel
@@ -554,7 +512,6 @@ jobs:
           MKC="scripts/mkcompile_h"
           test -f "$MKC" || { echo "ERROR: $MKC not found — cannot patch identity engine"; exit 1; }
           cp "$MKC" "../$LOG_DIR/mkcompile_h.orig"
-
           printf '%s\n' \
             'import re' \
             'from pathlib import Path' \
@@ -600,13 +557,10 @@ jobs:
             'print("OK: scripts/mkcompile_h patched with static identity override")' \
             > /tmp/patch_mkcompile_h.py
           python3 /tmp/patch_mkcompile_h.py
-
           echo "=== Patched mkcompile_h diff ===" | tee "../$LOG_DIR/identity-engine.log"
           diff -u "../$LOG_DIR/mkcompile_h.orig" "$MKC" | tee -a "../$LOG_DIR/identity-engine.log" || true
-
           sh -n "$MKC" || { echo "ERROR: patched mkcompile_h failed syntax check"; exit 1; }
           echo "OK: patched mkcompile_h passes shell syntax check" | tee -a "../$LOG_DIR/identity-engine.log"
-
           {
             echo "IDENTITY_ENGINE=applied"
             echo "IDENTITY_BUILD_USER=$BUILD_USER"
@@ -615,7 +569,6 @@ jobs:
             echo "IDENTITY_BUILD_DATE=$KBUILD_BUILD_TIMESTAMP"
           } | tee -a "../$LOG_DIR/identity-engine.log"
 
-      # ── 6. Chimera Silent Engine ───────────────────────────────────────────────
       - name: Apply Chimera Silent Engine (Runtime Policy Layer — all profiles)
         working-directory: kernel
         run: |
@@ -626,22 +579,13 @@ jobs:
           #include <linux/sysctl.h>
           #include <linux/init.h>
           #include <linux/printk.h>
-
-          /*
-           * Chimera Mk8 Unified Silent Engine
-           * WARN+ERROR only gate (non-invasive policy layer)
-           * Injected regardless of build profile (cm8 / cm8e).
-           */
-
           int chimera_silent_mode = 1;
-
           static int __maybe_unused chimera_should_silence(int level)
           {
               if (!chimera_silent_mode)
                   return 0;
               return level > 4;
           }
-
           static struct ctl_table chimera_table[] = {
               {
                   .procname     = "silent",
@@ -652,7 +596,6 @@ jobs:
               },
               { }
           };
-
           static struct ctl_table chimera_root[] = {
               {
                   .procname = "chimera",
@@ -661,7 +604,6 @@ jobs:
               },
               { }
           };
-
           static int __init chimera_init(void)
           {
               register_sysctl_table(chimera_root);
@@ -669,15 +611,12 @@ jobs:
                       chimera_silent_mode);
               return 0;
           }
-
           subsys_initcall(chimera_init);
           EOF
-
           grep -q "chimera/silent_core.o" kernel/Makefile || \
             echo "obj-y += chimera/silent_core.o" >> kernel/Makefile
           echo "Chimera Silent Engine injected successfully (profile=$PROFILE)"
 
-      # ── 7. Samsung-stock-style branding ────────────────────────────────────────
       - name: Apply Samsung-stock-style branding
         working-directory: kernel
         run: |
@@ -710,7 +649,6 @@ jobs:
         run: |
           set -Eeuo pipefail
           TOOLCHAIN="${{ inputs.toolchain }}"
-
           TC_LABEL=""
           TC_URL=""
           TC_ARCHIVE_FMT="tar.gz"
@@ -721,7 +659,6 @@ jobs:
           TC_CROSS_COMPILE="aarch64-linux-gnu-"
           TC_CROSS_COMPILE_ARM32="arm-linux-gnueabi-"
           TC_HOSTCC="clang"
-
           case "$TOOLCHAIN" in
             aosp19)
               TC_LABEL="AOSP Clang 19"
@@ -761,7 +698,6 @@ jobs:
               exit 1
               ;;
           esac
-
           {
             echo "TC_LABEL=$TC_LABEL"
             echo "TC_URL=$TC_URL"
@@ -790,21 +726,31 @@ jobs:
           ARCHIVE_DIR="/tmp"
           ARCHIVE_BASE="clang_archive"
           ARCHIVE="$ARCHIVE_DIR/$ARCHIVE_BASE"
-
           aria2c -x4 -s4 -q -d "$ARCHIVE_DIR" -o "$ARCHIVE_BASE" "$TC_URL" || wget -O "$ARCHIVE" "$TC_URL"
-
           rm -rf toolchains/clang
           mkdir -p toolchains/clang
-
           FMT="${{ env.TC_ARCHIVE_FMT }}"
           case "$FMT" in
-            tar.gz|tar) tar -C toolchains/clang -xzf "$ARCHIVE" --strip-components=1 ;;
-            tar.xz) tar -C toolchains/clang -xJf "$ARCHIVE" --strip-components=1 ;;
+            tar.gz|tar) tar -C toolchains/clang -xzf "$ARCHIVE" ;;
+            tar.xz) tar -C toolchains/clang -xJf "$ARCHIVE" ;;
             tar.zst) 
               zstd -d "$ARCHIVE" -o /tmp/clang.tar --force
-              tar -C toolchains/clang -xf /tmp/clang.tar --strip-components=1
+              tar -C toolchains/clang -xf /tmp/clang.tar
               ;;
           esac
+          
+          # Fix nested root directory if present (Adaptive structural resolver)
+          if [ ! -d "toolchains/clang/bin" ]; then
+            NESTED_DIR=$(find toolchains/clang -maxdepth 2 -type d -name "bin" | head -n 1 | xargs dirname 2>/dev/null || true)
+            if [ -n "$NESTED_DIR" ] && [ "$NESTED_DIR" != "toolchains/clang" ]; then
+              echo "Moving nested toolchain files from $NESTED_DIR up to toolchains/clang"
+              mv "$NESTED_DIR"/* toolchains/clang/ 2>/dev/null || true
+              mv "$NESTED_DIR"/.* toolchains/clang/ 2>/dev/null || true
+              rm -rf "$NESTED_DIR"
+            fi
+          fi
+          
+          chmod +x toolchains/clang/bin/* 2>/dev/null || true
 
       - name: Set up ccache
         uses: hendrikmuhs/ccache-action@v1.2
@@ -820,9 +766,10 @@ jobs:
         run: |
           set -Eeuo pipefail
           ABS_OUT="${{ env.ABS_OUT }}"
+          ABS_TC="${{ env.ABS_TC }}"
+          export PATH="$ABS_TC/bin:$PATH"
           
           make O="$ABS_OUT" ARCH=arm64 LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- olddefconfig
-
           if [[ "${{ inputs.profile }}" == "cm8e" ]]; then
             cat >> "$ABS_OUT/.config" << 'CFGEOF'
           CONFIG_SUSFS_SPOOF_UNAME=n
@@ -849,7 +796,8 @@ jobs:
           ABS_OUT="${{ env.ABS_OUT }}"
           ABS_TC="${{ env.ABS_TC }}"
           
-          # Put LLVM name tags on the tools to trick legacy 4.9 Makefiles
+          export PATH="$ABS_TC/bin:$PATH"
+          
           for tool in ar nm objcopy objdump strip; do
             ln -sf "$ABS_TC/bin/llvm-$tool" "$ABS_TC/bin/aarch64-linux-gnu-$tool"
             ln -sf "$ABS_TC/bin/llvm-$tool" "$ABS_TC/bin/arm-linux-gnueabi-$tool"
@@ -857,13 +805,10 @@ jobs:
           ln -sf "$ABS_TC/bin/ld.lld" "$ABS_TC/bin/aarch64-linux-gnu-ld"
           ln -sf "$ABS_TC/bin/ld.lld" "$ABS_TC/bin/arm-linux-gnueabi-ld"
           ln -sf "$ABS_TC/bin/ld.lld" "$ABS_TC/bin/ld"
-
-          # Prepend toolchain to strictly enforce clang visibility
-          export PATH="$ABS_TC/bin:$PATH"
-
+          
           JOBS=$(nproc || echo 2)
           echo "Building: O=$ABS_OUT ARCH=arm64 -j$JOBS LLVM=1 toolchain=$(basename $ABS_TC)"
-
+          
           make O="$ABS_OUT" ARCH=arm64 \
             LLVM=1 \
             LLVM_IAS=1 \
@@ -883,7 +828,6 @@ jobs:
             KBUILD_LDFLAGS="-fuse-ld=lld" \
             HOSTLDFLAGS="-fuse-ld=lld" \
             2>&1 | tee "$ABS_LOG/build.log"
-
           echo "Kernel build completed successfully"
 
       - name: Smoke test build artifacts
@@ -897,9 +841,7 @@ jobs:
           check() {
             if [[ "$2" == "OK" ]]; then echo "[OK] $1" >> "$LOG"; else echo "[FAIL] $1" >> "$LOG"; FAIL=1; fi
           }
-
           [[ -f "$ABS_OUT/arch/arm64/boot/Image" ]] && check "Image present" "OK" || check "Image present" "MISSING"
-
           [[ $FAIL -eq 0 ]] || { echo "Smoke checks failed" >&2; exit 1; }
 
       - name: Package artifacts
@@ -910,10 +852,8 @@ jobs:
           ABS_OUT="${{ env.ABS_OUT }}"
           ART_DIR="$GITHUB_WORKSPACE/artifacts"
           mkdir -p "$ART_DIR"
-
           CHIMERA_SHORT="${BASE_COMMIT:0:8}"
           BUILD_TAG="chimera-mk8-${{ inputs.profile }}-${{ inputs.toolchain }}-$(date -u +%Y%m%dT%H%M%SZ)-${CHIMERA_SHORT}"
-
           [[ -f "$ABS_OUT/arch/arm64/boot/Image" ]] && cp "$ABS_OUT/arch/arm64/boot/Image" "$ART_DIR/Image"
           
           TARFILE="$ABS_LOG/${BUILD_TAG}.tar.gz"
