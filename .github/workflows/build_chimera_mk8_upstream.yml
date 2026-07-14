@@ -868,6 +868,7 @@ jobs:
             LLVM=1 \
             LLVM_IAS=1 \
             LD=ld.lld \
+            HOSTLD=ld.lld \
             AR=llvm-ar \
             NM=llvm-nm \
             OBJCOPY=llvm-objcopy \
@@ -878,7 +879,9 @@ jobs:
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
             -j"$JOBS" \
             LOCALVERSION="${{ env.BRAND }}" \
-            KCFLAGS="-O2 -fcommon -fno-strict-aliasing -Wno-error" \
+            KCFLAGS="-O2 -fcommon -fno-strict-aliasing -Wno-error -fuse-ld=lld" \
+            KBUILD_LDFLAGS="-fuse-ld=lld" \
+            HOSTLDFLAGS="-fuse-ld=lld" \
             2>&1 | tee "$ABS_LOG/build.log"
 
           echo "Kernel build completed successfully"
