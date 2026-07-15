@@ -330,6 +330,7 @@ jobs:
           PYEOF
           fi
 
+      # ── 5. Profile & Identity Injection: shared FORTe defconfig baseline ──────
       - name: Apply defconfig tuning (FORTe Mode — shared baseline)
         working-directory: kernel
         run: |
@@ -432,7 +433,7 @@ jobs:
           grep -E \
             "^(CONFIG_KSU|CONFIG_KSU_SUSFS|CONFIG_PREEMPT|CONFIG_HZ|CONFIG_TCP_CONG|CONFIG_BPF|CONFIG_CGROUP|CONFIG_BINDER|CONFIG_MEMCG|CONFIG_PSI|CONFIG_NET_CLS|CONFIG_FUSE|CONFIG_OVERLAY)" \
             "$DEFCONFIG" | tee -a "$LOG"
-
+      # ── 5b. Profile & Identity Injection: profile-specific policy branch ──────
       - name: Apply profile policy — SUSFS spoof (cm8) or hard-disable + Identity Engine (cm8e)
         working-directory: kernel
         run: |
@@ -503,7 +504,7 @@ jobs:
             echo "IDENTITY_ENGINE_ACTIVE=true"        >> "$GITHUB_ENV"
           fi
           echo "=== Profile policy applied: $PROFILE ===" | tee -a "$LOG"
-
+      # ── 5c. Compile-Time ROM Identity Engine (cm8e only) ───────────────────────
       - name: Compile-Time ROM Identity Engine (cm8e)
         if: ${{ env.IDENTITY_ENGINE_ACTIVE == 'true' }}
         working-directory: kernel
@@ -568,7 +569,7 @@ jobs:
             echo "IDENTITY_BUILD_VERSION=$BUILD_VERSION"
             echo "IDENTITY_BUILD_DATE=$KBUILD_BUILD_TIMESTAMP"
           } | tee -a "../$LOG_DIR/identity-engine.log"
-
+      # ── 6. Chimera Silent Engine ───────────────────────────────────────────────
       - name: Apply Chimera Silent Engine (Runtime Policy Layer — all profiles)
         working-directory: kernel
         run: |
@@ -579,6 +580,11 @@ jobs:
           #include <linux/sysctl.h>
           #include <linux/init.h>
           #include <linux/printk.h>
+          /*
+           * Chimera Mk8 Unified Silent Engine
+           * WARN+ERROR only gate (non-invasive policy layer)
+           * Injected regardless of build profile (cm8 / cm8e).
+           */
           int chimera_silent_mode = 1;
           static int __maybe_unused chimera_should_silence(int level)
           {
@@ -616,7 +622,7 @@ jobs:
           grep -q "chimera/silent_core.o" kernel/Makefile || \
             echo "obj-y += chimera/silent_core.o" >> kernel/Makefile
           echo "Chimera Silent Engine injected successfully (profile=$PROFILE)"
-
+      # ── 7. Samsung-stock-style branding ────────────────────────────────────────
       - name: Apply Samsung-stock-style branding
         working-directory: kernel
         run: |
