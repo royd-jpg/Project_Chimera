@@ -112,6 +112,7 @@ jobs:
 
     steps:
 
+      # ── 1. Host dependencies ────────────────────────────────────────────────────
       - name: Install build dependencies
         run: |
           set -Eeuo pipefail
@@ -119,9 +120,23 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             aria2 bc bison build-essential ccache flex \
             git libelf-dev libssl-dev lz4 python3 \
-            rsync zstd cpio pahole
+            rsync zstd cpio pahole zip
           python3 --version
           zstd --version | head -1
+
+      # ── 1b. GCC binutils for clang21-eva-gcc mode ───────────────────────────────
+      # clang21-eva-gcc uses Clang as the compiler but system GCC as the assembler/
+      # linker/binutils. This step is skipped for every other toolchain choice.
+      - name: Install GCC cross-compiler (clang21-eva-gcc only)
+        if: ${{ inputs.toolchain == 'clang21-eva-gcc' }}
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get install -y --no-install-recommends \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi \
+            binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi
+          echo "GCC  : $(aarch64-linux-gnu-gcc  --version | head -1)"
+          echo "LD   : $(aarch64-linux-gnu-ld   --version | head -1)"
+          echo "OBJCP: $(aarch64-linux-gnu-objcopy --version | head -1)"
 
       - name: Prepare workspace directories
         run: |
@@ -151,19 +166,24 @@ jobs:
           BUILD_VER="${BUILD_VER:-$BUILD_VERSION_DEFAULT}"
           BUILD_TS="${{ inputs.build_date }}"
           BUILD_TS="${BUILD_TS:-$KBUILD_BUILD_TIMESTAMP_DEFAULT}"
-          echo "BRAND=$BRAND"                         >> "$GITHUB_ENV"
-          echo "BUILD_USER=$BUILD_USER"               >> "$GITHUB_ENV"
-          echo "BUILD_HOST=$BUILD_HOST"               >> "$GITHUB_ENV"
-          echo "BUILD_VERSION=$BUILD_VER"             >> "$GITHUB_ENV"
-          echo "KBUILD_BUILD_TIMESTAMP=$BUILD_TS"     >> "$GITHUB_ENV"
-          echo "profile=${{ inputs.profile }}"        >> "$ABS_LOG/inputs.env"
-          echo "toolchain=${{ inputs.toolchain }}"    >> "$ABS_LOG/inputs.env"
-          echo "brand=$BRAND"                         >> "$ABS_LOG/inputs.env"
-          echo "build_user=$BUILD_USER"               >> "$ABS_LOG/inputs.env"
-          echo "build_host=$BUILD_HOST"               >> "$ABS_LOG/inputs.env"
-          echo "build_ts=$BUILD_TS"                   >> "$ABS_LOG/inputs.env"
-          echo "uname_preview=Linux version 4.9.337${BRAND} (${BUILD_USER}@${BUILD_HOST}) #${BUILD_VER} SMP PREEMPT" \
-               | tee -a "$ABS_LOG/inputs.env"
+          # Export UNAME_PREVIEW so downstream steps (branding, release notes) can read it.
+          UNAME_PREVIEW="Linux version 4.9.337${BRAND} (${BUILD_USER}@${BUILD_HOST}) #${BUILD_VER} SMP PREEMPT"
+          echo "BRAND=$BRAND"                               >> "$GITHUB_ENV"
+          echo "BUILD_USER=$BUILD_USER"                     >> "$GITHUB_ENV"
+          echo "BUILD_HOST=$BUILD_HOST"                     >> "$GITHUB_ENV"
+          echo "BUILD_VERSION=$BUILD_VER"                   >> "$GITHUB_ENV"
+          echo "KBUILD_BUILD_TIMESTAMP=$BUILD_TS"           >> "$GITHUB_ENV"
+          echo "UNAME_PREVIEW=$UNAME_PREVIEW"               >> "$GITHUB_ENV"
+          {
+            echo "profile=${{ inputs.profile }}"
+            echo "toolchain=${{ inputs.toolchain }}"
+            echo "brand=$BRAND"
+            echo "build_user=$BUILD_USER"
+            echo "build_host=$BUILD_HOST"
+            echo "build_ts=$BUILD_TS"
+            echo "uname_preview=$UNAME_PREVIEW"
+          } >> "$ABS_LOG/inputs.env"
+          echo "$UNAME_PREVIEW"
 
       - name: Checkout gavdoc38 kernel repo (lineage-23.2-ksun3-susfs2)
         uses: actions/checkout@v4
@@ -433,6 +453,7 @@ jobs:
           grep -E \
             "^(CONFIG_KSU|CONFIG_KSU_SUSFS|CONFIG_PREEMPT|CONFIG_HZ|CONFIG_TCP_CONG|CONFIG_BPF|CONFIG_CGROUP|CONFIG_BINDER|CONFIG_MEMCG|CONFIG_PSI|CONFIG_NET_CLS|CONFIG_FUSE|CONFIG_OVERLAY)" \
             "$DEFCONFIG" | tee -a "$LOG"
+
       # ── 5b. Profile & Identity Injection: profile-specific policy branch ──────
       - name: Apply profile policy — SUSFS spoof (cm8) or hard-disable + Identity Engine (cm8e)
         working-directory: kernel
@@ -504,6 +525,7 @@ jobs:
             echo "IDENTITY_ENGINE_ACTIVE=true"        >> "$GITHUB_ENV"
           fi
           echo "=== Profile policy applied: $PROFILE ===" | tee -a "$LOG"
+
       # ── 5c. Compile-Time ROM Identity Engine (cm8e only) ───────────────────────
       - name: Compile-Time ROM Identity Engine (cm8e)
         if: ${{ env.IDENTITY_ENGINE_ACTIVE == 'true' }}
@@ -569,7 +591,11 @@ jobs:
             echo "IDENTITY_BUILD_VERSION=$BUILD_VERSION"
             echo "IDENTITY_BUILD_DATE=$KBUILD_BUILD_TIMESTAMP"
           } | tee -a "../$LOG_DIR/identity-engine.log"
+
       # ── 6. Chimera Silent Engine ───────────────────────────────────────────────
+      # NOTE: working-directory is KERNEL_DIR (the kernel source root).
+      # Therefore "kernel/chimera/" refers to the kernel subsystem subdirectory
+      # at <source-root>/kernel/chimera/ — not a double-nested path.
       - name: Apply Chimera Silent Engine (Runtime Policy Layer — all profiles)
         working-directory: kernel
         run: |
@@ -619,9 +645,19 @@ jobs:
           }
           subsys_initcall(chimera_init);
           EOF
-          grep -q "chimera/silent_core.o" kernel/Makefile || \
-            echo "obj-y += chimera/silent_core.o" >> kernel/Makefile
+          # Provide a Makefile for the chimera subdirectory so the build system
+          # descends cleanly. Using "subdir descent" (obj-y += chimera/) is safer
+          # than a direct cross-directory file reference in older Kbuild versions.
+          if [[ ! -f kernel/chimera/Makefile ]]; then
+            printf '# Chimera Mk8 — Silent Engine\nobj-y += silent_core.o\n' \
+              > kernel/chimera/Makefile
+          fi
+          # Register the subdirectory with the kernel subsystem Makefile (idempotent).
+          if ! grep -q 'obj-y += chimera/' kernel/Makefile; then
+            echo 'obj-y += chimera/' >> kernel/Makefile
+          fi
           echo "Chimera Silent Engine injected successfully (profile=$PROFILE)"
+
       # ── 7. Samsung-stock-style branding ────────────────────────────────────────
       - name: Apply Samsung-stock-style branding
         working-directory: kernel
@@ -650,6 +686,7 @@ jobs:
           cat scripts/setlocalversion | tee -a "../$LOG_DIR/scm-dirty.log"
           echo "uname preview: Linux version 4.9.337${BRAND} (${BUILD_USER}@${BUILD_HOST}) #${BUILD_VERSION} SMP PREEMPT"
 
+      # ── 8. Toolchain resolution ─────────────────────────────────────────────────
       - name: Resolve toolchain configuration
         id: tc-resolve
         run: |
@@ -699,8 +736,22 @@ jobs:
               TC_URL=$(curl -fsSL "$ZYC_API" || true)
               TC_ARCHIVE_FMT="tar.gz"
               ;;
+            clang21-eva-gcc)
+              # Clang 21 (AOSP r563880c) as the C compiler; system GCC binutils
+              # (installed in the "Install GCC cross-compiler" step) provide the
+              # assembler, linker, ar, nm, objcopy etc. LLVM_IAS=0 routes all
+              # assembly through gas (aarch64-linux-gnu-as) instead of the
+              # integrated clang assembler — required for GAS-syntax asm in 4.9.
+              TC_LABEL="AOSP Clang 21 + GCC binutils"
+              TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/21b19c041de1f1df9b97fd9902ae5405c6cf8eb9/clang-r563880c.tar.gz"
+              TC_CACHE_KEY="aosp-clang-r563880c-ubuntu-24.04-v2"
+              TC_USE_FULL_LLVM="false"
+              TC_LLVM_IAS="0"
+              TC_NEEDS_EVA_GCC="true"
+              TC_HOSTCC="gcc"
+              ;;
             *)
-              echo "ERROR: unsupported toolchain fallback" >&2
+              echo "ERROR: unsupported toolchain '$TOOLCHAIN'" >&2
               exit 1
               ;;
           esac
@@ -711,11 +762,13 @@ jobs:
             echo "TC_CACHE_KEY=$TC_CACHE_KEY"
             echo "TC_LLVM_IAS=$TC_LLVM_IAS"
             echo "TC_USE_FULL_LLVM=$TC_USE_FULL_LLVM"
+            echo "TC_NEEDS_EVA_GCC=$TC_NEEDS_EVA_GCC"
             echo "TC_CROSS_COMPILE=$TC_CROSS_COMPILE"
             echo "TC_CROSS_COMPILE_ARM32=$TC_CROSS_COMPILE_ARM32"
             echo "TC_HOSTCC=$TC_HOSTCC"
           } >> "$GITHUB_ENV"
           echo "TC_CACHE_KEY=$TC_CACHE_KEY" >> "$GITHUB_OUTPUT"
+          echo "Resolved: $TC_LABEL (FULL_LLVM=$TC_USE_FULL_LLVM, IAS=$TC_LLVM_IAS)"
 
       - name: Cache toolchain
         uses: actions/cache@v4
@@ -738,14 +791,13 @@ jobs:
           FMT="${{ env.TC_ARCHIVE_FMT }}"
           case "$FMT" in
             tar.gz|tar) tar -C toolchains/clang -xzf "$ARCHIVE" ;;
-            tar.xz) tar -C toolchains/clang -xJf "$ARCHIVE" ;;
-            tar.zst) 
+            tar.xz)     tar -C toolchains/clang -xJf "$ARCHIVE" ;;
+            tar.zst)
               zstd -d "$ARCHIVE" -o /tmp/clang.tar --force
               tar -C toolchains/clang -xf /tmp/clang.tar
               ;;
           esac
-          
-          # Fix nested root directory if present (Adaptive structural resolver)
+          # Adaptive structural resolver: flatten one spurious nesting level.
           if [ ! -d "toolchains/clang/bin" ]; then
             NESTED_DIR=$(find toolchains/clang -maxdepth 2 -type d -name "bin" | head -n 1 | xargs dirname 2>/dev/null || true)
             if [ -n "$NESTED_DIR" ] && [ "$NESTED_DIR" != "toolchains/clang" ]; then
@@ -755,7 +807,6 @@ jobs:
               rm -rf "$NESTED_DIR"
             fi
           fi
-          
           chmod +x toolchains/clang/bin/* 2>/dev/null || true
 
       - name: Set up ccache
@@ -767,6 +818,10 @@ jobs:
           max-size: ${{ env.CCACHE_MAXSIZE }}
           verbose: 0
 
+      # ── 9. Finalise .config ─────────────────────────────────────────────────────
+      # Runs olddefconfig to resolve any symbol dependencies introduced by the
+      # defconfig edits above. The cm8e spoof symbols are already absent from the
+      # defconfig (profile policy step); no redundant .config surgery needed here.
       - name: Finalise kernel .config
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
@@ -774,18 +829,35 @@ jobs:
           ABS_OUT="${{ env.ABS_OUT }}"
           ABS_TC="${{ env.ABS_TC }}"
           export PATH="$ABS_TC/bin:$PATH"
-          
-          make O="$ABS_OUT" ARCH=arm64 LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- olddefconfig
-          if [[ "${{ inputs.profile }}" == "cm8e" ]]; then
-            cat >> "$ABS_OUT/.config" << 'CFGEOF'
-          CONFIG_SUSFS_SPOOF_UNAME=n
-          CONFIG_SUSFS_SPOOF_SELINUX=n
-          CONFIG_KSU_SPOOF_AVC_LOG=n
-          CFGEOF
-            make O="$ABS_OUT" ARCH=arm64 LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- olddefconfig
-          fi
-          cp "$ABS_OUT/.config" "$ABS_LOG/config.built"
 
+          # Build the make flag set once, reused for both olddefconfig invocations.
+          COMMON_FLAGS=(
+            "O=$ABS_OUT"
+            "ARCH=arm64"
+            "CLANG_TRIPLE=aarch64-linux-gnu-"
+            "CROSS_COMPILE=aarch64-linux-gnu-"
+            "CROSS_COMPILE_ARM32=arm-linux-gnueabi-"
+          )
+          if [[ "${TC_USE_FULL_LLVM}" == "true" ]]; then
+            COMMON_FLAGS+=( "LLVM=1" "LLVM_IAS=${TC_LLVM_IAS}" )
+          else
+            # GCC binutils mode: clang is still the C compiler, but GNU as/ld do
+            # the heavy lifting. CC must be set explicitly (no LLVM=1 shorthand).
+            COMMON_FLAGS+=( "CC=clang" "LLVM_IAS=0" "HOSTCC=gcc" )
+          fi
+
+          make "${COMMON_FLAGS[@]}" olddefconfig
+          cp "$ABS_OUT/.config" "$ABS_LOG/config.built"
+          echo "=== Key config symbols ===" | tee "$ABS_LOG/config-summary.txt"
+          grep -E \
+            "^(CONFIG_KSU|CONFIG_KSU_SUSFS|CONFIG_PREEMPT|CONFIG_HZ[^_]|CONFIG_TCP_CONG_DEFAULT|CONFIG_BPF_SYSCALL|CONFIG_LOCALVERSION)" \
+            "$ABS_OUT/.config" | tee -a "$ABS_LOG/config-summary.txt"
+
+      # ── 10. Build ───────────────────────────────────────────────────────────────
+      # CC is passed explicitly to make so it takes precedence over the LLVM=1
+      # internal assignment — this is the only reliable way to inject ccache
+      # into a Kbuild that uses Clang without using the CC_WRAPPER mechanism
+      # (which was added after 4.9). No CC env var is exported at the job level.
       - name: Build kernel
         if: ${{ inputs.dry_run != 'true' }}
         working-directory: ${{ env.KERNEL_DIR }}
@@ -796,44 +868,77 @@ jobs:
           KBUILD_BUILD_VERSION: "${{ env.BUILD_VERSION }}"
           KBUILD_BUILD_TIMESTAMP: "${{ env.KBUILD_BUILD_TIMESTAMP }}"
           KSU_GIT_VERSION: "${{ env.KSU_GIT_VERSION }}"
-          CC: "ccache clang"
         run: |
           set -Eeuo pipefail
           ABS_OUT="${{ env.ABS_OUT }}"
           ABS_TC="${{ env.ABS_TC }}"
-          
           export PATH="$ABS_TC/bin:$PATH"
-          
-          for tool in ar nm objcopy objdump strip; do
-            ln -sf "$ABS_TC/bin/llvm-$tool" "$ABS_TC/bin/aarch64-linux-gnu-$tool"
-            ln -sf "$ABS_TC/bin/llvm-$tool" "$ABS_TC/bin/arm-linux-gnueabi-$tool"
-          done
-          ln -sf "$ABS_TC/bin/ld.lld" "$ABS_TC/bin/aarch64-linux-gnu-ld"
-          ln -sf "$ABS_TC/bin/ld.lld" "$ABS_TC/bin/arm-linux-gnueabi-ld"
-          ln -sf "$ABS_TC/bin/ld.lld" "$ABS_TC/bin/ld"
-          
+
           JOBS=$(nproc || echo 2)
-          echo "Building: O=$ABS_OUT ARCH=arm64 -j$JOBS LLVM=1 toolchain=$(basename $ABS_TC)"
-          
-          make O="$ABS_OUT" ARCH=arm64 \
-            LLVM=1 \
-            LLVM_IAS=1 \
-            LD=ld.lld \
-            HOSTLD=ld.lld \
-            AR=llvm-ar \
-            NM=llvm-nm \
-            OBJCOPY=llvm-objcopy \
-            OBJDUMP=llvm-objdump \
-            STRIP=llvm-strip \
-            CLANG_TRIPLE=aarch64-linux-gnu- \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-            -j"$JOBS" \
-            LOCALVERSION="${{ env.BRAND }}" \
-            KCFLAGS="-O2 -fcommon -fno-strict-aliasing -Wno-error -fuse-ld=lld" \
-            KBUILD_LDFLAGS="-fuse-ld=lld" \
-            HOSTLDFLAGS="-fuse-ld=lld" \
-            2>&1 | tee "$ABS_LOG/build.log"
+
+          # Build the make argument array. CC="ccache clang" is passed as a
+          # command-line override — make treats command-line variables with higher
+          # priority than anything the Makefile assigns internally (including the
+          # CC := clang override that LLVM=1 would otherwise produce). Think of it
+          # like: the Makefile's internal rules are suggestions, but what you pass
+          # on the command line always wins.
+          MAKE_ARGS=(
+            "O=$ABS_OUT"
+            "ARCH=arm64"
+            "CC=ccache clang"
+            "CLANG_TRIPLE=aarch64-linux-gnu-"
+            "CROSS_COMPILE=aarch64-linux-gnu-"
+            "CROSS_COMPILE_ARM32=arm-linux-gnueabi-"
+            "-j${JOBS}"
+            "LOCALVERSION=${BRAND}"
+          )
+
+          if [[ "${TC_USE_FULL_LLVM}" == "true" ]]; then
+            # Full LLVM mode: every binutil is an llvm-* binary from the toolchain.
+            # Create CROSS_COMPILE-prefixed symlinks so any Makefile snippet that
+            # constructs a tool name from $(CROSS_COMPILE)ar etc. still resolves.
+            for tool in ar nm objcopy objdump strip; do
+              ln -sf "$ABS_TC/bin/llvm-${tool}" "$ABS_TC/bin/aarch64-linux-gnu-${tool}" || true
+              ln -sf "$ABS_TC/bin/llvm-${tool}" "$ABS_TC/bin/arm-linux-gnueabi-${tool}" || true
+            done
+            ln -sf "$ABS_TC/bin/ld.lld" "$ABS_TC/bin/aarch64-linux-gnu-ld" || true
+            ln -sf "$ABS_TC/bin/ld.lld" "$ABS_TC/bin/arm-linux-gnueabi-ld"  || true
+            ln -sf "$ABS_TC/bin/ld.lld" "$ABS_TC/bin/ld"                    || true
+            MAKE_ARGS+=(
+              "LLVM=1"
+              "LLVM_IAS=${TC_LLVM_IAS}"
+              "LD=ld.lld"
+              "HOSTLD=ld.lld"
+              "AR=llvm-ar"
+              "NM=llvm-nm"
+              "OBJCOPY=llvm-objcopy"
+              "OBJDUMP=llvm-objdump"
+              "STRIP=llvm-strip"
+              "KCFLAGS=-O2 -fcommon -fno-strict-aliasing -Wno-error -fuse-ld=lld"
+              "KBUILD_LDFLAGS=-fuse-ld=lld"
+              "HOSTLDFLAGS=-fuse-ld=lld"
+            )
+          else
+            # GCC binutils mode (clang21-eva-gcc): GNU binutils from the
+            # aarch64-linux-gnu- host package supply as/ld/ar/nm/objcopy.
+            # LLVM_IAS=0 routes assembly through gas instead of the integrated
+            # clang assembler, avoiding IAS-vs-GAS asm syntax mismatches in 4.9.
+            MAKE_ARGS+=(
+              "LLVM_IAS=0"
+              "HOSTCC=gcc"
+              "HOSTCXX=g++"
+              "LD=aarch64-linux-gnu-ld"
+              "AR=aarch64-linux-gnu-ar"
+              "NM=aarch64-linux-gnu-nm"
+              "OBJCOPY=aarch64-linux-gnu-objcopy"
+              "OBJDUMP=aarch64-linux-gnu-objdump"
+              "STRIP=aarch64-linux-gnu-strip"
+              "KCFLAGS=-O2 -fcommon -fno-strict-aliasing -Wno-error"
+            )
+          fi
+
+          echo "Building: profile=$PROFILE toolchain=$TOOLCHAIN FULL_LLVM=$TC_USE_FULL_LLVM jobs=$JOBS"
+          make "${MAKE_ARGS[@]}" Image 2>&1 | tee "$ABS_LOG/build.log"
           echo "Kernel build completed successfully"
 
       - name: Smoke test build artifacts
@@ -843,14 +948,17 @@ jobs:
           ABS_OUT="${{ env.ABS_OUT }}"
           LOG="$ABS_LOG/smoke.log"
           FAIL=0
-          
           check() {
-            if [[ "$2" == "OK" ]]; then echo "[OK] $1" >> "$LOG"; else echo "[FAIL] $1" >> "$LOG"; FAIL=1; fi
+            if [[ "$2" == "OK" ]]; then echo "[OK]   $1" >> "$LOG"
+            else                         echo "[FAIL] $1" >> "$LOG"; FAIL=1; fi
           }
-          [[ -f "$ABS_OUT/arch/arm64/boot/Image" ]] && check "Image present" "OK" || check "Image present" "MISSING"
-          [[ $FAIL -eq 0 ]] || { echo "Smoke checks failed" >&2; exit 1; }
+          [[ -f "$ABS_OUT/arch/arm64/boot/Image" ]] \
+            && check "Image present" "OK" \
+            || check "Image present" "MISSING"
+          [[ $FAIL -eq 0 ]] || { cat "$LOG"; echo "Smoke checks failed" >&2; exit 1; }
+          cat "$LOG"
 
-      - name: Package artifacts
+      - name: Package tar artifact (Image + logs)
         if: ${{ inputs.dry_run != 'true' }}
         id: package
         run: |
@@ -860,22 +968,133 @@ jobs:
           mkdir -p "$ART_DIR"
           CHIMERA_SHORT="${BASE_COMMIT:0:8}"
           BUILD_TAG="chimera-mk8-${{ inputs.profile }}-${{ inputs.toolchain }}-$(date -u +%Y%m%dT%H%M%SZ)-${CHIMERA_SHORT}"
-          [[ -f "$ABS_OUT/arch/arm64/boot/Image" ]] && cp "$ABS_OUT/arch/arm64/boot/Image" "$ART_DIR/Image"
-          
+          [[ -f "$ABS_OUT/arch/arm64/boot/Image" ]] \
+            && cp "$ABS_OUT/arch/arm64/boot/Image" "$ART_DIR/Image"
           TARFILE="$ABS_LOG/${BUILD_TAG}.tar.gz"
-          tar --sort=name --mtime='2026-01-01T00:00:00Z' --owner=0 --group=0 -czf "$TARFILE" -C "$ART_DIR" .
-          
+          tar --sort=name --mtime='2026-01-01T00:00:00Z' --owner=0 --group=0 \
+            -czf "$TARFILE" -C "$ART_DIR" .
           echo "artifact_name=${BUILD_TAG}.tar.gz" >> "$GITHUB_OUTPUT"
-          echo "artifact_path=$TARFILE" >> "$GITHUB_OUTPUT"
-          echo "BUILD_TAG=$BUILD_TAG" >> "$GITHUB_ENV"
+          echo "artifact_path=$TARFILE"            >> "$GITHUB_OUTPUT"
+          echo "BUILD_TAG=$BUILD_TAG"              >> "$GITHUB_ENV"
+          echo "ART_DIR=$ART_DIR"                  >> "$GITHUB_ENV"
 
-      - name: Upload build artifact
+      - name: Upload tar artifact
         if: ${{ inputs.dry_run != 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: chimera-kernel-${{ inputs.profile }}-${{ inputs.toolchain }}
           path: ${{ steps.package.outputs.artifact_path }}
 
+      # ── 11. AnyKernel3 packaging ───────────────────────────────────────────────
+      # AK3 is purely a delivery wrapper. It does not recompile, relink, or
+      # modify the kernel Image in any way. The Madera audio driver (cs47l93,
+      # spi@10470000) is compiled once during the Build step above; the zip
+      # produced here contains that binary unchanged. AK3 simply unpacks the
+      # Image into the boot partition via TWRP's update-binary mechanism.
+      - name: Clone AnyKernel3
+        if: ${{ inputs.dry_run != 'true' }}
+        run: |
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git anykernel3
+          # Strip git history and placeholder dirs not needed for a kernel-only flash.
+          rm -rf anykernel3/.git anykernel3/modules anykernel3/patch anykernel3/ramdisk
+          echo "AK3 cloned and stripped"
+
+      - name: Configure AnyKernel3 for star2lte
+        if: ${{ inputs.dry_run != 'true' }}
+        run: |
+          set -Eeuo pipefail
+          AK3_DIR="$GITHUB_WORKSPACE/anykernel3"
+          cat > "$AK3_DIR/anykernel.sh" << 'AK3SH'
+          # AnyKernel3 — Chimera Mk8 Unified
+          # Device: Samsung Galaxy S9+ (star2lte / SM-G965x)
+          # Platform: Exynos 9810 (UFS block node: 11120000.ufs)
+          properties() { '
+          kernel.string=Chimera Mk8 Unified by AegisDevLabs
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=star2lte
+          device.name2=star2ltexx
+          device.name3=SM-G965F
+          device.name4=SM-G965U
+          device.name5=SM-G965N
+          supported.versions=9-15
+          '; }
+
+          # UFS boot partition path on Exynos 9810 (star2lte)
+          block=/dev/block/platform/11120000.ufs/by-name/BOOT;
+          is_slot_device=0;
+          ramdisk_compression=auto;
+          patch_vbmeta_flag=auto;
+
+          . tools/ak3-core.sh
+          . tools/boot_patch.sh "$SLOT"
+          AK3SH
+          echo "anykernel.sh written for star2lte"
+
+      - name: Assemble AK3 flashable ZIP
+        if: ${{ inputs.dry_run != 'true' }}
+        id: ak3-zip
+        run: |
+          set -Eeuo pipefail
+          ABS_OUT="${{ env.ABS_OUT }}"
+          AK3_DIR="$GITHUB_WORKSPACE/anykernel3"
+          ART_DIR="${{ env.ART_DIR }}"
+
+          # Copy the compiled kernel Image into the AK3 root.
+          cp "$ABS_OUT/arch/arm64/boot/Image" "$AK3_DIR/Image"
+
+          ZIP_NAME="Chimera-Mk8-${{ inputs.profile }}-${{ inputs.toolchain }}-${{ env.BUILD_TAG }}.zip"
+          ZIP_PATH="$ART_DIR/$ZIP_NAME"
+
+          cd "$AK3_DIR"
+          # -r9: recursive, max compression. -x: exclude any stray VCS metadata.
+          zip -r9 "$ZIP_PATH" . \
+            -x "*.git*" \
+            -x "*.placeholder"
+
+          echo "AK3_ZIP=$ZIP_PATH"    >> "$GITHUB_ENV"
+          echo "AK3_ZIP_NAME=$ZIP_NAME" >> "$GITHUB_ENV"
+          echo "ak3_zip=$ZIP_PATH"    >> "$GITHUB_OUTPUT"
+          echo "ak3_zip_name=$ZIP_NAME" >> "$GITHUB_OUTPUT"
+          ls -lh "$ZIP_PATH"
+
+      - name: Upload AK3 flashable ZIP artifact
+        if: ${{ inputs.dry_run != 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: Chimera-Mk8-${{ inputs.profile }}-${{ inputs.toolchain }}-AK3
+          path: ${{ steps.ak3-zip.outputs.ak3_zip }}
+
+      # ── 12. GitHub Release ──────────────────────────────────────────────────────
+      - name: Create GitHub Release
+        if: ${{ inputs.do_release == 'true' && inputs.dry_run != 'true' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.BUILD_TAG }}
+          name: "Chimera Mk8 — ${{ inputs.profile }} / ${{ inputs.toolchain }}"
+          body: |
+            ## Chimera Mk8 Unified
+
+            | Field | Value |
+            |---|---|
+            | Profile | `${{ inputs.profile }}` |
+            | Toolchain | `${{ inputs.toolchain }}` |
+            | Brand | `${{ env.BRAND }}` |
+            | Base commit | `${{ env.BASE_COMMIT }}` |
+            | KSU-Next | `${{ env.KSU_GIT_VERSION }}` |
+            | uname | `${{ env.UNAME_PREVIEW }}` |
+
+            Flash via TWRP. Requires star2lte (SM-G965x).
+          files: |
+            ${{ steps.ak3-zip.outputs.ak3_zip }}
+            ${{ steps.package.outputs.artifact_path }}
+          draft: false
+          prerelease: false
+
+      # ── Always upload logs ──────────────────────────────────────────────────────
       - name: Upload build logs
         if: always()
         uses: actions/upload-artifact@v4
