@@ -137,45 +137,25 @@ jobs:
             gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi \
             binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi
 
-      - name: Prepare workspace directories
-        run: |
-          set -Eeuo pipefail
-          mkdir -p "$GITHUB_WORKSPACE/$LOG_DIR"
-          mkdir -p "$GITHUB_WORKSPACE/$OUT_DIR"
-          echo "ABS_LOG=$GITHUB_WORKSPACE/$LOG_DIR"        >> "$GITHUB_ENV"
-          echo "ABS_OUT=$GITHUB_WORKSPACE/$OUT_DIR"        >> "$GITHUB_ENV"
-          echo "ABS_KERNEL=$GITHUB_WORKSPACE/$KERNEL_DIR"  >> "$GITHUB_ENV"
-          echo "ABS_TC=$GITHUB_WORKSPACE/toolchains/clang" >> "$GITHUB_ENV"
-
-      - name: Resolve build identity (runtime)
-        run: |
-          set -Eeuo pipefail
-          BRAND="${{ inputs.brand }}"; BRAND="${BRAND:-$BRAND_DEFAULT}"
-          [[ "${BRAND:0:1}" == "-" ]] || { echo "ERROR: brand must start with '-'" >&2; exit 1; }
-          BUILD_USER="${{ inputs.build_user }}"; BUILD_USER="${BUILD_USER:-$BUILD_USER_DEFAULT}"
-          BUILD_HOST="${{ inputs.build_host }}"; BUILD_HOST="${BUILD_HOST:-$BUILD_HOST_DEFAULT}"
-          BUILD_VER="${{ inputs.build_version }}"; BUILD_VER="${BUILD_VER:-$BUILD_VERSION_DEFAULT}"
-          BUILD_TS="${{ inputs.build_date }}"; BUILD_TS="${BUILD_TS:-$KBUILD_BUILD_TIMESTAMP_DEFAULT}"
-          UNAME_PREVIEW="Linux version 4.9.337${BRAND} (${BUILD_USER}@${BUILD_HOST}) #${BUILD_VER} SMP PREEMPT"
-          echo "BRAND=$BRAND"                     >> "$GITHUB_ENV"
-          echo "BUILD_USER=$BUILD_USER"           >> "$GITHUB_ENV"
-          echo "BUILD_HOST=$BUILD_HOST"           >> "$GITHUB_ENV"
-          echo "BUILD_VERSION=$BUILD_VER"         >> "$GITHUB_ENV"
-          echo "KBUILD_BUILD_TIMESTAMP=$BUILD_TS" >> "$GITHUB_ENV"
-          echo "UNAME_PREVIEW=$UNAME_PREVIEW"     >> "$GITHUB_ENV"
-          { echo "profile=${{ inputs.profile }}"; echo "toolchain=${{ inputs.toolchain }}"; \
-            echo "brand=$BRAND"; echo "uname_preview=$UNAME_PREVIEW"; } >> "$ABS_LOG/inputs.env"
-
       # ── 2. Checkout THIS repo (Project_Chimera) into workspace root ────────
       # This is what actually holds patches/apply_ksu_susfs_patches.sh and
       # chimera-ksu-susfs.cfg. Without this step $GITHUB_WORKSPACE root is
       # empty (only kernel/ gets populated below), causing:
       #   bash: .../patches/apply_ksu_susfs_patches.sh: No such file or directory
+      #
+      # clean: false is mandatory. actions/checkout defaults to clean: true,
+      # which runs `git clean -ffdx` scoped to `path`. With path: . that scope
+      # is the ENTIRE workspace root, which deletes any untracked directory
+      # already there (or created there later by an in-place rerun) —
+      # including logs/ and kernel-out/. Left at the default this silently
+      # wipes those dirs and every later `tee -a ".../logs/*.log"` fails with
+      # "No such file or directory".
       - name: Checkout Project_Chimera (workflow repo — patches + Kconfig fragment)
         uses: actions/checkout@v4
         with:
           path: .
           fetch-depth: 1
+          clean: false
 
       - name: Verify required repo-local files are present
         run: |
@@ -201,11 +181,47 @@ jobs:
           ref: ${{ inputs.base_ref }}
           path: ${{ env.KERNEL_DIR }}
           fetch-depth: 0
+          clean: false
+
+      # ── Workspace dirs + build identity — deliberately AFTER both checkouts
+      # above. Creating these before a checkout with path: . is what caused
+      # them to be wiped; creating them after guarantees they survive for the
+      # rest of the job regardless of checkout clean behavior.
+      - name: Prepare workspace directories
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/$LOG_DIR"
+          mkdir -p "$GITHUB_WORKSPACE/$OUT_DIR"
+          echo "ABS_LOG=$GITHUB_WORKSPACE/$LOG_DIR"        >> "$GITHUB_ENV"
+          echo "ABS_OUT=$GITHUB_WORKSPACE/$OUT_DIR"        >> "$GITHUB_ENV"
+          echo "ABS_KERNEL=$GITHUB_WORKSPACE/$KERNEL_DIR"  >> "$GITHUB_ENV"
+          echo "ABS_TC=$GITHUB_WORKSPACE/toolchains/clang" >> "$GITHUB_ENV"
+
+      - name: Resolve build identity (runtime)
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$ABS_LOG"
+          BRAND="${{ inputs.brand }}"; BRAND="${BRAND:-$BRAND_DEFAULT}"
+          [[ "${BRAND:0:1}" == "-" ]] || { echo "ERROR: brand must start with '-'" >&2; exit 1; }
+          BUILD_USER="${{ inputs.build_user }}"; BUILD_USER="${BUILD_USER:-$BUILD_USER_DEFAULT}"
+          BUILD_HOST="${{ inputs.build_host }}"; BUILD_HOST="${BUILD_HOST:-$BUILD_HOST_DEFAULT}"
+          BUILD_VER="${{ inputs.build_version }}"; BUILD_VER="${BUILD_VER:-$BUILD_VERSION_DEFAULT}"
+          BUILD_TS="${{ inputs.build_date }}"; BUILD_TS="${BUILD_TS:-$KBUILD_BUILD_TIMESTAMP_DEFAULT}"
+          UNAME_PREVIEW="Linux version 4.9.337${BRAND} (${BUILD_USER}@${BUILD_HOST}) #${BUILD_VER} SMP PREEMPT"
+          echo "BRAND=$BRAND"                     >> "$GITHUB_ENV"
+          echo "BUILD_USER=$BUILD_USER"           >> "$GITHUB_ENV"
+          echo "BUILD_HOST=$BUILD_HOST"           >> "$GITHUB_ENV"
+          echo "BUILD_VERSION=$BUILD_VER"         >> "$GITHUB_ENV"
+          echo "KBUILD_BUILD_TIMESTAMP=$BUILD_TS" >> "$GITHUB_ENV"
+          echo "UNAME_PREVIEW=$UNAME_PREVIEW"     >> "$GITHUB_ENV"
+          { echo "profile=${{ inputs.profile }}"; echo "toolchain=${{ inputs.toolchain }}"; \
+            echo "brand=$BRAND"; echo "uname_preview=$UNAME_PREVIEW"; } >> "$ABS_LOG/inputs.env"
 
       - name: Preflight — verify base ref and clean worktree
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
+          mkdir -p "$ABS_LOG"
           EXPECTED="${{ inputs.base_ref }}"
           current_branch=$(git rev-parse --abbrev-ref HEAD || true)
           if [[ "$current_branch" != "$EXPECTED" && "$current_branch" != "HEAD" ]]; then
