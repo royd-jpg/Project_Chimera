@@ -1,0 +1,279 @@
+name: Project Chimera Mk9 — ExyHyperBrick Merge Build (chimera-mk9-merge-build.yml)
+
+permissions:
+  contents: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "Build profile: cm8 (runtime SUSFS spoof) or cm8e (compile-time identity)"
+        required: true
+        type: choice
+        options: [cm8, cm8e]
+        default: cm8
+      toolchain:
+        description: "Toolchain: aosp19/aosp20/aosp21/aosp22/neutron19/zyc_stable/clang21-eva-gcc"
+        required: true
+        type: choice
+        options: [aosp19, aosp20, aosp21, aosp22, neutron19, zyc_stable, clang21-eva-gcc]
+        default: aosp21
+      dry_run:
+        description: "Validate only — skip build and package"
+        required: false
+        type: boolean
+        default: false
+      do_release:
+        description: "Create a GitHub Release after successful build"
+        required: false
+        type: boolean
+        default: false
+      base_ref:
+        description: "ExyHyperBrick base ref/branch/SHA (4.9.337 Exynos9810 BSP)"
+        required: false
+        type: string
+        default: "lineage-23.2"
+      ksu_repo:
+        description: "KernelSU-Next git URL"
+        required: false
+        type: string
+        default: "https://github.com/gavdoc38/KernelSU-Next.git"
+      ksu_commit:
+        description: "KernelSU exact commit SHA (pin)"
+        required: false
+        type: string
+        default: "242f245b2c971eb5c1cc4a689e01dcdeaff4c939"
+      brand:
+        description: "LOCALVERSION suffix (must start with '-')"
+        required: false
+        type: string
+        default: "-Chimera_Mk9_Merge"
+      build_user:
+        description: "KBUILD_BUILD_USER"
+        required: false
+        type: string
+        default: "C43L4N"
+      build_host:
+        description: "KBUILD_BUILD_HOST"
+        required: false
+        type: string
+        default: "AegisDevLabs"
+      build_version:
+        description: "KBUILD_BUILD_VERSION (#N token)"
+        required: false
+        type: string
+        default: "1"
+      build_date:
+        description: "KBUILD_BUILD_TIMESTAMP (deterministic)"
+        required: false
+        type: string
+        default: "Mon 1 Jan 00:00:00 UTC 2026"
+
+env:
+  BASE_REPO: "ExyHyperBrick/android_kernel_samsung_exynos9810"
+  CHIMERA_REPO: "https://github.com/royd-jpg/Project_Chimera.git"
+  CHIMERA_REF: "chimera-mk8"
+  KERNEL_DIR: "kernel"
+  OUT_DIR: "kernel-out"
+  LOG_DIR: "logs"
+  DEFCONFIG: "arch/arm64/configs/exynos9810-star2lte_defconfig"
+  CCACHE_MAXSIZE: "3G"
+  BRAND_DEFAULT: "-Chimera_Mk9_Merge"
+  BUILD_USER_DEFAULT: "_Terminal_Echo"
+  BUILD_HOST_DEFAULT: "AegisDevLabs"
+  BUILD_VERSION_DEFAULT: "1"
+  KBUILD_BUILD_TIMESTAMP_DEFAULT: "Mon 1 Jan 00:00:00 UTC 2026"
+  PROFILE: ${{ inputs.profile }}
+  TOOLCHAIN: ${{ inputs.toolchain }}
+  IDENTITY_ENGINE_ACTIVE: ${{ inputs.profile == 'cm8e' }}
+
+jobs:
+  build:
+    name: Chimera Mk9 Merge Build — ${{ inputs.profile }} / ${{ inputs.toolchain }}
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Install build dependencies
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            aria2 bc bison build-essential ccache flex \
+            git libelf-dev libssl-dev lz4 python3 \
+            rsync zstd cpio pahole zip
+
+      - name: Checkout Project_Chimera (workflow repo — patches + cfg)
+        uses: actions/checkout@v4
+        with:
+          path: .
+          fetch-depth: 1
+          clean: false
+
+      - name: Checkout ExyHyperBrick base kernel (4.9.337)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.BASE_REPO }}
+          ref: ${{ inputs.base_ref }}
+          path: ${{ env.KERNEL_DIR }}
+          fetch-depth: 0
+          clean: false
+
+      - name: Prepare workspace directories & Identity
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/$LOG_DIR"
+          mkdir -p "$GITHUB_WORKSPACE/$OUT_DIR"
+          echo "ABS_LOG=$GITHUB_WORKSPACE/$LOG_DIR"        >> "$GITHUB_ENV"
+          echo "ABS_OUT=$GITHUB_WORKSPACE/$OUT_DIR"        >> "$GITHUB_ENV"
+          echo "ABS_KERNEL=$GITHUB_WORKSPACE/$KERNEL_DIR"  >> "$GITHUB_ENV"
+          echo "ABS_TC=$GITHUB_WORKSPACE/toolchains/clang" >> "$GITHUB_ENV"
+          
+          BRAND="${{ inputs.brand }}"; BRAND="${BRAND:-$BRAND_DEFAULT}"
+          BUILD_USER="${{ inputs.build_user }}"; BUILD_USER="${BUILD_USER:-$BUILD_USER_DEFAULT}"
+          BUILD_HOST="${{ inputs.build_host }}"; BUILD_HOST="${BUILD_HOST:-$BUILD_HOST_DEFAULT}"
+          BUILD_VER="${{ inputs.build_version }}"; BUILD_VER="${BUILD_VER:-$BUILD_VERSION_DEFAULT}"
+          BUILD_TS="${{ inputs.build_date }}"; BUILD_TS="${BUILD_TS:-$KBUILD_BUILD_TIMESTAMP_DEFAULT}"
+          UNAME_PREVIEW="Linux version 4.9.337${BRAND} (${BUILD_USER}@${BUILD_HOST}) #${BUILD_VER} SMP PREEMPT"
+          
+          echo "BRAND=$BRAND"                     >> "$GITHUB_ENV"
+          echo "BUILD_USER=$BUILD_USER"           >> "$GITHUB_ENV"
+          echo "BUILD_HOST=$BUILD_HOST"           >> "$GITHUB_ENV"
+          echo "BUILD_VERSION=$BUILD_VER"         >> "$GITHUB_ENV"
+          echo "KBUILD_BUILD_TIMESTAMP=$BUILD_TS" >> "$GITHUB_ENV"
+          echo "UNAME_PREVIEW=$UNAME_PREVIEW"     >> "$GITHUB_ENV"
+
+      - name: Preflight — verify base ref
+        working-directory: ${{ env.KERNEL_DIR }}
+        run: |
+          BASE_COMMIT=$(git rev-parse HEAD)
+          echo "BASE_COMMIT=$BASE_COMMIT" >> "$GITHUB_ENV"
+          echo "BASE_REPO=${{ env.BASE_REPO }} @ $BASE_COMMIT" | tee "$ABS_LOG/preflight.log"
+
+      - name: Fetch Chimera Mk8 reference & KernelSU-Next
+        working-directory: ${{ env.KERNEL_DIR }}
+        run: |
+          set -Eeuo pipefail
+          # Fetch Chimera as patch source
+          git remote add chimera "${{ env.CHIMERA_REPO }}" || true
+          git fetch --no-tags --depth=1 chimera "${{ env.CHIMERA_REF }}"
+          CHIMERA_TIP=$(git rev-parse chimera/${{ env.CHIMERA_REF }})
+          echo "CHIMERA_COMMIT=$CHIMERA_TIP" >> "$GITHUB_ENV"
+          
+          # Clone KSU-Next directly into drivers/
+          KSU_DIR="drivers/kernelsu"
+          rm -rf "$KSU_DIR"
+          git clone --depth=100 "${{ inputs.ksu_repo }}" "$KSU_DIR"
+          git -C "$KSU_DIR" fetch --no-tags origin "${{ inputs.ksu_commit }}" || true
+          git -C "$KSU_DIR" checkout "${{ inputs.ksu_commit }}"
+          
+          # Wire KSU into drivers
+          grep -q 'kernelsu' drivers/Makefile || echo 'obj-y += kernelsu/' >> drivers/Makefile
+          grep -q 'kernelsu/kernel/Kconfig' drivers/Kconfig || sed -i '/endmenu/i source "drivers/kernelsu/kernel/Kconfig"' drivers/Kconfig
+
+      - name: Apply KSU + SUSFS Patch Stack
+        working-directory: ${{ env.KERNEL_DIR }}
+        run: bash "$GITHUB_WORKSPACE/patches/apply_ksu_susfs_patches.sh"
+
+      - name: Merge Kconfig fragment (chimera-ksu-susfs.cfg)
+        working-directory: ${{ env.KERNEL_DIR }}
+        run: |
+          set -Eeuo pipefail
+          cp "$GITHUB_WORKSPACE/chimera-ksu-susfs.cfg" /tmp/chimera-ksu-susfs.cfg
+          make O="$ABS_OUT" ARCH=arm64 "$(basename "$DEFCONFIG")"
+          scripts/kconfig/merge_config.sh -m -O "$ABS_OUT" "$ABS_OUT/.config" /tmp/chimera-ksu-susfs.cfg
+          make O="$ABS_OUT" ARCH=arm64 olddefconfig
+
+      - name: Config Guard Pass
+        working-directory: ${{ env.KERNEL_DIR }}
+        run: |
+          set -Eeuo pipefail
+          CFG="$ABS_OUT/.config"
+          FAIL=0
+          for sym in CONFIG_RKP_KDP CONFIG_UH_RKP CONFIG_TIMA CONFIG_TIMA_LKMAUTH CONFIG_FIVE CONFIG_SEC_RESTRICT_ROOTING CONFIG_SEC_RESTRICT_SETUID; do
+            if grep -qE "^${sym}=y" "$CFG"; then
+              echo "FATAL: $sym=y is set" | tee -a "$ABS_LOG/config-guard.log"
+              FAIL=1
+            fi
+          done
+          for sym in CONFIG_KSU CONFIG_KSU_SUSFS CONFIG_KSU_SUSFS_SUS_PATH CONFIG_KSU_SUSFS_SUS_MAP; do
+            if ! grep -qE "^${sym}=y" "$CFG"; then
+              echo "FATAL: $sym is missing" | tee -a "$ABS_LOG/config-guard.log"
+              FAIL=1
+            fi
+          done
+          [[ $FAIL -eq 0 ]] || exit 1
+
+      - name: Resolve & Cache Toolchain
+        id: tc-resolve
+        run: |
+          TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/21b19c041de1f1df9b97fd9902ae5405c6cf8eb9/clang-r563880c.tar.gz"
+          echo "TC_URL=$TC_URL" >> "$GITHUB_ENV"
+          echo "TC_CACHE_KEY=aosp-clang-r563880c-ubuntu-24.04-v2" >> "$GITHUB_ENV"
+
+      - name: Cache toolchain
+        uses: actions/cache@v4
+        id: tc-cache
+        with:
+          path: toolchains/clang
+          key: ${{ env.TC_CACHE_KEY }}
+
+      - name: Download Toolchain
+        if: steps.tc-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p toolchains/clang
+          aria2c -x4 -s4 -q -d /tmp -o clang.tar.gz "$TC_URL"
+          tar -C toolchains/clang -xzf /tmp/clang.tar.gz
+
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: chimera-mk9-${{ inputs.profile }}-${{ inputs.toolchain }}-${{ github.sha }}
+          max-size: ${{ env.CCACHE_MAXSIZE }}
+
+      - name: Build Kernel
+        if: ${{ inputs.dry_run != 'true' }}
+        working-directory: ${{ env.KERNEL_DIR }}
+        env:
+          KBUILD_BUILD_USER: "${{ env.BUILD_USER }}"
+          KBUILD_BUILD_HOST: "${{ env.BUILD_HOST }}"
+          KBUILD_BUILD_VERSION: "${{ env.BUILD_VERSION }}"
+          KBUILD_BUILD_TIMESTAMP: "${{ env.KBUILD_BUILD_TIMESTAMP }}"
+        run: |
+          set -Eeuo pipefail
+          export PATH="$ABS_TC/bin:$PATH"
+          JOBS=$(nproc)
+          make O="$ABS_OUT" ARCH=arm64 CC="ccache clang" CLANG_TRIPLE=aarch64-linux-gnu- \
+               CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+               LLVM=1 LLVM_IAS=1 -j${JOBS} LOCALVERSION="${BRAND}" Image.gz-dtb
+
+      - name: NM Symbol Guard Pass
+        if: ${{ inputs.dry_run != 'true' }}
+        working-directory: ${{ env.KERNEL_DIR }}
+        run: |
+          export PATH="$ABS_TC/bin:$PATH"
+          llvm-nm "$ABS_OUT/vmlinux" > "$ABS_LOG/vmlinux-symbols.log"
+          FAIL=0
+          for sym in ksu_handle_setresuid ksu_handle_execveat ksu_handle_faccessat susfs_is_inode_sus_path; do
+            if ! grep -q "$sym" "$ABS_LOG/vmlinux-symbols.log"; then
+              echo "FATAL: $sym missing" | tee -a "$ABS_LOG/nm-guard.log"
+              FAIL=1
+            fi
+          done
+          [[ $FAIL -eq 0 ]] || exit 1
+
+      - name: Package & Upload Artifacts
+        if: ${{ inputs.dry_run != 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: chimera-mk9-image-${{ inputs.profile }}
+          path: ${{ env.ABS_OUT }}/arch/arm64/boot/Image.gz-dtb
+
+      - name: Upload Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chimera-mk9-logs-${{ github.run_id }}
+          path: ${{ env.ABS_LOG }}/**
