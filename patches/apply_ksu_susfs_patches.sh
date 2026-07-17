@@ -405,8 +405,55 @@ if [[ -d KernelSU-Next/kernel ]]; then
     echo 'obj-$(CONFIG_KSU) += ../KernelSU-Next/kernel/' >> drivers/Makefile
     log "PATCHED: drivers/Makefile (+KernelSU-Next obj glue)"
   fi
+
+  # ── ksu.h header search path ────────────────────────────────────────────
+  # Our call-site patches (fs/open.c, fs/exec.c, kernel/sys.c) do
+  # `#include <linux/ksu.h>`. That only resolves if some -I on the global
+  # compile line points at a directory that itself CONTAINS a `linux/`
+  # subdirectory holding ksu.h. Neither drivers/Kconfig nor drivers/Makefile
+  # glue above provides that -I, which is exactly why the build fails with:
+  #   fatal error: 'linux/ksu.h' file not found
+  # Discover the header wherever KernelSU-Next ships it and wire an -I to
+  # its parent-of-"linux" directory, rather than hardcoding a path that will
+  # break if upstream KSU-Next reorganises its tree.
+  KSU_HDR_PATH=$(find KernelSU-Next -type f -name 'ksu.h' 2>/dev/null | head -1 || true)
+  if [[ -n "$KSU_HDR_PATH" ]]; then
+    HDR_PARENT_DIR=$(dirname "$KSU_HDR_PATH")
+    if [[ "$(basename "$HDR_PARENT_DIR")" == "linux" ]]; then
+      KSU_INCLUDE_DIR=$(dirname "$HDR_PARENT_DIR")
+    else
+      # ksu.h isn't nested under a linux/ dir in this KSU-Next revision —
+      # fall back to its immediate directory and let the compiler error
+      # surface clearly if the #include <linux/ksu.h> spelling doesn't match.
+      KSU_INCLUDE_DIR="$HDR_PARENT_DIR"
+      log "WARN: ksu.h found at $KSU_HDR_PATH but its parent dir is not named 'linux' — include path may still be wrong, verify manually"
+    fi
+    if ! grep -q 'KSU_INCLUDE_DIR_MARKER' Makefile 2>/dev/null; then
+      # Insert right after the LINUXINCLUDE definition block so it applies
+      # kernel-tree-wide (fs/, kernel/, drivers/ all inherit LINUXINCLUDE).
+      if grep -q '^LINUXINCLUDE' Makefile; then
+        awk -v inc="$KSU_INCLUDE_DIR" '
+          {print}
+          /^LINUXINCLUDE/ && !done {
+            print "LINUXINCLUDE += -I$(srctree)/" inc " # KSU_INCLUDE_DIR_MARKER"
+            done=1
+          }
+        ' Makefile > Makefile.chimera.tmp && mv Makefile.chimera.tmp Makefile
+        log "PATCHED: Makefile (+LINUXINCLUDE -I$KSU_INCLUDE_DIR for linux/ksu.h)"
+      else
+        log "FATAL: could not find LINUXINCLUDE in top-level Makefile — inspect manually, KSU headers will not resolve"
+        exit 1
+      fi
+    else
+      log "SKIP (present): Makefile KSU include path glue"
+    fi
+  else
+    log "FATAL: ksu.h not found anywhere under KernelSU-Next/ — submodule checkout is incomplete or KSU-Next revision doesn't ship this header; aborting"
+    exit 1
+  fi
 else
-  log "WARN: KernelSU-Next/kernel submodule not present at glue time — run submodule init first"
+  log "FATAL: KernelSU-Next/kernel submodule not present at glue time — run submodule init first"
+  exit 1
 fi
 
 log "=== Patch stack application complete ==="
