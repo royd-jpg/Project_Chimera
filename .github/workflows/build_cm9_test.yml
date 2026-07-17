@@ -166,7 +166,34 @@ jobs:
           { echo "profile=${{ inputs.profile }}"; echo "toolchain=${{ inputs.toolchain }}"; \
             echo "brand=$BRAND"; echo "uname_preview=$UNAME_PREVIEW"; } >> "$ABS_LOG/inputs.env"
 
-      # ── 2. Checkout ExyHyperBrick as IMMUTABLE base ─────────────────────────
+      # ── 2. Checkout THIS repo (Project_Chimera) into workspace root ────────
+      # This is what actually holds patches/apply_ksu_susfs_patches.sh and
+      # chimera-ksu-susfs.cfg. Without this step $GITHUB_WORKSPACE root is
+      # empty (only kernel/ gets populated below), causing:
+      #   bash: .../patches/apply_ksu_susfs_patches.sh: No such file or directory
+      - name: Checkout Project_Chimera (workflow repo — patches + Kconfig fragment)
+        uses: actions/checkout@v4
+        with:
+          path: .
+          fetch-depth: 1
+
+      - name: Verify required repo-local files are present
+        run: |
+          set -Eeuo pipefail
+          MISSING=0
+          for f in patches/apply_ksu_susfs_patches.sh chimera-ksu-susfs.cfg; do
+            if [[ ! -f "$GITHUB_WORKSPACE/$f" ]]; then
+              echo "FATAL: required file missing from repo checkout: $f" >&2
+              MISSING=1
+            else
+              echo "OK: found $f"
+            fi
+          done
+          [[ -f "$GITHUB_WORKSPACE/patches/apply_ksu_susfs_patches.sh" ]] && \
+            chmod +x "$GITHUB_WORKSPACE/patches/apply_ksu_susfs_patches.sh"
+          [[ $MISSING -eq 0 ]] || { echo "Commit these files to the repo root before running this workflow." >&2; exit 1; }
+
+      # ── 3. Checkout ExyHyperBrick as IMMUTABLE base ─────────────────────────
       - name: Checkout ExyHyperBrick base kernel (4.9.337 Exynos9810 BSP)
         uses: actions/checkout@v4
         with:
@@ -195,7 +222,7 @@ jobs:
           echo "BASE_COMMIT=$BASE_COMMIT" >> "$GITHUB_ENV"
           echo "BASE_REPO=${{ env.BASE_REPO }} @ $BASE_COMMIT" | tee -a "$ABS_LOG/preflight.log"
 
-      # ── 3. Chimera Mk8 as reference/patch-source remote (NOT merged) ───────
+      # ── 4. Chimera Mk8 as reference/patch-source remote (NOT merged) ───────
       - name: Fetch Chimera Mk8 reference (patch source only — no git merge)
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
@@ -207,7 +234,7 @@ jobs:
           echo "CHIMERA_COMMIT=$CHIMERA_TIP" >> "$GITHUB_ENV"
           echo "Chimera Mk8 reference pinned at $CHIMERA_TIP (fetched only, never merged into base)" | tee -a "$ABS_LOG/preflight.log"
 
-      # ── 4. KernelSU-Next submodule ──────────────────────────────────────────
+      # ── 5. KernelSU-Next submodule ──────────────────────────────────────────
       - name: Initialise KernelSU-Next submodule
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
@@ -247,7 +274,7 @@ jobs:
             echo "  traceability only."
           } > "$ABS_LOG/susfs-refs.txt"
 
-      # ── 5. Apply curated KSU + SUSFS patch stack onto ExyHyperBrick ─────────
+      # ── 6. Apply curated KSU + SUSFS patch stack onto ExyHyperBrick ─────────
       - name: Apply curated KSU-Next + SUSFS patch stack
         working-directory: ${{ env.KERNEL_DIR }}
         run: bash "$GITHUB_WORKSPACE/patches/apply_ksu_susfs_patches.sh"
@@ -272,7 +299,7 @@ jobs:
           echo "$BRAND" > localversion
           echo "Overlay applied (profile=$PROFILE, brand=$BRAND)" | tee -a "$LOG"
 
-      # ── 6. Kconfig fragment merge + defconfig baseline ──────────────────────
+      # ── 7. Kconfig fragment merge + defconfig baseline ──────────────────────
       - name: Merge Kconfig fragment (chimera-ksu-susfs.cfg) via merge_config.sh
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
@@ -283,7 +310,7 @@ jobs:
             | tee "$ABS_LOG/merge-config.log"
           make O="$ABS_OUT" ARCH=arm64 olddefconfig | tee -a "$ABS_LOG/merge-config.log"
 
-      # ── 7. Safety guard — FAIL if disallowed symbols are enabled ────────────
+      # ── 8. Safety guard — FAIL if disallowed symbols are enabled ────────────
       - name: Guard pass — Samsung security features must remain disabled
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
@@ -318,7 +345,7 @@ jobs:
           done
           [[ $FAIL -eq 0 ]] || { echo "Config guard failed — aborting build" >&2; exit 1; }
 
-      # ── 8. Toolchain resolution (reused from Chimera Mk8) ───────────────────
+      # ── 9. Toolchain resolution (reused from Chimera Mk8) ───────────────────
       - name: Resolve toolchain configuration
         id: tc-resolve
         run: |
@@ -375,7 +402,7 @@ jobs:
             chimera-mk9-${{ inputs.profile }}-${{ inputs.toolchain }}-${{ env.TC_CACHE_KEY }}-
           max-size: ${{ env.CCACHE_MAXSIZE }}
 
-      # ── 9. Finalise .config + summary ───────────────────────────────────────
+      # ── 10. Finalise .config + summary ───────────────────────────────────────
       - name: Finalise kernel .config
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
@@ -388,7 +415,7 @@ jobs:
           grep -E "^(CONFIG_KSU|CONFIG_KSU_SUSFS|CONFIG_SEC_RESTRICT|CONFIG_RKP|CONFIG_TIMA|CONFIG_FIVE|CONFIG_LOCALVERSION)" \
             "$ABS_OUT/.config" | tee -a "$ABS_LOG/config-summary.txt"
 
-      # ── 10. Build ────────────────────────────────────────────────────────────
+      # ── 11. Build ────────────────────────────────────────────────────────────
       - name: Build kernel
         if: ${{ inputs.dry_run != 'true' }}
         working-directory: ${{ env.KERNEL_DIR }}
@@ -421,7 +448,7 @@ jobs:
           fi
           make "${MAKE_ARGS[@]}" Image.gz-dtb 2>&1 | tee "$ABS_LOG/build.log"
 
-      # ── 11. nm guard — required KSU/SUSFS symbols must be present ───────────
+      # ── 12. nm guard — required KSU/SUSFS symbols must be present ───────────
       - name: Guard pass — verify KSU/SUSFS hooks are compiled in
         if: ${{ inputs.dry_run != 'true' }}
         working-directory: ${{ env.KERNEL_DIR }}
@@ -446,7 +473,7 @@ jobs:
           done
           [[ $FAIL -eq 0 ]] || { echo "nm symbol guard failed" >&2; exit 1; }
 
-      # ── 12. Package + upload ────────────────────────────────────────────────
+      # ── 13. Package + upload ────────────────────────────────────────────────
       - name: Locate Image.gz-dtb and package artifacts
         if: ${{ inputs.dry_run != 'true' }}
         id: package
