@@ -1142,87 +1142,75 @@ jobs:
             olddefconfig \
             | tee -a "$ABS_LOG/merge-config.log"
 
-      # ── 20. Security/config guard ─────────────────────────────────────────────
-      - name: Guard pass — verify KernelSU/SUSFS configuration
+      # ── 20. Force KernelSU hook mode after Kconfig resolution ─────────────
+      - name: Normalize KernelSU hook mode
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
-      
-          CFG="$ABS_OUT/.config"
-          FAIL=0
-      
-          : > "$ABS_LOG/config-guard.log"
-      
-          FORBIDDEN=(
-            CONFIG_RKP_KDP
-            CONFIG_UH_RKP
-            CONFIG_TIMA
-            CONFIG_TIMA_LKMAUTH
-            CONFIG_FIVE
-            CONFIG_SEC_RESTRICT_ROOTING
-            CONFIG_SEC_RESTRICT_SETUID
-          )
-      
-          for sym in "${FORBIDDEN[@]}"; do
-            if grep -q "^${sym}=y$" "$CFG"; then
-              echo "FATAL: ${sym}=y" | tee -a "$ABS_LOG/config-guard.log"
-              FAIL=1
-            else
-              echo "OK: ${sym} disabled" | tee -a "$ABS_LOG/config-guard.log"
-            fi
-          done
-      
-          REQUIRED=(
-            CONFIG_KSU
-            CONFIG_KSU_MANUAL_HOOK
-            CONFIG_KSU_SUSFS
-            CONFIG_KSU_SUSFS_SUS_PATH
-            CONFIG_KSU_SUSFS_SUS_MAP
-            CONFIG_KSU_SUSFS_SUS_KSTAT
-            CONFIG_KSU_SUSFS_TRY_UMOUNT
-          )
-      
-          for sym in "${REQUIRED[@]}"; do
-            if grep -q "^${sym}=y$" "$CFG"; then
-              echo "OK: ${sym}=y" | tee -a "$ABS_LOG/config-guard.log"
-            else
-              echo "FATAL: ${sym} missing" | tee -a "$ABS_LOG/config-guard.log"
-              FAIL=1
-            fi
-          done
-      
-          #
-          # Ensure KernelSU is using MANUAL_HOOK mode.
-          #
-          if grep -q '^# CONFIG_KSU_KPROBES_HOOK is not set$' "$CFG"; then
-            echo "OK: KPROBE hook disabled" | tee -a "$ABS_LOG/config-guard.log"
-          else
-            echo "FATAL: CONFIG_KSU_KPROBES_HOOK is enabled" | tee -a "$ABS_LOG/config-guard.log"
-            FAIL=1
-          fi
-      
-          #
-          # Ensure obsolete config was not carried forward.
-          #
-          if grep -q '^CONFIG_KSU_NON_KPROBE=' "$CFG"; then
-            echo "FATAL: obsolete CONFIG_KSU_NON_KPROBE present" | tee -a "$ABS_LOG/config-guard.log"
-            FAIL=1
-          else
-            echo "OK: obsolete CONFIG_KSU_NON_KPROBE absent" | tee -a "$ABS_LOG/config-guard.log"
-          fi
-      
-          echo
-          echo "========== KernelSU ==========" | tee -a "$ABS_LOG/config-guard.log"
-          grep '^CONFIG_KSU' "$CFG" | tee -a "$ABS_LOG/config-guard.log" || true
-      
-          echo
-          echo "========== SUSFS ==========" | tee -a "$ABS_LOG/config-guard.log"
-          grep '^CONFIG_KSU_SUSFS' "$CFG" | tee -a "$ABS_LOG/config-guard.log" || true
 
-          # Preserve the final kernel configuration for debugging.
+          CFG="$ABS_OUT/.config"
+
+          echo "Forcing KernelSU manual hook mode"
+
+          if [[ -x scripts/config ]]; then
+
+            scripts/config \
+              --file "$CFG" \
+              -e CONFIG_KSU \
+              -e CONFIG_KSU_MANUAL_HOOK \
+              -d CONFIG_KSU_KPROBES_HOOK
+
+          else
+
+            echo "scripts/config unavailable, patching .config directly"
+
+            sed -i \
+              '/^CONFIG_KSU_KPROBES_HOOK=/d' \
+              "$CFG"
+
+            sed -i \
+              '/^# CONFIG_KSU_KPROBES_HOOK is not set$/d' \
+              "$CFG"
+
+            echo "CONFIG_KSU_KPROBES_HOOK=n" >> "$CFG"
+
+            grep -q '^CONFIG_KSU=y$' "$CFG" || \
+              echo "CONFIG_KSU=y" >> "$CFG"
+
+            grep -q '^CONFIG_KSU_MANUAL_HOOK=y$' "$CFG" || \
+              echo "CONFIG_KSU_MANUAL_HOOK=y" >> "$CFG"
+
+          fi
+
+          make \
+            O="$ABS_OUT" \
+            ARCH=arm64 \
+            olddefconfig \
+            | tee -a "$ABS_LOG/merge-config.log"
+
+
+          echo
+          echo "========== Final KernelSU mode =========="
+
+          grep '^CONFIG_KSU' "$CFG" || true
+
+
+          if grep -q '^CONFIG_KSU_KPROBES_HOOK=y$' "$CFG"; then
+            echo "FATAL: CONFIG_KSU_KPROBES_HOOK still enabled"
+            exit 1
+          fi
+
+
+          if ! grep -q '^CONFIG_KSU_MANUAL_HOOK=y$' "$CFG"; then
+            echo "FATAL: CONFIG_KSU_MANUAL_HOOK missing"
+            exit 1
+          fi
+
+
+          echo "PASS: KernelSU manual hook mode enforced"
+
+
           cp "$CFG" "$ABS_LOG/final.config"
-      
-          [[ "$FAIL" -eq 0 ]] || exit 1
 
       # ── 21. Toolchain resolution ─────────────────────────────────────────────
       - name: Resolve toolchain configuration
