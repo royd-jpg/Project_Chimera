@@ -936,129 +936,106 @@ jobs:
 
           [[ "$FAIL" -eq 0 ]] || exit 1
 
-      # ── 18. Toolchain resolution ─────────────────────────────────────────────
+      # ── 11. Toolchain resolution ──────────────────────────────────────────────
       - name: Resolve toolchain configuration
+        id: tc-resolve
         run: |
           set -Eeuo pipefail
-
-          case "${{ inputs.toolchain }}" in
+          TOOLCHAIN="${{ inputs.toolchain }}"
+          TC_URL=""
+          TC_ARCHIVE_FMT="tar.gz"
+          TC_CACHE_KEY=""
+          TC_LLVM_IAS="1"
+          TC_USE_FULL_LLVM="true"
+          case "$TOOLCHAIN" in
             aosp19)
               TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/f60b8b55282f002f594f452ce22dfd6cf1fd7e3c/clang-r596125.tar.gz"
-              TC_FMT="tar.gz"
-              TC_KEY="aosp-clang-r596125"
+              TC_CACHE_KEY="aosp-clang-r596125-ubuntu-24.04-v2"
               ;;
-
             aosp20)
               TC_URL="https://gitlab.com/kei-space/clang/r547379/-/archive/master/r547379-master.tar.gz"
-              TC_FMT="tar.gz"
-              TC_KEY="aosp-clang-r547379"
+              TC_CACHE_KEY="aosp-clang-r547379-ubuntu-24.04-v2"
               ;;
-
             aosp21)
               TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/21b19c041de1f1df9b97fd9902ae5405c6cf8eb9/clang-r563880c.tar.gz"
-              TC_FMT="tar.gz"
-              TC_KEY="aosp-clang-r563880c"
+              TC_CACHE_KEY="aosp-clang-r563880c-ubuntu-24.04-v2"
               ;;
-
             aosp22)
               TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/mirror-goog-main-llvm-toolchain-source/clang-r596125.tar.gz"
-              TC_FMT="tar.gz"
-              TC_KEY="aosp-clang-r596125"
+              TC_CACHE_KEY="aosp-clang-r596125-ubuntu-24.04-v2"
               ;;
-
             neutron19)
               TC_URL="https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/10032024/neutron-clang-10032024.tar.zst"
-              TC_FMT="tar.zst"
-              TC_KEY="neutron-clang-10032024"
+              TC_ARCHIVE_FMT="tar.zst"
+              TC_CACHE_KEY="neutron-clang-10032024-ubuntu-24.04-v2"
               ;;
-
             zyc_stable)
-              TC_URL="$(curl -fsSL https://raw.githubusercontent.com/ZyCromerZ/Clang/main/Clang-main-link.txt)"
-              TC_FMT="tar.xz"
-              TC_KEY="zyc-clang-stable"
+              TC_CACHE_KEY="zyc-clang-ubuntu-24.04-v2"
+              TC_URL=$(curl -fsSL \
+                "https://raw.githubusercontent.com/ZyCromerZ/Clang/main/Clang-main-link.txt" \
+                || true)
               ;;
-
             clang21-eva-gcc)
               TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/21b19c041de1f1df9b97fd9902ae5405c6cf8eb9/clang-r563880c.tar.gz"
-              TC_FMT="tar.gz"
-              TC_KEY="aosp-clang-r563880c-eva-gcc"
+              TC_CACHE_KEY="aosp-clang-r563880c-ubuntu-24.04-v2"
+              TC_USE_FULL_LLVM="false"
+              TC_LLVM_IAS="0"
               ;;
-
             *)
-              echo "FATAL: unsupported toolchain" >&2
+              echo "ERROR: unsupported toolchain '$TOOLCHAIN'" >&2
               exit 1
               ;;
           esac
-
           {
             echo "TC_URL=$TC_URL"
-            echo "TC_FMT=$TC_FMT"
-            echo "TC_KEY=$TC_KEY"
+            echo "TC_ARCHIVE_FMT=$TC_ARCHIVE_FMT"
+            echo "TC_CACHE_KEY=$TC_CACHE_KEY"
+            echo "TC_LLVM_IAS=$TC_LLVM_IAS"
+            echo "TC_USE_FULL_LLVM=$TC_USE_FULL_LLVM"
           } >> "$GITHUB_ENV"
-
+          echo "TC_CACHE_KEY=$TC_CACHE_KEY" >> "$GITHUB_OUTPUT"
       - name: Cache toolchain
         uses: actions/cache@v4
         id: tc-cache
         with:
           path: toolchains/clang
-          key: >-
-            ${{ runner.os }}-${{ env.TC_KEY }}-${{ hashFiles('.github/workflows/chimera-mk9-merge-build.yml') }}
+          key: ${{ env.TC_CACHE_KEY }}
 
-      - name: Download toolchain
+      - name: Download and extract toolchain
         if: steps.tc-cache.outputs.cache-hit != 'true'
         run: |
           set -Eeuo pipefail
-
-          rm -rf toolchains/clang
-
-          mkdir -p toolchains/clang
-
+          ARCHIVE="/tmp/clang_archive"
           aria2c \
             -x4 \
             -s4 \
-            -o /tmp/clang.archive \
+            -q \
+            -d /tmp \
+            -o clang_archive \
             "$TC_URL" \
-            || curl \
-              -fL \
-              "$TC_URL" \
-              -o /tmp/clang.archive
-
-          case "$TC_FMT" in
-            tar.gz)
-              tar \
-                -C toolchains/clang \
-                -xzf /tmp/clang.archive
+            || wget -O "$ARCHIVE" "$TC_URL"
+          rm -rf toolchains/clang
+          mkdir -p toolchains/clang
+          case "$TC_ARCHIVE_FMT" in
+            tar.gz|tar)
+              tar -C toolchains/clang -xzf "$ARCHIVE"
               ;;
-
             tar.xz)
-              tar \
-                -C toolchains/clang \
-                -xJf /tmp/clang.archive
+              tar -C toolchains/clang -xJf "$ARCHIVE"
               ;;
-
             tar.zst)
-              zstd \
-                -d \
-                /tmp/clang.archive \
-                -o /tmp/clang.tar
-
-              tar \
-                -C toolchains/clang \
-                -xf /tmp/clang.tar
-              ;;
-
-            *)
-              echo "FATAL: unsupported archive format: $TC_FMT" >&2
-              exit 1
+              zstd -d "$ARCHIVE" -o /tmp/clang.tar --force
+              tar -C toolchains/clang -xf /tmp/clang.tar
               ;;
           esac
-
-      # ── 19. ccache ───────────────────────────────────────────────────────────
+          chmod +x toolchains/clang/bin/* 2>/dev/null || true
       - name: Set up ccache
         uses: hendrikmuhs/ccache-action@v1.2
         with:
           key: >-
-            mk9-${{ inputs.profile }}-${{ inputs.toolchain }}-${{ env.TC_KEY }}
+            chimera-mk9-${{ inputs.profile }}-${{ inputs.toolchain }}-${{ env.TC_CACHE_KEY }}-${{ github.sha }}
+          restore-keys: |
+            chimera-mk9-${{ inputs.profile }}-${{ inputs.toolchain }}-${{ env.TC_CACHE_KEY }}-
           max-size: ${{ env.CCACHE_MAXSIZE }}
 
       # ── 20. Finalize config ──────────────────────────────────────────────────
