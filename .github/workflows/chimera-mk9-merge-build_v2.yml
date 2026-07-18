@@ -127,7 +127,8 @@ jobs:
         run: |
           KSU_SUB="drivers/kernelsu"
           mkdir -p "$KSU_SUB"
-          git clone --depth=100 "${{ inputs.ksu_repo }}" "$KSU_SUB"
+          # Remove --depth=100 to ensure the specific commit is fetched
+          git clone "${{ inputs.ksu_repo }}" "$KSU_SUB"
           git -C "$KSU_SUB" checkout "${{ inputs.ksu_commit }}"
           echo "KSU_COMMIT=$(git -C $KSU_SUB rev-parse HEAD)" >> "$ABS_LOG/ksu-commit.txt"
 
