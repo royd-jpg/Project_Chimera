@@ -472,10 +472,32 @@ jobs:
           # Balanced-brace scan from the opening brace of do_umount() to find
           # its matching closing brace, so the new function is inserted right
           # after do_umount() ends regardless of its exact body length.
+          # NOTE: must skip C comments (// and /* */) as well as string/char
+          # literals — an apostrophe inside a comment (e.g. "don't") would
+          # otherwise be misread as entering a char literal and desync the
+          # brace count for the rest of the scan.
           brace_start = src.find("{", idx)
-          depth, i, in_str, esc = 0, brace_start, None, False
-          while i < len(src):
+          depth, i, n = 0, brace_start, len(src)
+          in_str = None   # ' or " currently inside, else None
+          in_line_comment = False
+          in_block_comment = False
+          esc = False
+          while i < n:
               c = src[i]
+              nxt = src[i + 1] if i + 1 < n else ""
+
+              if in_line_comment:
+                  if c == "\n":
+                      in_line_comment = False
+                  i += 1
+                  continue
+              if in_block_comment:
+                  if c == "*" and nxt == "/":
+                      in_block_comment = False
+                      i += 2
+                      continue
+                  i += 1
+                  continue
               if in_str:
                   if esc:
                       esc = False
@@ -483,15 +505,28 @@ jobs:
                       esc = True
                   elif c == in_str:
                       in_str = None
-              else:
-                  if c in "'\"":
-                      in_str = c
-                  elif c == "{":
-                      depth += 1
-                  elif c == "}":
-                      depth -= 1
-                      if depth == 0:
-                          break
+                  i += 1
+                  continue
+
+              # Not in a string or comment — check for entry into one first.
+              if c == "/" and nxt == "/":
+                  in_line_comment = True
+                  i += 2
+                  continue
+              if c == "/" and nxt == "*":
+                  in_block_comment = True
+                  i += 2
+                  continue
+              if c in "'\"":
+                  in_str = c
+                  i += 1
+                  continue
+              if c == "{":
+                  depth += 1
+              elif c == "}":
+                  depth -= 1
+                  if depth == 0:
+                      break
               i += 1
           else:
               print("FATAL: unbalanced braces while scanning do_umount()", file=sys.stderr)
