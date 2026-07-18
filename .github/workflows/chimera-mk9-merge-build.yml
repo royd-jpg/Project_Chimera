@@ -527,28 +527,35 @@ jobs:
           print("kernel/reboot.c: KSU reboot hook applied")
           PYEOF
 
-      # ── 10. Fix SUSFS AVC symbol ────────────────────────────────────────────
-      - name: Patch fs/susfs.c — disabled AVC spoofing stub
+      # ── 6d. Fix linker error #1 — SUSFS AVC spoofing symbol type ─────────────
+      # The Chimera SUSFS tree exposes:
+      #
+      #   extern bool susfs_is_avc_log_spoofing_enabled;
+      #
+      # as a VARIABLE in fs/susfs.c.
+      #
+      # Do not create a function with the same identifier. That produces:
+      #
+      #   error: redefinition of 'susfs_is_avc_log_spoofing'
+      #   as different kind of symbol
+      #
+      - name: Patch fs/susfs.c — normalize AVC spoofing symbol usage
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           python3 << 'PYEOF'
           import sys
           from pathlib import Path
 
-          MARKER = "CMK9_AVC_LOG_SPOOF_STUB"
+          MARKER = "CMK9_AVC_LOG_SPOOF_SYMBOL_FIX"
           p = Path("fs/susfs.c")
           src = p.read_text()
 
           if MARKER in src:
-              print("fs/susfs.c: AVC stub already present")
+              print("fs/susfs.c: AVC spoofing symbol fix already present — skipping")
               sys.exit(0)
 
-          if "bool susfs_is_avc_log_spoofing_enabled(void)" in src:
-              print("fs/susfs.c: definition already exists")
-              sys.exit(0)
-
-          stub = (
-              "\n\n/* " + MARKER + " */\n"
+          bad_stub = (
+              "\n/* CMK9_AVC_LOG_SPOOF_STUB */\n"
               "#ifndef CONFIG_KSU_SUSFS_SPOOF_SELINUX\n"
               "bool susfs_is_avc_log_spoofing_enabled(void)\n"
               "{\n"
@@ -557,11 +564,35 @@ jobs:
               "#endif\n"
           )
 
-          p.write_text(src + stub)
+          if bad_stub in src:
+              src = src.replace(bad_stub, "", 1)
+              print("Removed incorrect AVC spoofing function stub")
 
-          print("fs/susfs.c: disabled AVC spoofing stub added")
+          old = "susfs_is_avc_log_spoofing_enabled()"
+          new = "susfs_is_avc_log_spoofing_enabled"
+
+          occurrences = src.count(old)
+
+          if occurrences:
+              src = src.replace(old, new)
+              print(
+                  "Normalized "
+                  f"{occurrences} function-style AVC spoofing reference(s)"
+              )
+          else:
+              print(
+                  "No function-style AVC spoofing references found; "
+                  "existing variable declaration preserved"
+              )
+
+          src += (
+              "\n\n/* " + MARKER +
+              " — SUSFS AVC spoofing symbol is a bool variable */\n"
+          )
+
+          p.write_text(src)
           PYEOF
-
+          
       # ── 11. Definitive path_umount backport ─────────────────────────────────
       - name: Patch fs/namespace.c and fs/internal.h — add path_umount
         working-directory: ${{ env.KERNEL_DIR }}
@@ -757,15 +788,65 @@ jobs:
             'CMK9_PATH_UMOUNT_BACKPORT|int path_umount' \
             fs/internal.h
 
+      - name: Diagnostic — verify SUSFS AVC spoofing symbol type
+        working-directory: ${{ env.KERNEL_DIR }}
+        run: |
+          set -Eeuo pipefail
+
+          python3 << 'PYEOF'
+          import re
+          import sys
+          from pathlib import Path
+
+          src = Path("fs/susfs.c").read_text()
+
+          if "CMK9_AVC_LOG_SPOOF_SYMBOL_FIX" not in src:
+              print(
+                  "FATAL: AVC spoofing symbol fix marker missing",
+                  file=sys.stderr
+              )
+              sys.exit(1)
+
+          if re.search(
+              r"\b(?:bool|int|void)\s+"
+              r"susfs_is_avc_log_spoofing_enabled\s*\(",
+              src
+          ):
+              print(
+                  "FATAL: AVC spoofing symbol still has a function definition",
+                  file=sys.stderr
+              )
+              sys.exit(1)
+
+          if not re.search(
+              r"\bextern\s+bool\s+"
+              r"susfs_is_avc_log_spoofing_enabled\s*;",
+              src
+          ):
+              print(
+                  "FATAL: expected bool variable declaration missing",
+                  file=sys.stderr
+              )
+              sys.exit(1)
+
+          print(
+              "PASS: susfs_is_avc_log_spoofing_enabled is a bool variable"
+          )
+          print(
+              "PASS: no conflicting function definition exists"
+          )
+          PYEOF
+
+          grep -n \
+            -E \
+            'CMK9_AVC_LOG_SPOOF_SYMBOL_FIX|susfs_is_avc_log_spoofing_enabled' \
+            fs/susfs.c
+
       # ── 13. Verify linker-fix source symbols ─────────────────────────────────
       - name: Diagnostic — verify linker-fix symbols
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
-
-          grep -n \
-            'susfs_is_avc_log_spoofing_enabled' \
-            fs/susfs.c
 
           grep -n \
             'ksu_handle_sys_reboot' \
