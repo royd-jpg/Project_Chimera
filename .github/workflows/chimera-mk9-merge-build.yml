@@ -18,12 +18,14 @@ name: Project Chimera Mk9 — ExyHyperBrick Merge Build
 #      KernelSU-Next assumes a path_umount(struct path *, int) helper that
 #      only exists in newer (5.9+) kernel trees. This 4.9.337 tree has no
 #      such helper. Fix: back-port a minimal path_umount() into
-#      fs/namespace.c, placed immediately after do_umount()'s closing brace
-#      (located via balanced-brace scan, not a guessed line number), built
-#      in-tree so no EXPORT_SYMBOL is required for vmlinux-internal linkage.
+#      fs/namespace.c, placed immediately after do_umount()'s unique literal
+#      tail anchor. A raw balanced-brace scan is unsafe in this Samsung tree
+#      because preprocessor branches can have textually asymmetric braces.
+#      The helper is also declared in fs/internal.h before compilation.
 #
 # Both fixes are applied via new steps 6d/6e, directly after the KSU/SUSFS
 # patch stack and the kernel/reboot.c hook fix, before the Chimera overlay.
+# path_umount is patched into fs/namespace.c before fs/built-in.o compilation.
 # Everything else in this file is unchanged from the last known-working
 # revision (lineage-23.2 base, CONFIG_KSU_MANUAL_HOOK, ksu_handle_sys_reboot
 # hook, corrected nm guard list).
@@ -157,6 +159,7 @@ jobs:
             git libelf-dev libssl-dev lz4 python3 \
             rsync zstd cpio pahole zip
           python3 --version
+
       - name: Install GCC cross-compiler (clang21-eva-gcc only)
         if: ${{ inputs.toolchain == 'clang21-eva-gcc' }}
         run: |
@@ -164,6 +167,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi \
             binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi
+
       # ── 2. Checkout Project_Chimera (workflow repo — patches + cfg) ──────────
       # clean: false is mandatory — prevents wiping logs/ and kernel-out/ on re-runs.
       - name: Checkout Project_Chimera (workflow repo — patches + Kconfig fragment)
@@ -185,12 +189,15 @@ jobs:
               echo "OK: found $f"
             fi
           done
+
           [[ -f "$GITHUB_WORKSPACE/patches/apply_ksu_susfs_patches.sh" ]] && \
             chmod +x "$GITHUB_WORKSPACE/patches/apply_ksu_susfs_patches.sh"
+
           [[ $MISSING -eq 0 ]] || {
             echo "Commit these files to the repo before running this workflow." >&2
             exit 1
           }
+
       # ── 3. Checkout ExyHyperBrick kernel (immutable base) ───────────────────
       - name: Checkout ExyHyperBrick base kernel (4.9.337 Exynos9810 BSP)
         uses: actions/checkout@v4
@@ -207,87 +214,139 @@ jobs:
           set -Eeuo pipefail
           mkdir -p "$GITHUB_WORKSPACE/$LOG_DIR"
           mkdir -p "$GITHUB_WORKSPACE/$OUT_DIR"
+
           echo "ABS_LOG=$GITHUB_WORKSPACE/$LOG_DIR"        >> "$GITHUB_ENV"
           echo "ABS_OUT=$GITHUB_WORKSPACE/$OUT_DIR"        >> "$GITHUB_ENV"
           echo "ABS_KERNEL=$GITHUB_WORKSPACE/$KERNEL_DIR"  >> "$GITHUB_ENV"
           echo "ABS_TC=$GITHUB_WORKSPACE/toolchains/clang" >> "$GITHUB_ENV"
+
       - name: Resolve build identity (runtime)
         run: |
           set -Eeuo pipefail
           mkdir -p "$ABS_LOG"
-          BRAND="${{ inputs.brand }}"; BRAND="${BRAND:-$BRAND_DEFAULT}"
-          [[ "${BRAND:0:1}" == "-" ]] || { echo "ERROR: brand must start with '-'" >&2; exit 1; }
-          BUILD_USER="${{ inputs.build_user }}"; BUILD_USER="${BUILD_USER:-$BUILD_USER_DEFAULT}"
-          BUILD_HOST="${{ inputs.build_host }}"; BUILD_HOST="${BUILD_HOST:-$BUILD_HOST_DEFAULT}"
-          BUILD_VER="${{ inputs.build_version }}"; BUILD_VER="${BUILD_VER:-$BUILD_VERSION_DEFAULT}"
-          BUILD_TS="${{ inputs.build_date }}"; BUILD_TS="${BUILD_TS:-$KBUILD_BUILD_TIMESTAMP_DEFAULT}"
+
+          BRAND="${{ inputs.brand }}"
+          BRAND="${BRAND:-$BRAND_DEFAULT}"
+
+          [[ "${BRAND:0:1}" == "-" ]] || {
+            echo "ERROR: brand must start with '-'" >&2
+            exit 1
+          }
+
+          BUILD_USER="${{ inputs.build_user }}"
+          BUILD_USER="${BUILD_USER:-$BUILD_USER_DEFAULT}"
+
+          BUILD_HOST="${{ inputs.build_host }}"
+          BUILD_HOST="${BUILD_HOST:-$BUILD_HOST_DEFAULT}"
+
+          BUILD_VER="${{ inputs.build_version }}"
+          BUILD_VER="${BUILD_VER:-$BUILD_VERSION_DEFAULT}"
+
+          BUILD_TS="${{ inputs.build_date }}"
+          BUILD_TS="${BUILD_TS:-$KBUILD_BUILD_TIMESTAMP_DEFAULT}"
+
           UNAME_PREVIEW="Linux version 4.9.337${BRAND} (${BUILD_USER}@${BUILD_HOST}) #${BUILD_VER} SMP PREEMPT"
+
           echo "BRAND=$BRAND"                     >> "$GITHUB_ENV"
           echo "BUILD_USER=$BUILD_USER"           >> "$GITHUB_ENV"
           echo "BUILD_HOST=$BUILD_HOST"           >> "$GITHUB_ENV"
           echo "BUILD_VERSION=$BUILD_VER"         >> "$GITHUB_ENV"
           echo "KBUILD_BUILD_TIMESTAMP=$BUILD_TS" >> "$GITHUB_ENV"
           echo "UNAME_PREVIEW=$UNAME_PREVIEW"     >> "$GITHUB_ENV"
-          { echo "profile=${{ inputs.profile }}"; echo "toolchain=${{ inputs.toolchain }}"; \
-            echo "brand=$BRAND"; echo "uname_preview=$UNAME_PREVIEW"; } >> "$ABS_LOG/inputs.env"
+
+          {
+            echo "profile=${{ inputs.profile }}"
+            echo "toolchain=${{ inputs.toolchain }}"
+            echo "brand=$BRAND"
+            echo "uname_preview=$UNAME_PREVIEW"
+          } >> "$ABS_LOG/inputs.env"
+
       - name: Preflight — verify base ref and clean worktree
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
           mkdir -p "$ABS_LOG"
+
           EXPECTED="${{ inputs.base_ref }}"
           current_branch=$(git rev-parse --abbrev-ref HEAD || true)
+
           if [[ "$current_branch" != "$EXPECTED" && "$current_branch" != "HEAD" ]]; then
             echo "WARN: expected ref '$EXPECTED', on branch '$current_branch'" \
               | tee -a "$ABS_LOG/preflight.log"
           fi
+
           if [[ -n "$(git status --porcelain)" ]]; then
             echo "ERROR: ExyHyperBrick checkout has uncommitted changes; base must be clean" >&2
             git status --porcelain
             exit 1
           fi
-          grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL)' Makefile | head -3 | tee -a "$ABS_LOG/preflight.log"
+
+          grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL)' Makefile \
+            | head -3 \
+            | tee -a "$ABS_LOG/preflight.log"
+
           BASE_COMMIT=$(git rev-parse HEAD)
+
           echo "$BASE_COMMIT"              > "$ABS_LOG/base-commit.txt"
           echo "BASE_COMMIT=$BASE_COMMIT" >> "$GITHUB_ENV"
-          echo "BASE_REPO=${{ env.BASE_REPO }} @ $BASE_COMMIT" | tee -a "$ABS_LOG/preflight.log"
+
+          echo "BASE_REPO=${{ env.BASE_REPO }} @ $BASE_COMMIT" \
+            | tee -a "$ABS_LOG/preflight.log"
+
       # ── 4. Chimera Mk8 as reference/patch-source remote (NOT merged) ─────────
       - name: Fetch Chimera Mk8 reference (patch source only — no git merge)
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
+
           git remote add chimera "${{ env.CHIMERA_REPO }}" || true
           git fetch --no-tags --depth=1 chimera "${{ env.CHIMERA_REF }}"
+
           CHIMERA_TIP=$(git rev-parse chimera/${{ env.CHIMERA_REF }})
+
           echo "$CHIMERA_TIP"                  > "$ABS_LOG/chimera-reference.txt"
           echo "CHIMERA_COMMIT=$CHIMERA_TIP" >> "$GITHUB_ENV"
+
           echo "Chimera Mk8 reference pinned at $CHIMERA_TIP (fetched only, never merged into base)" \
             | tee -a "$ABS_LOG/preflight.log"
+
       # ── 5. KernelSU-Next ──────────────────────────────────────────────────────
       - name: Initialise KernelSU-Next submodule
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
+
           KSU_REPO="${{ inputs.ksu_repo }}"
           KSU_COMMIT="${{ inputs.ksu_commit }}"
           KSU_SUB="KernelSU-Next"
+
           if [[ -f .gitmodules ]] && grep -q "$KSU_SUB" .gitmodules 2>/dev/null; then
-            [[ -n "$KSU_REPO" ]] && git config "submodule.$KSU_SUB.url" "$KSU_REPO"
+            [[ -n "$KSU_REPO" ]] && \
+              git config "submodule.$KSU_SUB.url" "$KSU_REPO"
+
             git submodule init "$KSU_SUB"
+
             git submodule update --depth=1 "$KSU_SUB" || {
               git -C "$KSU_SUB" fetch --no-tags --depth=1 origin "$KSU_COMMIT" || \
               git -C "$KSU_SUB" fetch --no-tags --depth=100 origin "$KSU_COMMIT"
+
               git -C "$KSU_SUB" checkout --detach "$KSU_COMMIT"
             }
           else
             rm -rf "$KSU_SUB"
+
             git clone --depth=100 "$KSU_REPO" "$KSU_SUB"
+
             git -C "$KSU_SUB" fetch --no-tags --depth=1 origin "$KSU_COMMIT" || true
             git -C "$KSU_SUB" checkout --detach "$KSU_COMMIT"
           fi
+
           ACTUAL_KSU=$(git -C "$KSU_SUB" rev-parse HEAD)
-          echo "KSU-Next: $ACTUAL_KSU" > "$ABS_LOG/ksu-commit.txt"
-          echo "KSU_GIT_VERSION=$(git -C "$KSU_SUB" rev-parse --short HEAD)" >> "$GITHUB_ENV"
+
+          echo "KernelSU-Next: $ACTUAL_KSU" > "$ABS_LOG/ksu-commit.txt"
+          echo "KSU_GIT_VERSION=$(git -C "$KSU_SUB" rev-parse --short HEAD)" \
+            >> "$GITHUB_ENV"
+
       - name: Record SUSFS traceability refs
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
@@ -296,8 +355,9 @@ jobs:
             echo "susfs_ref=${{ inputs.susfs_ref }}"
             echo "susfs_commit=${{ inputs.susfs_commit }}"
             echo "NOTE: SUSFS core files are pulled from Chimera Mk8's 4.9.337 port,"
-            echo "  not from the upstream 5.10-oriented repo. Ref is for traceability only."
+            echo "      not from the upstream 5.10-oriented repo. Ref is for traceability only."
           } > "$ABS_LOG/susfs-refs.txt"
+
       # ── 6. Apply curated KSU + SUSFS patch stack ─────────────────────────────
       - name: Apply curated KSU-Next + SUSFS patch stack
         working-directory: ${{ env.KERNEL_DIR }}
@@ -314,24 +374,32 @@ jobs:
           python3 << 'PYEOF'
           import sys
           from pathlib import Path
+
           MARKER = "CMK9_REBOOT_KSU_HOOK"
           p = Path("kernel/reboot.c")
           src = p.read_text()
+
           if MARKER in src:
               print("kernel/reboot.c: already patched — skipping")
               sys.exit(0)
+
           errors = []
+
           def replace_once(src, old, new, label):
               if new in src:
                   print(f"  OK (idempotent): {label}")
                   return src
+
               if old in src:
                   print(f"  OK: {label}")
                   return src.replace(old, new, 1)
+
               print(f"  FATAL: anchor not found — {label}", file=sys.stderr)
               errors.append(label)
               return src
-          src = replace_once(src,
+
+          src = replace_once(
+              src,
               'SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,\n'
               '\t\tvoid __user *, arg)\n'
               '{',
@@ -342,8 +410,11 @@ jobs:
               'SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,\n'
               '\t\tvoid __user *, arg)\n'
               '{',
-              "kernel/reboot.c: ksu_handle_sys_reboot extern declaration")
-          src = replace_once(src,
+              "kernel/reboot.c: ksu_handle_sys_reboot extern declaration"
+          )
+
+          src = replace_once(
+              src,
               '\tret = reboot_pid_ns(pid_ns, cmd);\n'
               '\tif (ret)\n'
               '\t\treturn ret;\n'
@@ -369,13 +440,22 @@ jobs:
               '\tksu_handle_sys_reboot(magic1, magic2, cmd, &arg);\n'
               '#endif\n'
               '\tmutex_lock(&reboot_mutex);',
-              "kernel/reboot.c: ksu_handle_sys_reboot call-site")
+              "kernel/reboot.c: ksu_handle_sys_reboot call-site"
+          )
+
           p.write_text(src)
+
           if errors:
-              print("\nFATAL: required anchor(s) not found in kernel/reboot.c", file=sys.stderr)
+              print(
+                  "\nFATAL: required anchor(s) not found in kernel/reboot.c",
+                  file=sys.stderr
+              )
+
               for e in errors:
                   print(f"  - {e}", file=sys.stderr)
+
               sys.exit(1)
+
           print("kernel/reboot.c: ksu_handle_sys_reboot hook applied successfully")
           PYEOF
 
@@ -384,15 +464,27 @@ jobs:
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
+
           echo "=== KSU manual hook references ==="
-          grep -n 'ksu_handle_sys_reboot'  kernel/reboot.c  || echo "MISSING: kernel/reboot.c"
-          grep -n 'ksu_handle_execveat'    fs/exec.c        || echo "MISSING: fs/exec.c"
-          grep -n 'ksu_handle_faccessat'   fs/open.c        || echo "MISSING: fs/open.c"
+
+          grep -n 'ksu_handle_sys_reboot' kernel/reboot.c \
+            || echo "MISSING: kernel/reboot.c"
+
+          grep -n 'ksu_handle_execveat' fs/exec.c \
+            || echo "MISSING: fs/exec.c"
+
+          grep -n 'ksu_handle_faccessat' fs/open.c \
+            || echo "MISSING: fs/open.c"
+
           echo ""
           echo "=== Kbuild hook check (lines 130–165) ==="
-          sed -n '130,165p' drivers/kernelsu/Kbuild 2>/dev/null || echo "(symlink not yet created — run after patch step)"
+
+          sed -n '130,165p' drivers/kernelsu/Kbuild 2>/dev/null \
+            || echo "(symlink not yet created — run after patch step)"
+
           echo ""
           echo "=== Kbuild grep simulation ==="
+
           grep -q 'ksu_handle_sys_reboot' kernel/reboot.c \
             && echo "PASS: ksu_handle_sys_reboot found in kernel/reboot.c" \
             || echo "FAIL: ksu_handle_sys_reboot NOT found — Kbuild:151 would error"
@@ -412,19 +504,24 @@ jobs:
           python3 << 'PYEOF'
           import sys
           from pathlib import Path
+
           MARKER = "CMK9_AVC_LOG_SPOOF_STUB"
           p = Path("fs/susfs.c")
           src = p.read_text()
+
           if MARKER in src:
               print("fs/susfs.c: stub already present — skipping")
               sys.exit(0)
+
           if "bool susfs_is_avc_log_spoofing_enabled(void)" in src and \
              "#ifdef CONFIG_KSU_SUSFS_SPOOF_SELINUX" not in src.split(
-                 "bool susfs_is_avc_log_spoofing_enabled(void)")[0][-200:]:
+                 "bool susfs_is_avc_log_spoofing_enabled(void)"
+             )[0][-200:]:
               # A real (unguarded) definition already exists upstream —
               # nothing to do, avoid a duplicate-symbol build error.
               print("fs/susfs.c: a definition already exists — skipping stub")
               sys.exit(0)
+
           stub = (
               "\n/* " + MARKER + " */\n"
               "#ifndef CONFIG_KSU_SUSFS_SPOOF_SELINUX\n"
@@ -434,9 +531,13 @@ jobs:
               "}\n"
               "#endif\n"
           )
+
           p.write_text(src + stub)
-          print("fs/susfs.c: appended disabled-mode stub for "
-                "susfs_is_avc_log_spoofing_enabled")
+
+          print(
+              "fs/susfs.c: appended disabled-mode stub for "
+              "susfs_is_avc_log_spoofing_enabled"
+          )
           PYEOF
 
       # ── 6e. Fix linker error #2 — path_umount ────────────────────────────────
@@ -444,12 +545,17 @@ jobs:
       #   referenced by drivers/built-in.o:(try_umount) [adb_root.c in
       #   KernelSU-Next's drivers/kernelsu tree]
       # path_umount(struct path *, int) only exists in 5.9+ kernel trees.
-      # Back-port a minimal implementation into fs/namespace.c, placed right
-      # after do_umount()'s closing brace — located via a balanced-brace scan
-      # anchored on the confirmed do_umount() signature, not a guessed line
-      # number. Built directly into fs/namespace.c (part of vmlinux), so no
-      # EXPORT_SYMBOL is needed for the in-tree KSU driver to link against it.
-      - name: Patch fs/namespace.c — add path_umount (KSU-Next backport requirement)
+      #
+      # IMPORTANT: do not use a raw balanced-brace scanner here. Samsung's
+      # namespace.c contains preprocessor branches whose text has two alternate
+      # opening braces but one shared closing brace; a preprocessor-unaware
+      # scanner therefore reports a false imbalance. Use the unique literal
+      # tail of do_umount() as the insertion anchor instead.
+      #
+      # The helper must be present before the fs/ build phase starts. Injecting
+      # it later from a Kbuild rule is too late because fs/built-in.o may already
+      # have been compiled.
+      - name: Patch fs/namespace.c and fs/internal.h — add path_umount
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           python3 << 'PYEOF'
@@ -457,178 +563,192 @@ jobs:
           from pathlib import Path
 
           MARKER = "CMK9_PATH_UMOUNT_BACKPORT"
-          p = Path("fs/namespace.c")
-          src = p.read_text()
-          if MARKER in src:
-              print("fs/namespace.c: path_umount already present — skipping")
-              sys.exit(0)
+          ns = Path("fs/namespace.c")
+          internal = Path("fs/internal.h")
+          src = ns.read_text()
 
-          sig = "static int do_umount(struct mount *mnt, int flags)\n{"
-          idx = src.find(sig)
-          if idx == -1:
-              print("FATAL: do_umount() signature anchor not found in fs/namespace.c", file=sys.stderr)
-              sys.exit(1)
+          if MARKER not in src:
+              # This is the unique literal tail of do_umount() in the
+              # ExyHyperBrick lineage-23.2 4.9.337 tree. It is deliberately
+              # content-anchored rather than line-number- or brace-based.
+              tail = (
+                  "\tunlock_mount_hash();\n"
+                  "\tnamespace_unlock();\n"
+                  "\treturn retval;\n"
+                  "}\n"
+              )
 
-          # Balanced-brace scan from the opening brace of do_umount() to find
-          # its matching closing brace, so the new function is inserted right
-          # after do_umount() ends regardless of its exact body length.
-          # NOTE: must skip C comments (// and /* */) as well as string/char
-          # literals — an apostrophe inside a comment (e.g. "don't") would
-          # otherwise be misread as entering a char literal and desync the
-          # brace count for the rest of the scan.
-          brace_start = src.find("{", idx)
-          depth, i, n = 0, brace_start, len(src)
-          in_str = None   # ' or " currently inside, else None
-          in_line_comment = False
-          in_block_comment = False
-          esc = False
-          while i < n:
-              c = src[i]
-              nxt = src[i + 1] if i + 1 < n else ""
+              count = src.count(tail)
 
-              if in_line_comment:
-                  if c == "\n":
-                      in_line_comment = False
-                  i += 1
-                  continue
-              if in_block_comment:
-                  if c == "*" and nxt == "/":
-                      in_block_comment = False
-                      i += 2
-                      continue
-                  i += 1
-                  continue
-              if in_str:
-                  if esc:
-                      esc = False
-                  elif c == "\\":
-                      esc = True
-                  elif c == in_str:
-                      in_str = None
-                  i += 1
-                  continue
+              if count != 1:
+                  print(
+                      "FATAL: expected exactly one do_umount() tail anchor "
+                      f"in fs/namespace.c, found {count}",
+                      file=sys.stderr
+                  )
+                  sys.exit(1)
 
-              # Not in a string or comment — check for entry into one first.
-              if c == "/" and nxt == "/":
-                  in_line_comment = True
-                  i += 2
-                  continue
-              if c == "/" and nxt == "*":
-                  in_block_comment = True
-                  i += 2
-                  continue
-              if c in "'\"":
-                  in_str = c
-                  i += 1
-                  continue
-              if c == "{":
-                  depth += 1
-              elif c == "}":
-                  depth -= 1
-                  if depth == 0:
-                      break
-              i += 1
+              backport = (
+                  "\n\n/* " + MARKER + " — back-ported for KernelSU-Next drivers/kernelsu\n"
+                  " * (adb_root.c try_umount()), which assumes a 5.9+ path_umount() helper\n"
+                  " * that this 4.9.337 tree does not have. Minimal equivalent using the\n"
+                  " * existing do_umount()/mntput_no_expire() primitives already present\n"
+                  " * in this file.\n"
+                  " */\n"
+                  "#ifdef CONFIG_KSU\n"
+                  "int path_umount(struct path *path, int flags)\n"
+                  "{\n"
+                  "\tstruct mount *mnt = real_mount(path->mnt);\n"
+                  "\tint ret;\n\n"
+                  "\tif (flags & ~(MNT_FORCE | MNT_DETACH | MNT_EXPIRE | UMOUNT_NOFOLLOW))\n"
+                  "\t\treturn -EINVAL;\n\n"
+                  "\tif (!may_mount())\n"
+                  "\t\treturn -EPERM;\n\n"
+                  "\tret = do_umount(mnt, flags);\n\n"
+                  "\t/* we mustn't call path_put() here: that would drop the mnt_count\n"
+                  "\t * reference that do_umount() expects the caller to hold.\n"
+                  "\t */\n"
+                  "\tdput(path->dentry);\n"
+                  "\tmntput_no_expire(mnt);\n"
+                  "\treturn ret;\n"
+                  "}\n"
+                  "#endif\n"
+              )
+
+              src = src.replace(tail, tail + backport, 1)
+              ns.write_text(src)
+
+              print(
+                  "fs/namespace.c: path_umount() inserted after do_umount() tail"
+              )
           else:
-              print("FATAL: unbalanced braces while scanning do_umount()", file=sys.stderr)
-              sys.exit(1)
+              print("fs/namespace.c: path_umount() already present — skipping")
 
-          end_of_do_umount = i + 1  # position right after the closing '}'
+          # The KSU driver is built in-tree and may rely on the internal kernel
+          # declaration. Add it before compilation, idempotently.
+          h = internal.read_text()
+          decl = "int path_umount(struct path *path, int flags);"
 
-          backport = (
-              "\n\n/* " + MARKER + " — back-ported for KernelSU-Next drivers/kernelsu\n"
-              " * (adb_root.c try_umount()), which assumes a 5.9+ path_umount() helper\n"
-              " * that this 4.9.337 tree does not have. Minimal equivalent using the\n"
-              " * existing do_umount()/mntput_no_expire() primitives already present\n"
-              " * in this file.\n"
-              " */\n"
-              "#ifdef CONFIG_KSU\n"
-              "int path_umount(struct path *path, int flags)\n"
-              "{\n"
-              "\tstruct mount *mnt = real_mount(path->mnt);\n"
-              "\tint ret;\n\n"
-              "\tif (flags & ~(MNT_FORCE | MNT_DETACH | MNT_EXPIRE | UMOUNT_NOFOLLOW))\n"
-              "\t\treturn -EINVAL;\n\n"
-              "\tif (!may_mount())\n"
-              "\t\treturn -EPERM;\n\n"
-              "\tret = do_umount(mnt, flags);\n\n"
-              "\t/* we mustn't call path_put() here: that would drop the mnt_count\n"
-              "\t * reference that do_umount() expects the caller to hold.\n"
-              "\t */\n"
-              "\tdput(path->dentry);\n"
-              "\tmntput_no_expire(mnt);\n"
-              "\treturn ret;\n"
-              "}\n"
-              "#endif\n"
-          )
+          if decl not in h:
+              h += (
+                  "\n\n/* " + MARKER + " — KernelSU-Next 4.9.337 backport */\n"
+                  "#ifdef CONFIG_KSU\n"
+                  + decl + "\n"
+                  "#endif\n"
+              )
 
-          src = src[:end_of_do_umount] + backport + src[end_of_do_umount:]
-          p.write_text(src)
-          print(f"fs/namespace.c: path_umount() inserted after do_umount() "
-                f"(offset {end_of_do_umount})")
+              internal.write_text(h)
+              print("fs/internal.h: path_umount() declaration added")
+          else:
+              print("fs/internal.h: path_umount() declaration already present")
+
           PYEOF
 
-      - name: Diagnostic — verify linker-fix symbols present in source
+      - name: Diagnostic — verify linker-fix symbols present before build
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
-          grep -n 'susfs_is_avc_log_spoofing_enabled' fs/susfs.c || echo "MISSING: fs/susfs.c"
-          grep -n 'int path_umount'                   fs/namespace.c || echo "MISSING: fs/namespace.c"
+
+          grep -n 'susfs_is_avc_log_spoofing_enabled' fs/susfs.c
+          grep -n 'CMK9_PATH_UMOUNT_BACKPORT\|int path_umount' fs/namespace.c
+          grep -n 'CMK9_PATH_UMOUNT_BACKPORT\|int path_umount' fs/internal.h
 
       # ── 7. Chimera overlay (branding / identity / scheduler tuning) ──────────
       - name: Apply Chimera overlay (branding/identity/scheduler tuning)
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
+
           LOG="$ABS_LOG/overlay.log"
           echo "Chimera overlay started at $(date -u)" > "$LOG"
+
           FAIR="kernel/sched/fair.c"
+
           if grep -q '750000ULL' "$FAIR"; then
-            sed -i 's/\(normalized_sysctl_sched_min_granularity\s*=\s*\)750000ULL/\15000000ULL/' "$FAIR"
+            sed -i \
+              's/\(normalized_sysctl_sched_min_granularity\s*=\s*\)750000ULL/\15000000ULL/' \
+              "$FAIR"
           fi
+
           if grep -q '500000UL;' "$FAIR"; then
-            sed -i 's/\(sysctl_sched_migration_cost\s*=\s*\)500000UL/\12000000UL/' "$FAIR"
+            sed -i \
+              's/\(sysctl_sched_migration_cost\s*=\s*\)500000UL/\12000000UL/' \
+              "$FAIR"
           fi
-          sed -i '/^CONFIG_LOCALVERSION=/d;/^CONFIG_DEFAULT_HOSTNAME=/d' "$DEFCONFIG"
+
+          sed -i \
+            '/^CONFIG_LOCALVERSION=/d;/^CONFIG_DEFAULT_HOSTNAME=/d' \
+            "$DEFCONFIG"
+
           printf 'CONFIG_LOCALVERSION="%s"\nCONFIG_DEFAULT_HOSTNAME="%s"\n' \
             "$BRAND" "$BUILD_HOST" >> "$DEFCONFIG"
-          printf '#!/bin/sh\nprintf "%%s" "%s"\n' "$BRAND" > scripts/setlocalversion
+
+          printf '#!/bin/sh\nprintf "%%s" "%s"\n' "$BRAND" \
+            > scripts/setlocalversion
+
           chmod +x scripts/setlocalversion
           echo "$BRAND" > localversion
-          echo "Overlay applied (profile=$PROFILE, brand=$BRAND)" | tee -a "$LOG"
+
+          echo "Overlay applied (profile=$PROFILE, brand=$BRAND)" \
+            | tee -a "$LOG"
+
       # ── 8. Fix Kconfig fragment before merge ─────────────────────────────────
       - name: Validate and fix chimera-ksu-susfs.cfg
         run: |
           set -Eeuo pipefail
+
           CFG="$GITHUB_WORKSPACE/chimera-ksu-susfs.cfg"
+
           if grep -q 'CONFIG_KSU_NON_KPROBE=y' "$CFG"; then
-            sed -i 's/^CONFIG_KSU_NON_KPROBE=y/CONFIG_KSU_MANUAL_HOOK=y/' "$CFG"
+            sed -i \
+              's/^CONFIG_KSU_NON_KPROBE=y/CONFIG_KSU_MANUAL_HOOK=y/' \
+              "$CFG"
+
             echo "Fixed: CONFIG_KSU_NON_KPROBE → CONFIG_KSU_MANUAL_HOOK"
           fi
+
           grep -q 'CONFIG_KSU_MANUAL_HOOK=y' "$CFG" || \
             echo 'CONFIG_KSU_MANUAL_HOOK=y' >> "$CFG"
-          sed -i '/^# CONFIG_KSU_KPROBES_HOOK is not set/d' "$CFG" || true
+
+          sed -i \
+            '/^# CONFIG_KSU_KPROBES_HOOK is not set/d' \
+            "$CFG" || true
+
           echo "=== chimera-ksu-susfs.cfg (validated) ==="
           cat "$CFG"
+
       # ── 9. Kconfig fragment merge + defconfig baseline ───────────────────────
       - name: Merge Kconfig fragment (chimera-ksu-susfs.cfg) via merge_config.sh
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
+
           export PATH="$ABS_TC/bin:$PATH"
-          cp "$GITHUB_WORKSPACE/chimera-ksu-susfs.cfg" /tmp/chimera-ksu-susfs.cfg
+
+          cp "$GITHUB_WORKSPACE/chimera-ksu-susfs.cfg" \
+            /tmp/chimera-ksu-susfs.cfg
+
           make O="$ABS_OUT" ARCH=arm64 "$(basename "$DEFCONFIG")" \
             | tee "$ABS_LOG/defconfig-base.log"
-          scripts/kconfig/merge_config.sh -m -O "$ABS_OUT" "$ABS_OUT/.config" \
+
+          scripts/kconfig/merge_config.sh \
+            -m \
+            -O "$ABS_OUT" \
+            "$ABS_OUT/.config" \
             /tmp/chimera-ksu-susfs.cfg \
             | tee "$ABS_LOG/merge-config.log"
+
           make O="$ABS_OUT" ARCH=arm64 olddefconfig \
             | tee -a "$ABS_LOG/merge-config.log"
+
       # ── 10. Safety guard — disallowed symbols must remain disabled ────────────
       - name: Guard pass — Samsung security features must remain disabled
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
+
           CFG="$ABS_OUT/.config"
+
           FORBIDDEN=(
             CONFIG_RKP_KDP
             CONFIG_UH_RKP
@@ -638,68 +758,117 @@ jobs:
             CONFIG_SEC_RESTRICT_ROOTING
             CONFIG_SEC_RESTRICT_SETUID
           )
+
           FAIL=0
           : > "$ABS_LOG/config-guard.log"
+
           for sym in "${FORBIDDEN[@]}"; do
             if grep -qE "^${sym}=y" "$CFG"; then
               echo "FATAL: $sym=y is set — must remain disabled" \
                 | tee -a "$ABS_LOG/config-guard.log"
+
               FAIL=1
             else
-              echo "OK: $sym not enabled" | tee -a "$ABS_LOG/config-guard.log"
+              echo "OK: $sym not enabled" \
+                | tee -a "$ABS_LOG/config-guard.log"
             fi
           done
-          for sym in CONFIG_KSU CONFIG_KSU_MANUAL_HOOK CONFIG_KSU_SUSFS \
-                     CONFIG_KSU_SUSFS_SUS_PATH CONFIG_KSU_SUSFS_SUS_MAP \
-                     CONFIG_KSU_SUSFS_SUS_KSTAT; do
+
+          for sym in \
+            CONFIG_KSU \
+            CONFIG_KSU_MANUAL_HOOK \
+            CONFIG_KSU_SUSFS \
+            CONFIG_KSU_SUSFS_SUS_PATH \
+            CONFIG_KSU_SUSFS_SUS_MAP \
+            CONFIG_KSU_SUSFS_SUS_KSTAT; do
+
             if grep -qE "^${sym}=y" "$CFG"; then
-              echo "OK: $sym=y" | tee -a "$ABS_LOG/config-guard.log"
+              echo "OK: $sym=y" \
+                | tee -a "$ABS_LOG/config-guard.log"
             else
               echo "FATAL: $sym is not enabled — required for this build" \
                 | tee -a "$ABS_LOG/config-guard.log"
+
               FAIL=1
             fi
           done
-          [[ $FAIL -eq 0 ]] || { echo "Config guard failed — aborting build" >&2; exit 1; }
+
+          [[ $FAIL -eq 0 ]] || {
+            echo "Config guard failed — aborting build" >&2
+            exit 1
+          }
+
       # ── 11. Toolchain resolution ──────────────────────────────────────────────
       - name: Resolve toolchain configuration
         id: tc-resolve
         run: |
           set -Eeuo pipefail
+
           TOOLCHAIN="${{ inputs.toolchain }}"
-          TC_URL=""; TC_ARCHIVE_FMT="tar.gz"; TC_CACHE_KEY=""; TC_LLVM_IAS="1"
+
+          TC_URL=""
+          TC_ARCHIVE_FMT="tar.gz"
+          TC_CACHE_KEY=""
+          TC_LLVM_IAS="1"
           TC_USE_FULL_LLVM="true"
+
           case "$TOOLCHAIN" in
             aosp19)
               TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/f60b8b55282f002f594f452ce22dfd6cf1fd7e3c/clang-r596125.tar.gz"
-              TC_CACHE_KEY="aosp-clang-r596125-ubuntu-24.04-v2" ;;
+              TC_CACHE_KEY="aosp-clang-r596125-ubuntu-24.04-v2"
+              ;;
+
             aosp20)
               TC_URL="https://gitlab.com/kei-space/clang/r547379/-/archive/master/r547379-master.tar.gz"
-              TC_CACHE_KEY="aosp-clang-r547379-ubuntu-24.04-v2" ;;
+              TC_CACHE_KEY="aosp-clang-r547379-ubuntu-24.04-v2"
+              ;;
+
             aosp21)
               TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/21b19c041de1f1df9b97fd9902ae5405c6cf8eb9/clang-r563880c.tar.gz"
-              TC_CACHE_KEY="aosp-clang-r563880c-ubuntu-24.04-v2" ;;
+              TC_CACHE_KEY="aosp-clang-r563880c-ubuntu-24.04-v2"
+              ;;
+
             aosp22)
               TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/mirror-goog-main-llvm-toolchain-source/clang-r596125.tar.gz"
-              TC_CACHE_KEY="aosp-clang-r596125-ubuntu-24.04-v2" ;;
+              TC_CACHE_KEY="aosp-clang-r596125-ubuntu-24.04-v2"
+              ;;
+
             neutron19)
               TC_URL="https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/10032024/neutron-clang-10032024.tar.zst"
               TC_ARCHIVE_FMT="tar.zst"
-              TC_CACHE_KEY="neutron-clang-10032024-ubuntu-24.04-v2" ;;
+              TC_CACHE_KEY="neutron-clang-10032024-ubuntu-24.04-v2"
+              ;;
+
             zyc_stable)
               TC_CACHE_KEY="zyc-clang-ubuntu-24.04-v2"
-              TC_URL=$(curl -fsSL "https://raw.githubusercontent.com/ZyCromerZ/Clang/main/Clang-main-link.txt" || true) ;;
+              TC_URL=$(curl -fsSL \
+                "https://raw.githubusercontent.com/ZyCromerZ/Clang/main/Clang-main-link.txt" \
+                || true)
+              ;;
+
             clang21-eva-gcc)
               TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/21b19c041de1f1df9b97fd9902ae5405c6cf8eb9/clang-r563880c.tar.gz"
               TC_CACHE_KEY="aosp-clang-r563880c-ubuntu-24.04-v2"
               TC_USE_FULL_LLVM="false"
-              TC_LLVM_IAS="0" ;;
-            *) echo "ERROR: unsupported toolchain '$TOOLCHAIN'" >&2; exit 1 ;;
+              TC_LLVM_IAS="0"
+              ;;
+
+            *)
+              echo "ERROR: unsupported toolchain '$TOOLCHAIN'" >&2
+              exit 1
+              ;;
           esac
-          { echo "TC_URL=$TC_URL"; echo "TC_ARCHIVE_FMT=$TC_ARCHIVE_FMT"
-            echo "TC_CACHE_KEY=$TC_CACHE_KEY"; echo "TC_LLVM_IAS=$TC_LLVM_IAS"
-            echo "TC_USE_FULL_LLVM=$TC_USE_FULL_LLVM"; } >> "$GITHUB_ENV"
+
+          {
+            echo "TC_URL=$TC_URL"
+            echo "TC_ARCHIVE_FMT=$TC_ARCHIVE_FMT"
+            echo "TC_CACHE_KEY=$TC_CACHE_KEY"
+            echo "TC_LLVM_IAS=$TC_LLVM_IAS"
+            echo "TC_USE_FULL_LLVM=$TC_USE_FULL_LLVM"
+          } >> "$GITHUB_ENV"
+
           echo "TC_CACHE_KEY=$TC_CACHE_KEY" >> "$GITHUB_OUTPUT"
+
       - name: Cache toolchain
         uses: actions/cache@v4
         id: tc-cache
@@ -711,18 +880,38 @@ jobs:
         if: steps.tc-cache.outputs.cache-hit != 'true'
         run: |
           set -Eeuo pipefail
+
           ARCHIVE="/tmp/clang_archive"
-          aria2c -x4 -s4 -q -d /tmp -o clang_archive "$TC_URL" \
+
+          aria2c \
+            -x4 \
+            -s4 \
+            -q \
+            -d /tmp \
+            -o clang_archive \
+            "$TC_URL" \
             || wget -O "$ARCHIVE" "$TC_URL"
-          rm -rf toolchains/clang && mkdir -p toolchains/clang
+
+          rm -rf toolchains/clang
+          mkdir -p toolchains/clang
+
           case "$TC_ARCHIVE_FMT" in
-            tar.gz|tar) tar -C toolchains/clang -xzf "$ARCHIVE" ;;
-            tar.xz)     tar -C toolchains/clang -xJf "$ARCHIVE" ;;
+            tar.gz|tar)
+              tar -C toolchains/clang -xzf "$ARCHIVE"
+              ;;
+
+            tar.xz)
+              tar -C toolchains/clang -xJf "$ARCHIVE"
+              ;;
+
             tar.zst)
               zstd -d "$ARCHIVE" -o /tmp/clang.tar --force
-              tar -C toolchains/clang -xf /tmp/clang.tar ;;
+              tar -C toolchains/clang -xf /tmp/clang.tar
+              ;;
           esac
+
           chmod +x toolchains/clang/bin/* 2>/dev/null || true
+
       - name: Set up ccache
         uses: hendrikmuhs/ccache-action@v1.2
         with:
@@ -737,21 +926,35 @@ jobs:
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
+
           export PATH="$ABS_TC/bin:$PATH"
+
           make O="$ABS_OUT" ARCH=arm64 \
             CLANG_TRIPLE=aarch64-linux-gnu- \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
             olddefconfig
+
           cp "$ABS_OUT/.config" "$ABS_LOG/config.built"
-          echo "=== Key config symbols ===" | tee "$ABS_LOG/config-summary.txt"
-          grep -E "^(CONFIG_KSU|CONFIG_KSU_SUSFS|CONFIG_SEC_RESTRICT|CONFIG_RKP|CONFIG_TIMA|CONFIG_FIVE|CONFIG_LOCALVERSION)" \
-            "$ABS_OUT/.config" | tee -a "$ABS_LOG/config-summary.txt"
-          if grep -q 'CONFIG_KSU_MANUAL_HOOK=y' "$ABS_OUT/include/config/auto.conf" 2>/dev/null; then
+
+          echo "=== Key config symbols ===" \
+            | tee "$ABS_LOG/config-summary.txt"
+
+          grep -E \
+            "^(CONFIG_KSU|CONFIG_KSU_SUSFS|CONFIG_SEC_RESTRICT|CONFIG_RKP|CONFIG_TIMA|CONFIG_FIVE|CONFIG_LOCALVERSION)" \
+            "$ABS_OUT/.config" \
+            | tee -a "$ABS_LOG/config-summary.txt"
+
+          if grep -q \
+            'CONFIG_KSU_MANUAL_HOOK=y' \
+            "$ABS_OUT/include/config/auto.conf" \
+            2>/dev/null; then
+
             echo "PASS: CONFIG_KSU_MANUAL_HOOK=y is in auto.conf (visible to Kbuild)"
           else
             echo "WARN: CONFIG_KSU_MANUAL_HOOK not yet in auto.conf — will be generated at build start"
           fi
+
       # ── 13. Build ─────────────────────────────────────────────────────────────
       - name: Build kernel
         if: ${{ inputs.dry_run != 'true' }}
@@ -764,8 +967,11 @@ jobs:
           KBUILD_BUILD_TIMESTAMP: "${{ env.KBUILD_BUILD_TIMESTAMP }}"
         run: |
           set -Eeuo pipefail
+
           export PATH="$ABS_TC/bin:$PATH"
+
           JOBS=$(nproc || echo 2)
+
           MAKE_ARGS=(
             "O=$ABS_OUT"
             "ARCH=arm64"
@@ -776,11 +982,20 @@ jobs:
             "-j${JOBS}"
             "LOCALVERSION=${BRAND}"
           )
+
           if [[ "${TC_USE_FULL_LLVM}" == "true" ]]; then
             for tool in ar nm objcopy objdump strip; do
-              ln -sf "$ABS_TC/bin/llvm-${tool}" "$ABS_TC/bin/aarch64-linux-gnu-${tool}" || true
+              ln -sf \
+                "$ABS_TC/bin/llvm-${tool}" \
+                "$ABS_TC/bin/aarch64-linux-gnu-${tool}" \
+                || true
             done
-            ln -sf "$ABS_TC/bin/ld.lld" "$ABS_TC/bin/aarch64-linux-gnu-ld" || true
+
+            ln -sf \
+              "$ABS_TC/bin/ld.lld" \
+              "$ABS_TC/bin/aarch64-linux-gnu-ld" \
+              || true
+
             MAKE_ARGS+=(
               "LLVM=1"
               "LLVM_IAS=${TC_LLVM_IAS}"
@@ -806,39 +1021,66 @@ jobs:
               "KCFLAGS=-O2 -fcommon -fno-strict-aliasing -Wno-error"
             )
           fi
-          make "${MAKE_ARGS[@]}" Image.gz-dtb 2>&1 | tee "$ABS_LOG/build.log"
+
+          make "${MAKE_ARGS[@]}" \
+            Image.gz-dtb \
+            2>&1 | tee "$ABS_LOG/build.log"
+
       # ── 14. nm guard — verify KSU/SUSFS symbols are compiled in ──────────────
       - name: Guard pass — verify KSU/SUSFS hooks compiled into vmlinux
         if: ${{ inputs.dry_run != 'true' }}
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
+
           export PATH="$ABS_TC/bin:$PATH"
+
           VMLINUX="$ABS_OUT/vmlinux"
+
           [[ -f "$VMLINUX" ]] || {
             echo "ERROR: vmlinux not found at $VMLINUX" >&2
             exit 1
           }
+
           NM=nm
+
           [[ "${TC_USE_FULL_LLVM}" == "true" ]] && NM=llvm-nm
-          "$NM" "$VMLINUX" > "$ABS_LOG/vmlinux-symbols.log" 2>&1 || true
+
+          "$NM" "$VMLINUX" \
+            > "$ABS_LOG/vmlinux-symbols.log" \
+            2>&1 \
+            || true
+
           REQUIRED=(
             ksu_handle_execveat
             ksu_handle_faccessat
             ksu_handle_sys_reboot
             susfs_is_inode_sus_path
           )
+
           FAIL=0
+
           : > "$ABS_LOG/nm-guard.log"
+
           for sym in "${REQUIRED[@]}"; do
-            if grep -q " $sym$\| ${sym} " "$ABS_LOG/vmlinux-symbols.log"; then
-              echo "OK: $sym present" | tee -a "$ABS_LOG/nm-guard.log"
+            if grep -q " $sym$\| ${sym} " \
+              "$ABS_LOG/vmlinux-symbols.log"; then
+
+              echo "OK: $sym present" \
+                | tee -a "$ABS_LOG/nm-guard.log"
             else
-              echo "FATAL: $sym missing from vmlinux" | tee -a "$ABS_LOG/nm-guard.log"
+              echo "FATAL: $sym missing from vmlinux" \
+                | tee -a "$ABS_LOG/nm-guard.log"
+
               FAIL=1
             fi
           done
-          [[ $FAIL -eq 0 ]] || { echo "nm symbol guard failed" >&2; exit 1; }
+
+          [[ $FAIL -eq 0 ]] || {
+            echo "nm symbol guard failed" >&2
+            exit 1
+          }
+
       # ── 15. Package + upload ─────────────────────────────────────────────────
       - name: Locate Image.gz-dtb and package artifacts
         if: ${{ inputs.dry_run != 'true' }}
@@ -846,15 +1088,30 @@ jobs:
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
+
           ART_DIR="$GITHUB_WORKSPACE/artifacts"
           mkdir -p "$ART_DIR"
+
           IMG="$ABS_OUT/arch/arm64/boot/Image.gz-dtb"
-          [[ -f "$IMG" ]] || { echo "ERROR: Image.gz-dtb not produced" >&2; exit 1; }
+
+          [[ -f "$IMG" ]] || {
+            echo "ERROR: Image.gz-dtb not produced" >&2
+            exit 1
+          }
+
           cp "$IMG" "$ART_DIR/Image.gz-dtb"
+
           BUILD_TAG="chimera-mk9-${{ inputs.profile }}-${{ inputs.toolchain }}-$(date -u +%Y%m%dT%H%M%SZ)-${BASE_COMMIT:0:8}"
-          echo "BUILD_TAG=$BUILD_TAG"             >> "$GITHUB_ENV"
-          echo "artifact_path=$ART_DIR/Image.gz-dtb" >> "$GITHUB_OUTPUT"
-          echo "ART_DIR=$ART_DIR"                >> "$GITHUB_ENV"
+
+          echo "BUILD_TAG=$BUILD_TAG" \
+            >> "$GITHUB_ENV"
+
+          echo "artifact_path=$ART_DIR/Image.gz-dtb" \
+            >> "$GITHUB_OUTPUT"
+
+          echo "ART_DIR=$ART_DIR" \
+            >> "$GITHUB_ENV"
+
       - name: Upload Image.gz-dtb artifact
         if: ${{ inputs.dry_run != 'true' }}
         uses: actions/upload-artifact@v4
@@ -871,6 +1128,7 @@ jobs:
           name: "Chimera Mk9 — ${{ inputs.profile }} / ${{ inputs.toolchain }}"
           body: |
             ## Chimera Mk9 — ExyHyperBrick Merge Build
+
             | Field | Value |
             |---|---|
             | Base | `${{ env.BASE_REPO }}` @ `${{ env.BASE_COMMIT }}` |
@@ -879,8 +1137,10 @@ jobs:
             | Profile | `${{ inputs.profile }}` |
             | Toolchain | `${{ inputs.toolchain }}` |
             | uname | `${{ env.UNAME_PREVIEW }}` |
+
           files: |
             ${{ steps.package.outputs.artifact_path }}
+
           draft: false
           prerelease: false
 
