@@ -665,7 +665,7 @@ jobs:
           PYEOF
 
       # ── 12. Verify definitive source-level fix ──────────────────────────────
-      - name: Verify path_umount source fix
+      - name: Diagnostic — verify path_umount backport ordering
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
@@ -681,71 +681,69 @@ jobs:
               print("FATAL: path_umount marker missing", file=sys.stderr)
               sys.exit(1)
 
-          forward = re.findall(
+          forward_matches = list(re.finditer(
               r"static\s+inline\s+bool\s+may_mount\s*\(\s*void\s*\)\s*;",
               src
-          )
+          ))
 
-          definitions = re.findall(
+          definition_matches = list(re.finditer(
               r"static\s+inline\s+bool\s+may_mount\s*\(\s*void\s*\)\s*\{",
               src
-          )
+          ))
 
-          path_defs = re.findall(
+          path_matches = list(re.finditer(
               r"\bint\s+path_umount\s*\(\s*struct\s+path\s*\*path\s*,\s*int\s+flags\s*\)\s*\{",
               src
-          )
+          ))
 
-          if len(forward) != 1:
+          if len(forward_matches) != 1:
               print(
                   "FATAL: expected exactly one may_mount() forward declaration; "
-                  f"found {len(forward)}",
+                  f"found {len(forward_matches)}",
                   file=sys.stderr
               )
               sys.exit(1)
 
-          if len(definitions) != 1:
+          if len(definition_matches) != 1:
               print(
                   "FATAL: expected exactly one may_mount() definition; "
-                  f"found {len(definitions)}",
+                  f"found {len(definition_matches)}",
                   file=sys.stderr
               )
               sys.exit(1)
 
-          if len(path_defs) != 1:
+          if len(path_matches) != 1:
               print(
                   "FATAL: expected exactly one path_umount() definition; "
-                  f"found {len(path_defs)}",
+                  f"found {len(path_matches)}",
                   file=sys.stderr
               )
               sys.exit(1)
 
-          declaration_pos = src.find(
-              "static inline bool may_mount(void);"
-          )
-
-          path_pos = src.find(
-              "int path_umount(struct path *path, int flags)"
-          )
-
-          definition_pos = src.find(
-              "static inline bool may_mount(void)"
-          )
+          declaration_pos = forward_matches[0].start()
+          path_pos = path_matches[0].start()
+          definition_pos = definition_matches[0].start()
 
           if not (
-              declaration_pos >= 0 and
-              path_pos > declaration_pos and
-              definition_pos > path_pos
+              declaration_pos < path_pos < definition_pos
           ):
               print(
                   "FATAL: expected order is declaration < path_umount < "
                   "may_mount definition",
                   file=sys.stderr
               )
+
+              print(
+                  f"DEBUG: declaration_pos={declaration_pos}, "
+                  f"path_pos={path_pos}, "
+                  f"definition_pos={definition_pos}",
+                  file=sys.stderr
+              )
+
               sys.exit(1)
 
           print("PASS: may_mount forward declaration precedes path_umount()")
-          print("PASS: original may_mount() definition remains later in file")
+          print("PASS: path_umount() precedes original may_mount() definition")
           print("PASS: exactly one path_umount() definition exists")
           PYEOF
 
