@@ -533,6 +533,7 @@ sched_pattern = re.compile(
 ", __func__);
 "
 )
+
 m2 = sched_pattern.search(src)
 if not m2:
     print("FATAL: sugov_kthread_create() scheduler-set anchor not found — base has changed", file=sys.stderr)
