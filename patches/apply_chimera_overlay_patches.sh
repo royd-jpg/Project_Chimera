@@ -497,6 +497,7 @@ MARKER = "$SUGOV_PRIO_MARKER"
 p = Path("$SUGOV_FILE")
 src = p.read_text()
 
+# Anchor: original sugov_kthread_create() header + thread declaration + MAX_USER_RT_PRIO / 2
 pattern = re.compile(
     r"(static int sugov_kthread_create(struct sugov_policy *sg_policy)
 "
@@ -520,6 +521,7 @@ src = (
     src[m.end():]
 )
 
+# Anchor: original SCHED_FIFO block
 sched_pattern = re.compile(
     r"\tret = sched_setscheduler_nocheck(thread, SCHED_FIFO, &param);
 "
@@ -531,12 +533,13 @@ sched_pattern = re.compile(
 ", __func__);
 "
 )
-
 m2 = sched_pattern.search(src)
 if not m2:
     print("FATAL: sugov_kthread_create() scheduler-set anchor not found — base has changed", file=sys.stderr)
     sys.exit(1)
 
+# Replacement: SCHED_RR / priority=1, with correct literal "
+" in the C string and closed if-block
 replacement = (
     "\tret = sched_setscheduler_nocheck(thread, SCHED_RR, &param); /* " + MARKER + " */
 "
@@ -550,6 +553,7 @@ replacement = (
     "\t}
 "
 )
+
 src = src[:m2.start()] + replacement + src[m2.end():]
 
 p.write_text(src)
@@ -557,7 +561,6 @@ print(f"{p}: sugov_kthread_create() moved to SCHED_RR / priority=1 (marker: {MAR
 PYEOF
   log "PASS: sugov kthread priority (SCHED_RR) applied"
 fi
-
 
 # ─────────────────────────────────────────────────────────────────────────
 # [8] kernel/sched/cpufreq_schedutil.c — sugov_init() second rate-limit
