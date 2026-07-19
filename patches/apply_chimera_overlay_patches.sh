@@ -468,7 +468,6 @@ PYEOF
   log "PASS: sugov rate limit tuning applied"
 fi
 
-
 # ─────────────────────────────────────────────────────────────────────────
 # [7] kernel/sched/cpufreq_schedutil.c — sugov_kthread_create() priority
 #     (royd-jpg/Project_Chimera commit
@@ -558,6 +557,7 @@ print(f"{p}: sugov_kthread_create() moved to SCHED_RR / priority=1 (marker: {MAR
 PYEOF
   log "PASS: sugov kthread priority (SCHED_RR) applied"
 fi
+
 
 # ─────────────────────────────────────────────────────────────────────────
 # [8] kernel/sched/cpufreq_schedutil.c — sugov_init() second rate-limit
