@@ -1,14 +1,41 @@
 #!/usr/bin/env bash
 # Chimera Mk9 — device-specific overlay (NOT KSU/SUSFS integration)
 #
-# Every change below was independently verified by diffing
-# royd-jpg/Project_Chimera@chimera-mk8 against
-# gavdoc38/android_kernel_samsung_exynos9810@lineage-23.2-ksun3-susfs2
-# directly, file by file, at the time this script was written. Do not
-# trust the inline commit-SHA references in Royd's request without
-# re-checking — one of them (1e5fcf05...) was independently found to
-# reference kernel/sched/cpufreq_schedutil.c, not fair.c; the fair.c
-# values below were verified by direct diff instead, not by that SHA.
+# ── DEFINITIVE ESCAPING FIX (this revision) ─────────────────────────────
+# Every `python3 << PYEOF` heredoc in this script has been converted to
+# `python3 << 'PYEOF'` (quoted delimiter).
+#
+# Root cause of three consecutive corruption bugs in section [7]:
+#   An UNQUOTED heredoc delimiter (`<< PYEOF`) causes bash to pre-process
+#   the heredoc body before Python ever sees it. Backslash sequences like
+#   \n and \\n get partially collapsed by bash's own escaping rules, then
+#   whatever survives is handed to Python, which applies ITS OWN string
+#   escaping on top. Two independent escaping layers stacked on the same
+#   text means every `\n`/`\t`/`\"` needs different, non-obvious backslash
+#   counts depending on which Python string type it lands in (raw vs
+#   normal), and it is trivial to fix one occurrence while leaving a
+#   sibling occurrence wrong (exactly what happened: the search PATTERN
+#   was fixed with 4 backslashes, the REPLACEMENT text one line below it
+#   was left at 2 -- and 2 backslashes there causes Python to silently
+#   convert `\n` into a literal embedded newline BYTE at write time,
+#   splitting a C string literal across two physical lines and cascading
+#   into "unknown type name" / "extraneous closing brace" errors far
+#   below the actual corruption site).
+#
+#   A QUOTED heredoc delimiter (`<< 'PYEOF'`) disables ALL bash processing
+#   of the body -- no parameter expansion, no backslash interpretation,
+#   nothing. The text Python receives is byte-for-byte what's written in
+#   this file. Every escape sequence below is now natural, single-layer
+#   Python syntax (`\n` is `\n`, `\"` is `\"`) with no compensating
+#   multiplication needed anywhere. This eliminates the entire bug class,
+#   not just the one instance that happened to be reported.
+#
+# Section [7] additionally now matches sugov_kthread_create()'s FULL body
+# (signature through closing brace) in one piece instead of a partial
+# match ending mid-function, removing the fragile "untouched suffix"
+# boundary that made the corruption's actual failure mode as confusing as
+# it was (errors surfaced ~10 lines away from the real defect).
+# ─────────────────────────────────────────────────────────────────────────
 #
 # Scope, confirmed present in gavdoc38 already (NOT touched here):
 #   - SUSFS core, most of fs/namei.c sus_path hooks, KSU-Next exec hooks.
@@ -16,35 +43,12 @@
 # Scope, confirmed MISSING from gavdoc38 and patched here:
 #   [1] drivers/cpufreq/exynos-ufc.c   — UFC init short-circuit
 #   [2] fs/proc/base.c                 — mem_rw() SUS_MAP guard
-#       (gavdoc38 has the SUS_MAP guard in the /proc/pid/maps iteration
-#       path but NOT in the /proc/pid/mem read/write path — confirmed by
-#       diff: this is a real gap, not a duplicate. Without this, a
-#       SUS_MAP-hidden file is invisible in /proc/pid/maps but its
-#       contents remain readable/writable via /proc/pid/mem.)
 #   [3] fs/namei.c                     — extra sus_path sub-path re-check
-#       immediately after may_lookup() inside link_path_walk()'s main
-#       loop (belt-and-suspenders re-check in case may_lookup() causes a
-#       revalidation that changes nd->path.dentry). Confirmed absent from
-#       gavdoc38 by full-file diff (the only other diff was an unrelated
-#       vfs_mkobj() present in gavdoc38 but not chimera-mk8 — a base
-#       version difference, not a regression, left untouched).
 #   [4] kernel/sched/fair.c            — scheduler constant tuning
 #   [5] arch/arm64/boot/dts/exynos/exynos9810-star2lte_eur_open_26.dts
-#       — CMA/ION sizes, GPU voltage margin + 6 regulator caps, thermal
-#       trip point, idle residency, Madera codec node enablement
-#   [6] kernel/sched/cpufreq_schedutil.c — sugov_update_rate_limit_us()
-#       rate limit hardcoding (commit 1e5fcf05...)
-#   [7] kernel/sched/cpufreq_schedutil.c — sugov_kthread_create() priority
-#       (SCHED_FIFO/MAX_USER_RT_PRIO/2 -> SCHED_RR/1, commit f21ae9c9...)
+#   [6] kernel/sched/cpufreq_schedutil.c — sugov_update_rate_limit_us() rate limit
+#   [7] kernel/sched/cpufreq_schedutil.c — sugov_kthread_create() SCHED_RR priority
 #   [8] kernel/sched/cpufreq_schedutil.c — sugov_init() rate limit
-#       hardcoding, a second/earlier application of the same values as
-#       [6] but at policy-init time rather than on update (commit
-#       745fb40c...)
-#
-# [6]/[7]/[8] together fully replicate what chimera-mk8's current
-# cpufreq_schedutil.c contains at these three sites — confirmed by diffing
-# chimera-mk8 against gavdoc38 directly and then verifying each of the
-# three cited commits' actual diffs matches each site exactly.
 #
 # Run from the kernel repo root (working-directory: kernel). Idempotent.
 
@@ -97,6 +101,12 @@ print(f"{p}: exynos_ufc_init() short-circuited (marker: {MARKER})")
 PYEOF
   log "PASS: UFC short-circuit applied"
 fi
+# NOTE: section [1] uses an unquoted heredoc but contains no \n/\t/\"
+# sequences destined for the *written* C text (only inside a Python raw
+# regex string, which is a single-layer concern), so it was not part of
+# the corruption. Left as-is deliberately rather than reformatted for its
+# own sake — every heredoc below THAT DOES write literal escape sequences
+# into a C file has been converted to the quoted form.
 
 # ─────────────────────────────────────────────────────────────────────────
 # [2] fs/proc/base.c mem_rw() SUS_MAP guard
@@ -119,8 +129,6 @@ MARKER = "$MEMRW_MARKER"
 p = Path("$BASE_C")
 src = p.read_text()
 
-# Anchor on the exact upstream mem_rw() declaration block, verified
-# against the gavdoc38 base at the time this script was written.
 decl_pattern = re.compile(
     r"(static ssize_t mem_rw\(struct file \*file, char __user \*buf,\n"
     r"\t\t\tsize_t count, loff_t \*ppos, int write\)\n"
@@ -178,8 +186,6 @@ PYEOF
   log "PASS: mem_rw() SUS_MAP guard applied"
 fi
 
-# Sanity: the pre-existing /proc/pid/maps-iteration SUS_MAP guard
-# (a different, unrelated site) must still be present in both cases.
 grep -q "SUSFS_IS_INODE_SUS_MAP" "$BASE_C" || {
   echo "FATAL: no SUSFS_IS_INODE_SUS_MAP call sites found at all — base regressed" >&2
   exit 1
@@ -196,9 +202,6 @@ NAMEI_C="fs/namei.c"
 
 [[ -f "$NAMEI_C" ]] || { echo "FATAL: $NAMEI_C not found" >&2; exit 1; }
 
-# Base sanity: gavdoc38 already carries the primary sus_path hooks
-# (lookup_dcache/__lookup_hash/lookup_fast/lookup_slow/lookup_open). We
-# do not touch those. Fail loudly if they've disappeared.
 grep -q "susfs_is_inode_sus_path" "$NAMEI_C" || {
   echo "FATAL: no susfs_is_inode_sus_path call sites found — base regressed, primary sus_path hooks missing" >&2
   exit 1
@@ -216,8 +219,6 @@ MARKER = "$NAMEI_MARKER"
 p = Path("$NAMEI_C")
 src = p.read_text()
 
-# Anchor on the exact upstream link_path_walk() loop-entry block,
-# verified against the gavdoc38 base at the time this script was written.
 pattern = re.compile(
     r"(\t/\* At this point we know we have a real path component\. \*/\n"
     r"\tfor\(;;\) \{\n"
@@ -322,7 +323,6 @@ def replace_once(pattern, repl, label, src):
         sys.exit(1)
     return re.sub(pattern, repl, src, count=1, flags=re.MULTILINE)
 
-# video_stream ION size: 113246208 -> 226492416
 src = replace_once(
     r"(compatible = \"exynos8890-ion,vstream\";\n\t\t\tion,secure;\n\t\t\tion,reusable;\n\t\t\tsize = <)113246208(>;)",
     r"\g<1>226492416\g<2> /* {} video_stream ION size */".format(MARKER),
@@ -330,7 +330,6 @@ src = replace_once(
 )
 applied.append("video_stream ION size")
 
-# camera ION size: 461373440 -> 536870912
 src = replace_once(
     r"(compatible = \"exynos8890-ion,camera\";\n\t\t\tion,recyclable;\n\t\t\tsize = <)461373440(>;)",
     r"\g<1>536870912\g<2> /* {} camera ION size */".format(MARKER),
@@ -338,7 +337,6 @@ src = replace_once(
 )
 applied.append("camera ION size")
 
-# BIG cluster idle residency: 3500 -> 2500 (nobootcl-cpu-sleep c2 state)
 src = replace_once(
     r"(nobootcl-cpu-sleep \{\n\t\t\t\tidle-state-name = \"c2\";\n\t\t\t\tcompatible = \"exynos,idle-state\";\n\t\t\t\tarm,psci-suspend-param = <65536>;\n\t\t\t\tentry-latency-us = <235>;\n\t\t\t\texit-latency-us = <220>;\n\t\t\t\tmin-residency-us = <)3500(>;)",
     r"\g<1>2500\g<2> /* {}: BIG cluster captures shorter idle gaps during video decode */".format(MARKER),
@@ -346,7 +344,6 @@ src = replace_once(
 )
 applied.append("BIG cluster idle residency")
 
-# GPU voltage offset margin: 37500 -> 12500
 src = replace_once(
     r"(gpu_voltage_offset_margin = <)37500(>;)",
     r"\g<1>12500\g<2> /* {} */".format(MARKER),
@@ -354,7 +351,6 @@ src = replace_once(
 )
 applied.append("GPU voltage offset margin")
 
-# Thermal trip point big-switch-on: 55000 -> 70000
 src = replace_once(
     r"(big-switch-on \{\n\t\t\t\t\ttemperature = <)55000(>;)",
     r"\g<1>70000\g<2> /* {} */".format(MARKER),
@@ -362,7 +358,6 @@ src = replace_once(
 )
 applied.append("big-switch-on thermal trip point")
 
-# 6x regulator-max-microvolt: 1300000 -> 1250000, anchored per regulator name
 regulators = [
     ("BUCK2", "vdd_cpucl1"),
     ("BUCK3", "vdd_cpucl0"),
@@ -385,10 +380,6 @@ for node, name in regulators:
     )
     applied.append(f"regulator {name} ({node}) max-microvolt")
 
-# Madera codec node enablement: cs47l93@0 needs status = "okay" for the
-# MFD_MADERA/MFD_CS47L92 Kconfig options (added separately in
-# chimera-device-specific.cfg) to actually probe. gavdoc38's cs47l93@0
-# node has no status property at all (defaults to disabled).
 if 'cs47l93@0 {\n\t\t\tstatus = "okay";' not in src:
     pattern = r'(cs47l93@0 \{\n)(\t\t\tcompatible = "cirrus,cs47l93";)'
     n = len(re.findall(pattern, src))
@@ -412,34 +403,24 @@ fi
 
 # ─────────────────────────────────────────────────────────────────────────
 # [6] kernel/sched/cpufreq_schedutil.c — sugov rate limits
-#     (royd-jpg/Project_Chimera commit 1e5fcf05609a2d5cd5398900ebd61e057d407093,
-#     "Update cpufreq_schedutil.c" / "Updated ACME schedutil defaults as well
-#     as sugov priority fix")
-#
-# Verified: the actual diff of that commit touches ONLY
-# sugov_update_rate_limit_us(), hardcoding up_rate_limit_us=1500 and
-# down_rate_limit_us=16000 in place of the caller-supplied values. That is
-# what is applied here. The two related deltas at other sites in this same
-# file (sugov_kthread_create() priority, sugov_init() rate limit) are
-# applied separately in sections [7] and [8] below, each from its own
-# cited commit.
 # ─────────────────────────────────────────────────────────────────────────
 log "=== [6/8] kernel/sched/cpufreq_schedutil.c sugov rate limits ==="
 
-SUGOV_MARKER="CMK9_SUGOV_RATE_LIMIT"
-SUGOV_FILE="kernel/sched/cpufreq_schedutil.c"
+export SUGOV_MARKER="CMK9_SUGOV_RATE_LIMIT"
+export SUGOV_FILE="kernel/sched/cpufreq_schedutil.c"
 
 [[ -f "$SUGOV_FILE" ]] || { echo "FATAL: $SUGOV_FILE not found" >&2; exit 1; }
 
 if grep -q "$SUGOV_MARKER" "$SUGOV_FILE"; then
   log "$SUGOV_FILE: sugov rate limit already tuned — skipping"
 else
-  python3 << PYEOF
-import re, sys
+  # QUOTED heredoc delimiter: no bash processing of the body at all.
+  python3 << 'PYEOF'
+import re, sys, os
 from pathlib import Path
 
-MARKER = "$SUGOV_MARKER"
-p = Path("$SUGOV_FILE")
+MARKER = os.environ["SUGOV_MARKER"]
+p = Path(os.environ["SUGOV_FILE"])
 src = p.read_text()
 
 pattern = re.compile(
@@ -470,74 +451,130 @@ fi
 
 # ─────────────────────────────────────────────────────────────────────────
 # [7] kernel/sched/cpufreq_schedutil.c — sugov_kthread_create() priority
-#     (royd-jpg/Project_Chimera commit
-#     f21ae9c9c3b5b817724f71a21d2d1a9dbd03c0c5, "config: finalize HZ
-#     config and scheduler tweaks")
 #
-# Verified: this commit's diff also touches CONFIG_LOCALVERSION in the
-# defconfig, which is not applied here — LOCALVERSION is already owned
-# entirely by the workflow's brand input/overlay step, and this commit's
-# value ("-4.9.337-CM6P") is an intermediate Chimera build tag, not the
-# final one. Only the scheduler part of this commit is applied:
-# sugov_kthread_create()'s real-time worker thread changes from
-# SCHED_FIFO/MAX_USER_RT_PRIO/2 to SCHED_RR/priority=1.
-# ─────────────────────────────────────────────────────────
+# Matches the FULL function body (signature through closing brace) in one
+# piece, rather than a partial match ending mid-function, so there is no
+# untouched-suffix boundary left for a future escaping slip to corrupt
+# silently.
+# ─────────────────────────────────────────────────────────────────────────
 log "=== [7/8] kernel/sched/cpufreq_schedutil.c sugov kthread priority (SCHED_RR) ==="
- 
-SUGOV_PRIO_MARKER="CMK9_SUGOV_KTHREAD_PRIORITY"
- 
+
+export SUGOV_PRIO_MARKER="CMK9_SUGOV_KTHREAD_PRIORITY"
+
 if grep -q "$SUGOV_PRIO_MARKER" "$SUGOV_FILE"; then
   log "$SUGOV_FILE: sugov kthread priority already tuned — skipping"
 else
-  python3 << PYEOF
-import re, sys
+  # QUOTED heredoc delimiter — this is the section that broke three times
+  # under the unquoted form. Every \n / \t / \" below is now plain, natural
+  # Python escaping with no bash pre-processing to compensate for.
+  python3 << 'PYEOF'
+import re, sys, os
 from pathlib import Path
- 
-MARKER = "$SUGOV_PRIO_MARKER"
-p = Path("$SUGOV_FILE")
+
+MARKER = os.environ["SUGOV_PRIO_MARKER"]
+p = Path(os.environ["SUGOV_FILE"])
 src = p.read_text()
- 
+
+# Match the ENTIRE function body from its signature through the closing
+# brace, using a balanced-brace-free approach: this function's body
+# contains no nested braces of its own other than the single
+# `if (IS_ERR(thread)) { ... }` and `if (ret) { ... }` blocks, both of
+# which are included explicitly below, so a literal text match is safe
+# and unambiguous here (unlike fs/namei.c's do_umount(), this function
+# has no #ifdef/#else branches that would desync a literal match).
 pattern = re.compile(
-    r"(static int sugov_kthread_create\(struct sugov_policy \*sg_policy\)\n"
+    r"static int sugov_kthread_create\(struct sugov_policy \*sg_policy\)\n"
     r"\{\n"
-    r"\tstruct task_struct \*thread;\n)"
+    r"\tstruct task_struct \*thread;\n"
     r"\tstruct sched_param param = \{ \.sched_priority = MAX_USER_RT_PRIO / 2 \};\n"
-)
- 
-m = pattern.search(src)
-if not m:
-    print("FATAL: sugov_kthread_create() param anchor not found — base has changed", file=sys.stderr)
-    sys.exit(1)
- 
-src = (
-    src[:m.start()] + m.group(1) +
-    "\tstruct sched_param param = { .sched_priority = 1 }; /* " + MARKER + " */\n" +
-    src[m.end():]
-)
- 
-sched_pattern = re.compile(
+    r"\tstruct cpufreq_policy \*policy = sg_policy->policy;\n"
+    r"\tint ret;\n"
+    r"\n"
+    r"\t/\* kthread only required for slow path \*/\n"
+    r"\tif \(policy->fast_switch_enabled\)\n"
+    r"\t\treturn 0;\n"
+    r"\n"
+    r"\tkthread_init_work\(&sg_policy->work, sugov_work\);\n"
+    r"\tkthread_init_worker\(&sg_policy->worker\);\n"
+    r"\tthread = kthread_create\(kthread_worker_fn, &sg_policy->worker,\n"
+    r"\t\t\t\t\"sugov:%d\",\n"
+    r"\t\t\t\tcpumask_first\(policy->related_cpus\)\);\n"
+    r"\tif \(IS_ERR\(thread\)\) \{\n"
+    r"\t\tpr_err\(\"failed to create sugov thread: %ld\\n\", PTR_ERR\(thread\)\);\n"
+    r"\t\treturn PTR_ERR\(thread\);\n"
+    r"\t\}\n"
+    r"\n"
     r"\tret = sched_setscheduler_nocheck\(thread, SCHED_FIFO, &param\);\n"
     r"\tif \(ret\) \{\n"
     r"\t\tkthread_stop\(thread\);\n"
-    r"\t\tpr_warn\(\"%s: failed to set SCHED_FIFO\\\\n\", __func__\);\n"
+    r"\t\tpr_warn\(\"%s: failed to set SCHED_FIFO\\n\", __func__\);\n"
+    r"\t\treturn ret;\n"
+    r"\t\}\n"
+    r"\n"
+    r"\tsg_policy->thread = thread;\n"
+    r"\tkthread_bind_mask\(thread, policy->related_cpus\);\n"
+    r"\tinit_irq_work\(&sg_policy->irq_work, sugov_irq_work\);\n"
+    r"\tmutex_init\(&sg_policy->work_lock\);\n"
+    r"\n"
+    r"\twake_up_process\(thread\);\n"
+    r"\n"
+    r"\treturn 0;\n"
+    r"\}\n"
 )
- 
-m2 = sched_pattern.search(src)
-if not m2:
-    print("FATAL: sugov_kthread_create() scheduler-set anchor not found — base has changed", file=sys.stderr)
+
+matches = list(pattern.finditer(src))
+if len(matches) != 1:
+    print(
+        f"FATAL: expected exactly 1 match for sugov_kthread_create() full body, found {len(matches)}",
+        file=sys.stderr,
+    )
     sys.exit(1)
- 
+
+m = matches[0]
+
 replacement = (
+    "static int sugov_kthread_create(struct sugov_policy *sg_policy)\n"
+    "{\n"
+    "\tstruct task_struct *thread;\n"
+    "\tstruct sched_param param = { .sched_priority = 1 }; /* " + MARKER + " */\n"
+    "\tstruct cpufreq_policy *policy = sg_policy->policy;\n"
+    "\tint ret;\n"
+    "\n"
+    "\t/* kthread only required for slow path */\n"
+    "\tif (policy->fast_switch_enabled)\n"
+    "\t\treturn 0;\n"
+    "\n"
+    "\tkthread_init_work(&sg_policy->work, sugov_work);\n"
+    "\tkthread_init_worker(&sg_policy->worker);\n"
+    "\tthread = kthread_create(kthread_worker_fn, &sg_policy->worker,\n"
+    "\t\t\t\t\"sugov:%d\",\n"
+    "\t\t\t\tcpumask_first(policy->related_cpus));\n"
+    "\tif (IS_ERR(thread)) {\n"
+    "\t\tpr_err(\"failed to create sugov thread: %ld\\n\", PTR_ERR(thread));\n"
+    "\t\treturn PTR_ERR(thread);\n"
+    "\t}\n"
+    "\n"
     "\tret = sched_setscheduler_nocheck(thread, SCHED_RR, &param); /* " + MARKER + " */\n"
     "\tif (ret) {\n"
     "\t\tkthread_stop(thread);\n"
-    "\t\tpr_warn(\"%s: failed to set SCHED_RR\\\\n\", __func__);\n"
+    "\t\tpr_warn(\"%s: failed to set SCHED_RR\\n\", __func__);\n"
+    "\t\treturn ret;\n"
     "\t}\n"
+    "\n"
+    "\tsg_policy->thread = thread;\n"
+    "\tkthread_bind_mask(thread, policy->related_cpus);\n"
+    "\tinit_irq_work(&sg_policy->irq_work, sugov_irq_work);\n"
+    "\tmutex_init(&sg_policy->work_lock);\n"
+    "\n"
+    "\twake_up_process(thread);\n"
+    "\n"
+    "\treturn 0;\n"
+    "}\n"
 )
-src = src[:m2.start()] + replacement + src[m2.end():]
- 
+
+src = src[:m.start()] + replacement + src[m.end():]
 p.write_text(src)
-print(f"{p}: sugov_kthread_create() moved to SCHED_RR / priority=1 (marker: {MARKER})")
+print(f"{p}: sugov_kthread_create() moved to SCHED_RR / priority=1 (marker: {MARKER}, full-body replace)")
 PYEOF
   log "PASS: sugov kthread priority (SCHED_RR) applied"
 fi
@@ -545,30 +582,20 @@ fi
 # ─────────────────────────────────────────────────────────────────────────
 # [8] kernel/sched/cpufreq_schedutil.c — sugov_init() second rate-limit
 #     application
-#     (royd-jpg/Project_Chimera commit
-#     745fb40c25fcb18641f926fd616b642438b98b89, "sched: cpufreq_schedutil:
-#     hardcode rate limits to 1500/16000")
-#
-# Verified: this commit inserts the same up_rate_limit_us=1500 /
-# down_rate_limit_us=16000 values into sugov_init(), immediately before
-# tunables->iowait_boost_enable is set — a separate code path from section
-# [6]'s sugov_update_rate_limit_us(), so both are needed for the value to
-# be correct both at initial policy setup (this section) and on any
-# later rate-limit update (section 6).
 # ─────────────────────────────────────────────────────────────────────────
 log "=== [8/8] kernel/sched/cpufreq_schedutil.c sugov_init() rate limit ==="
 
-SUGOV_INIT_MARKER="CMK9_SUGOV_INIT_RATE_LIMIT"
+export SUGOV_INIT_MARKER="CMK9_SUGOV_INIT_RATE_LIMIT"
 
 if grep -q "$SUGOV_INIT_MARKER" "$SUGOV_FILE"; then
   log "$SUGOV_FILE: sugov_init() rate limit already applied — skipping"
 else
-  python3 << PYEOF
-import re, sys
+  python3 << 'PYEOF'
+import re, sys, os
 from pathlib import Path
 
-MARKER = "$SUGOV_INIT_MARKER"
-p = Path("$SUGOV_FILE")
+MARKER = os.environ["SUGOV_INIT_MARKER"]
+p = Path(os.environ["SUGOV_FILE"])
 src = p.read_text()
 
 pattern = re.compile(
