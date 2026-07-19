@@ -129,6 +129,66 @@ name: Project Chimera Mk9 — gavdoc38 Canonical Base Build
 #     substitutions (not a blanket substring sed, to avoid touching the
 #     legitimate selinux_cred_* hook function definitions).
 #
+# [H] Chimera device-specific overlay — verified content, wrong commit SHA
+#     caught and corrected
+#     ---------------------------------------------------------------------
+#     Royd's request cited commit 1e5fcf05609a2d5cd5398900ebd61e057d407093
+#     as the source of the kernel/sched/fair.c scheduler tuning. Verified
+#     directly: that commit's actual diff touches
+#     kernel/sched/cpufreq_schedutil.c (sugov rate limits), not fair.c. The
+#     fair.c tuning (normalized_sysctl_sched_min_granularity: 750000ULL ->
+#     5000000ULL, sysctl_sched_migration_cost: 500000UL -> 2000000UL) is
+#     real — confirmed by a direct file diff against the gavdoc38 base —
+#     just not from that SHA. Applied via the verified diff, not the
+#     citation.
+#
+#     Two additional genuine gaps were found and confirmed by diffing
+#     royd-jpg/Project_Chimera@chimera-mk8 against the gavdoc38 base file
+#     by file:
+#
+#       - fs/proc/base.c: gavdoc38 has the SUS_MAP guard in the
+#         /proc/pid/maps iteration path but is missing it in mem_rw()
+#         (the /proc/pid/mem read/write path). Without it, a file hidden
+#         from /proc/pid/maps via SUS_MAP remains fully readable/writable
+#         through /proc/pid/mem — a real detection-bypass gap, not a
+#         duplicate of the existing guard.
+#
+#       - fs/namei.c: gavdoc38 has the primary sus_path hooks
+#         (lookup_dcache/__lookup_hash/lookup_fast/lookup_slow/lookup_open)
+#         but is missing chimera-mk8's second sus_path re-check inserted
+#         immediately after may_lookup() inside link_path_walk()'s main
+#         loop — a belt-and-suspenders re-check for the case where
+#         may_lookup() triggers a revalidation that changes
+#         nd->path.dentry between the first check and the rest of the
+#         loop body.
+#
+#     All five device-specific patches (UFC short-circuit, the two gaps
+#     above, fair.c tuning, and the DTS board tuning) now live in
+#     patches/apply_chimera_overlay_patches.sh, each anchored on the exact
+#     verified upstream text and idempotent. A new post-overlay
+#     verification step (11b) fails the build hard if any of the five
+#     markers is missing, so the overlay can never silently drop out again.
+#
+#     A sixth, seventh, and eighth patch were added on request, all three
+#     confirmed against their actual commit diffs:
+#       - 1e5fcf05609a2d5cd5398900ebd61e057d407093: hardcodes
+#         sugov_update_rate_limit_us()'s up_rate_limit_us=1500 /
+#         down_rate_limit_us=16000.
+#       - f21ae9c9c3b5b817724f71a21d2d1a9dbd03c0c5: moves
+#         sugov_kthread_create()'s worker thread from
+#         SCHED_FIFO/MAX_USER_RT_PRIO/2 to SCHED_RR/priority=1. (This
+#         commit's diff also touches CONFIG_LOCALVERSION in the defconfig;
+#         that part is NOT applied — LOCALVERSION is already fully owned
+#         by the workflow's brand input.)
+#       - 745fb40c25fcb18641f926fd616b642438b98b89: applies the same
+#         up_rate_limit_us=1500/down_rate_limit_us=16000 pair a second
+#         time, at sugov_init() (policy-init time) rather than only on
+#         later updates.
+#     Together these three fully replicate chimera-mk8's current
+#     cpufreq_schedutil.c at all three sites — confirmed by diffing the
+#     patched result against chimera-mk8's actual file after applying all
+#     three (identical except for marker comments).
+#
 # ─────────────────────────────────────────────────────────────────────────────
 # PACKAGING
 #
@@ -718,7 +778,7 @@ jobs:
 
           echo "PASS: hooks.c selinux_cred consistency verified, hook functions intact"
 
-      # ── 11. Chimera overlay (scheduler tuning + branding — unaffected by base swap) ──
+      # ── 11. Chimera overlay (verified device-specific patches — see script header) ──
       - name: Apply Chimera overlay
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
@@ -727,20 +787,6 @@ jobs:
           LOG="$ABS_LOG/overlay.log"
 
           echo "Chimera overlay started at $(date -u)" > "$LOG"
-
-          FAIR="kernel/sched/fair.c"
-
-          if grep -q '750000ULL' "$FAIR"; then
-            sed -i \
-              's/\(normalized_sysctl_sched_min_granularity\s*=\s*\)750000ULL/\15000000ULL/' \
-              "$FAIR"
-          fi
-
-          if grep -q '500000UL;' "$FAIR"; then
-            sed -i \
-              's/\(sysctl_sched_migration_cost\s*=\s*\)500000UL/\12000000UL/' \
-              "$FAIR"
-          fi
 
           sed -i \
             '/^CONFIG_LOCALVERSION=/d;/^CONFIG_DEFAULT_HOSTNAME=/d' \
@@ -761,13 +807,66 @@ jobs:
 
           echo "$BRAND" > localversion
 
-          if [[ -x "$GITHUB_WORKSPACE/patches/apply_chimera_overlay_patches.sh" ]]; then
-            bash "$GITHUB_WORKSPACE/patches/apply_chimera_overlay_patches.sh"
-          fi
+          # fair.c scheduler tuning, mem_rw() SUS_MAP guard, namei.c
+          # sus_path sub-path re-check, exynos-ufc.c UFC short-circuit, and
+          # board DTS tuning all live in this script — not inline here —
+          # so there is exactly one place that owns each anchor and one
+          # place that fails loudly if an anchor drifts. This is mandatory,
+          # not conditional: the earlier "Verify required repo-local files"
+          # step already guarantees the script exists.
+          bash "$GITHUB_WORKSPACE/patches/apply_chimera_overlay_patches.sh" \
+            2>&1 | tee -a "$LOG"
 
           echo \
             "Overlay applied (profile=$PROFILE, brand=$BRAND)" \
             | tee -a "$LOG"
+
+      # ── 11b. Verify Chimera overlay landed completely ────────────────────────
+      - name: Verify Chimera overlay markers
+        working-directory: ${{ env.KERNEL_DIR }}
+        run: |
+          set -Eeuo pipefail
+
+          FAIL=0
+
+          check() {
+            local desc="$1" marker="$2" file="$3"
+            if grep -q "$marker" "$file" 2>/dev/null; then
+              echo "OK:    $desc"
+            else
+              echo "FATAL: $desc — marker '$marker' not found in $file"
+              FAIL=1
+            fi
+          }
+
+          check "UFC short-circuit"            "CMK9_UFC_SHORT_CIRCUIT"        "drivers/cpufreq/exynos-ufc.c"
+          check "mem_rw() SUS_MAP guard"       "CMK9_MEM_RW_SUS_MAP_GUARD"     "fs/proc/base.c"
+          check "namei sus_path sub-path recheck" "CMK9_NAMEI_SUS_PATH_RECHECK" "fs/namei.c"
+          check "board DTS tuning"             "CMK9_DTS_BOARD_TUNING"         "arch/arm64/boot/dts/exynos/exynos9810-star2lte_eur_open_26.dts"
+          check "sugov rate limit tuning"       "CMK9_SUGOV_RATE_LIMIT"        "kernel/sched/cpufreq_schedutil.c"
+          check "sugov kthread priority (SCHED_RR)" "CMK9_SUGOV_KTHREAD_PRIORITY" "kernel/sched/cpufreq_schedutil.c"
+          check "sugov_init() rate limit"       "CMK9_SUGOV_INIT_RATE_LIMIT"   "kernel/sched/cpufreq_schedutil.c"
+
+          grep -q 'normalized_sysctl_sched_min_granularity = 5000000ULL' kernel/sched/fair.c \
+            && echo "OK:    fair.c min_granularity tuned" \
+            || { echo "FATAL: fair.c min_granularity not tuned"; FAIL=1; }
+
+          grep -q 'sysctl_sched_migration_cost = 2000000UL' kernel/sched/fair.c \
+            && echo "OK:    fair.c migration_cost tuned" \
+            || { echo "FATAL: fair.c migration_cost not tuned"; FAIL=1; }
+
+          [[ "$FAIL" -eq 0 ]] || {
+            echo
+            echo "One or more Chimera overlay patches did not land. This is a"
+            echo "hard failure — the whole point of this workflow revision is"
+            echo "that the Chimera overlay is present in every build, not"
+            echo "silently dropped when a repo file goes missing or an anchor"
+            echo "drifts."
+            exit 1
+          }
+
+          echo
+          echo "PASS: all Chimera overlay markers present"
 
       # ── 12. Kconfig fragment normalization ───────────────────────────────────
       - name: Validate Kconfig fragment
@@ -896,6 +995,63 @@ jobs:
 
 
           cp "$CFG" "$ABS_LOG/final.config"
+
+      # ── 14b. Security/config guard — forbidden Samsung restrictions, required KSU/SUSFS ──
+      - name: Guard pass — verify security restrictions disabled and KSU/SUSFS enabled
+        working-directory: ${{ env.KERNEL_DIR }}
+        run: |
+          set -Eeuo pipefail
+
+          CFG="$ABS_OUT/.config"
+
+          FORBIDDEN=(
+            CONFIG_RKP_KDP
+            CONFIG_UH_RKP
+            CONFIG_TIMA
+            CONFIG_TIMA_LKMAUTH
+            CONFIG_FIVE
+            CONFIG_SEC_RESTRICT_ROOTING
+            CONFIG_SEC_RESTRICT_SETUID
+            CONFIG_SECURITY_DEFEX
+            CONFIG_KNOX_KAP
+          )
+
+          FAIL=0
+
+          : > "$ABS_LOG/config-guard.log"
+
+          for sym in "${FORBIDDEN[@]}"; do
+            if grep -qE "^${sym}=y" "$CFG"; then
+              echo "FATAL: $sym=y" | tee -a "$ABS_LOG/config-guard.log"
+              FAIL=1
+            else
+              echo "OK: $sym disabled" | tee -a "$ABS_LOG/config-guard.log"
+            fi
+          done
+
+          REQUIRED=(
+            CONFIG_KSU
+            CONFIG_KSU_MANUAL_HOOK
+            CONFIG_KSU_SUSFS
+            CONFIG_KSU_SUSFS_SUS_PATH
+            CONFIG_KSU_SUSFS_SUS_MAP
+            CONFIG_KSU_SUSFS_SUS_KSTAT
+            CONFIG_HZ_300
+            CONFIG_MFD_MADERA
+            CONFIG_MFD_CS47L92
+            CONFIG_TCP_CONG_BBR
+          )
+
+          for sym in "${REQUIRED[@]}"; do
+            if grep -qE "^${sym}=y" "$CFG"; then
+              echo "OK: $sym=y" | tee -a "$ABS_LOG/config-guard.log"
+            else
+              echo "FATAL: $sym is not enabled" | tee -a "$ABS_LOG/config-guard.log"
+              FAIL=1
+            fi
+          done
+
+          [[ "$FAIL" -eq 0 ]] || exit 1
 
       # ── 15. Toolchain resolution ─────────────────────────────────────────────
       - name: Resolve toolchain configuration
