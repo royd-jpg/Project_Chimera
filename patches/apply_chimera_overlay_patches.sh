@@ -499,10 +499,14 @@ p = Path("$SUGOV_FILE")
 src = p.read_text()
 
 pattern = re.compile(
-    r"(static int sugov_kthread_create\(struct sugov_policy \*sg_policy\)\n"
-    r"\{\n"
-    r"\tstruct task_struct \*thread;\n)"
-    r"\tstruct sched_param param = \{ \.sched_priority = MAX_USER_RT_PRIO / 2 \};\n"
+    r"(static int sugov_kthread_create(struct sugov_policy *sg_policy)
+"
+    r"{
+"
+    r"\tstruct task_struct *thread;
+)"
+    r"\tstruct sched_param param = { .sched_priority = MAX_USER_RT_PRIO / 2 };
+"
 )
 
 m = pattern.search(src)
@@ -512,15 +516,21 @@ if not m:
 
 src = (
     src[:m.start()] + m.group(1) +
-    "\tstruct sched_param param = { .sched_priority = 1 }; /* " + MARKER + " */\n" +
+    "\tstruct sched_param param = { .sched_priority = 1 }; /* " + MARKER + " */
+" +
     src[m.end():]
 )
 
 sched_pattern = re.compile(
-    r"\tret = sched_setscheduler_nocheck\(thread, SCHED_FIFO, &param\);\n"
-    r"\tif \(ret\) \{\n"
-    r"\t\tkthread_stop\(thread\);\n"
-    r"\t\tpr_warn\(\"%s: failed to set SCHED_FIFO\\\\n\", __func__\);\n"
+    r"\tret = sched_setscheduler_nocheck(thread, SCHED_FIFO, &param);
+"
+    r"\tif (ret) {
+"
+    r"\t\tkthread_stop(thread);
+"
+    r"\t\tpr_warn("%s: failed to set SCHED_FIFO\\\
+", __func__);
+"
 )
 
 m2 = sched_pattern.search(src)
@@ -529,10 +539,17 @@ if not m2:
     sys.exit(1)
 
 replacement = (
-    "\tret = sched_setscheduler_nocheck(thread, SCHED_RR, &param); /* " + MARKER + " */\n"
-    "\tif (ret) {\n"
-    "\t\tkthread_stop(thread);\n"
-    "\t\tpr_warn(\"%s: failed to set SCHED_RR\\n\", __func__);\n"
+    "\tret = sched_setscheduler_nocheck(thread, SCHED_RR, &param); /* " + MARKER + " */
+"
+    "\tif (ret) {
+"
+    "\t\tkthread_stop(thread);
+"
+    "\t\tpr_warn("%s: failed to set SCHED_RR\\\
+", __func__);
+"
+    "\t}
+"
 )
 src = src[:m2.start()] + replacement + src[m2.end():]
 
