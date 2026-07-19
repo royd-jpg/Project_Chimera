@@ -490,54 +490,51 @@ if grep -q "$SUGOV_PRIO_MARKER" "$SUGOV_FILE"; then
   log "$SUGOV_FILE: sugov kthread priority already tuned — skipping"
 else
   python3 << PYEOF
-import sys
+import re, sys
 from pathlib import Path
 
 MARKER = "$SUGOV_PRIO_MARKER"
 p = Path("$SUGOV_FILE")
 src = p.read_text()
 
-# Replace MAX_USER_RT_PRIO / 2 param with priority 1
-old_param = (
-    "static int sugov_kthread_create(struct sugov_policy *sg_policy)\n"
-    "{\n"
-    "\tstruct task_struct *thread;\n"
-    "\tstruct sched_param param = { .sched_priority = MAX_USER_RT_PRIO / 2 };\n"
-)
-new_param = (
-    "static int sugov_kthread_create(struct sugov_policy *sg_policy)\n"
-    "{\n"
-    "\tstruct task_struct *thread;\n"
-    "\tstruct sched_param param = { .sched_priority = 1 }; /* " + MARKER + " */\n"
+pattern = re.compile(
+    r"(static int sugov_kthread_create\(struct sugov_policy \*sg_policy\)\n"
+    r"\{\n"
+    r"\tstruct task_struct \*thread;\n)"
+    r"\tstruct sched_param param = \{ \.sched_priority = MAX_USER_RT_PRIO / 2 \};\n"
 )
 
-if old_param not in src:
+m = pattern.search(src)
+if not m:
     print("FATAL: sugov_kthread_create() param anchor not found — base has changed", file=sys.stderr)
     sys.exit(1)
 
-src = src.replace(old_param, new_param, 1)
-
-# Replace SCHED_FIFO block with SCHED_RR block
-old_sched = (
-    "\tret = sched_setscheduler_nocheck(thread, SCHED_FIFO, &param);\n"
-    "\tif (ret) {\n"
-    "\t\tkthread_stop(thread);\n"
-    "\t\tpr_warn(\"%s: failed to set SCHED_FIFO\\n\", __func__);\n"
-    "\t}\n"
+src = (
+    src[:m.start()] + m.group(1) +
+    "\tstruct sched_param param = { .sched_priority = 1 }; /* " + MARKER + " */\n" +
+    src[m.end():]
 )
-new_sched = (
+
+sched_pattern = re.compile(
+    r"\tret = sched_setscheduler_nocheck\(thread, SCHED_FIFO, &param\);\n"
+    r"\tif \(ret\) \{\n"
+    r"\t\tkthread_stop\(thread\);\n"
+    r"\t\tpr_warn\(\"%s: failed to set SCHED_FIFO\\\\n\", __func__\);\n"
+)
+
+m2 = sched_pattern.search(src)
+if not m2:
+    print("FATAL: sugov_kthread_create() scheduler-set anchor not found — base has changed", file=sys.stderr)
+    sys.exit(1)
+
+replacement = (
     "\tret = sched_setscheduler_nocheck(thread, SCHED_RR, &param); /* " + MARKER + " */\n"
     "\tif (ret) {\n"
     "\t\tkthread_stop(thread);\n"
     "\t\tpr_warn(\"%s: failed to set SCHED_RR\\\\n\", __func__);\n"
     "\t}\n"
 )
-
-if old_sched not in src:
-    print("FATAL: sugov_kthread_create() scheduler-set anchor not found — base has changed", file=sys.stderr)
-    sys.exit(1)
-
-src = src.replace(old_sched, new_sched, 1)
+src = src[:m2.start()] + replacement + src[m2.end():]
 
 p.write_text(src)
 print(f"{p}: sugov_kthread_create() moved to SCHED_RR / priority=1 (marker: {MARKER})")
