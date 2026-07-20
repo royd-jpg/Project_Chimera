@@ -215,10 +215,10 @@ on:
         default: cm8
 
       toolchain:
-        description: "Toolchain: aosp19/aosp20/aosp21/aosp22/neutron19/zyc_stable/clang21-eva-gcc"
+        description: "Toolchain: aosp19/aosp20/aosp21/aosp22/neutron19/neutron18/zyc_stable/clang21-eva-gcc"
         required: true
         type: choice
-        options: [aosp19, aosp20, aosp21, aosp22, neutron19, zyc_stable, clang21-eva-gcc]
+        options: [aosp19, aosp20, aosp21, aosp22, neutron19, neutron18, zyc_stable, clang21-eva-gcc]
         default: neutron19
 
       dry_run:
@@ -1095,6 +1095,15 @@ jobs:
               TC_CACHE_KEY="neutron-clang-10032024-ubuntu-24.04-v2"
               ;;
 
+            neutron18)
+              # Example Neutron Clang 18 build (adjust tag/date as needed)
+              TC_URL="https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/18032024/neutron-clang-18032024.tar.zst"
+              TC_ARCHIVE_FMT="tar.zst"
+              TC_CACHE_KEY="neutron-clang-18032024-ubuntu-24.04-v1"
+              TC_USE_FULL_LLVM="true"
+              TC_LLVM_IAS="1"
+              ;;
+
             zyc_stable)
               TC_CACHE_KEY="zyc-clang-ubuntu-24.04-v2"
 
@@ -1260,12 +1269,10 @@ jobs:
           if [[ "${{ inputs.toolchain }}" != "clang21-eva-gcc" ]]; then
 
             for tool in ar nm objcopy objdump strip; do
-
               ln -sf \
                 "$ABS_TC/bin/llvm-${tool}" \
                 "$ABS_TC/bin/aarch64-linux-gnu-${tool}" \
                 || true
-
             done
 
             ln -sf \
@@ -1282,7 +1289,8 @@ jobs:
               "OBJCOPY=llvm-objcopy"
               "OBJDUMP=llvm-objdump"
               "STRIP=llvm-strip"
-              "KCFLAGS=-O2 -fcommon -fno-strict-aliasing -Wno-error -fuse-ld=lld"
+              # Keep KCFLAGS conservative; Neutron already uses O3/LTO/BOLT internally.
+              "KCFLAGS=-O2 -fcommon -fno-strict-aliasing -Wno-error"
             )
 
           else
