@@ -1097,9 +1097,9 @@ jobs:
 
             neutron18)
               # Example Neutron Clang 18 build (adjust tag/date as needed)
-              TC_URL="https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/18032024/neutron-clang-18032024.tar.zst"
+              TC_URL="https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/05012024/neutron-clang-05012024.tar.zst"
               TC_ARCHIVE_FMT="tar.zst"
-              TC_CACHE_KEY="neutron-clang-18032024-ubuntu-24.04-v1"
+              TC_CACHE_KEY="neutron-clang-05012024-ubuntu-24.04-v1"
               TC_USE_FULL_LLVM="true"
               TC_LLVM_IAS="1"
               ;;
