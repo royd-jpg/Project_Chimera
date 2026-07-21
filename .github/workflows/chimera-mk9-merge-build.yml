@@ -1096,20 +1096,14 @@ jobs:
               ;;
 
             neutron18)
-              # Example Neutron Clang 18 build (adjust tag/date as needed)
               TC_URL="https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/05012024/neutron-clang-05012024.tar.zst"
               TC_ARCHIVE_FMT="tar.zst"
-              TC_CACHE_KEY="neutron-clang-05012024-ubuntu-24.04-v1"
-              TC_USE_FULL_LLVM="true"
-              TC_LLVM_IAS="1"
+              TC_CACHE_KEY="neutron-clang-05012024-ubuntu-24.04-v2"
               ;;
 
             zyc_stable)
               TC_CACHE_KEY="zyc-clang-ubuntu-24.04-v2"
-
-              TC_URL=$(curl -fsSL \
-                "https://raw.githubusercontent.com/ZyCromerZ/Clang/main/Clang-main-link.txt" \
-                || true)
+              TC_URL=$(curl -fsSL "https://raw.githubusercontent.com/ZyCromerZ/Clang/main/Clang-main-link.txt" || true)
               ;;
 
             clang21-eva-gcc)
@@ -1120,9 +1114,7 @@ jobs:
               ;;
 
             *)
-              echo \
-                "ERROR: unsupported toolchain '$TOOLCHAIN'" \
-                >&2
+              echo "ERROR: unsupported toolchain '$TOOLCHAIN'" >&2
               exit 1
               ;;
 
@@ -1136,9 +1128,7 @@ jobs:
             echo "TC_USE_FULL_LLVM=$TC_USE_FULL_LLVM"
           } >> "$GITHUB_ENV"
 
-          echo \
-            "TC_CACHE_KEY=$TC_CACHE_KEY" \
-            >> "$GITHUB_OUTPUT"
+          echo "TC_CACHE_KEY=$TC_CACHE_KEY" >> "$GITHUB_OUTPUT"
 
       - name: Cache toolchain
         uses: actions/cache@v4
@@ -1258,7 +1248,7 @@ jobs:
           MAKE_ARGS=(
             "O=$ABS_OUT"
             "ARCH=arm64"
-            "CC=ccache clang"
+            "CC=clang"
             "CLANG_TRIPLE=aarch64-linux-gnu-"
             "CROSS_COMPILE=aarch64-linux-gnu-"
             "CROSS_COMPILE_ARM32=arm-linux-gnueabi-"
@@ -1267,18 +1257,11 @@ jobs:
           )
 
           if [[ "${{ inputs.toolchain }}" != "clang21-eva-gcc" ]]; then
-
             for tool in ar nm objcopy objdump strip; do
-              ln -sf \
-                "$ABS_TC/bin/llvm-${tool}" \
-                "$ABS_TC/bin/aarch64-linux-gnu-${tool}" \
-                || true
+              ln -sf "$ABS_TC/bin/llvm-${tool}" "$ABS_TC/bin/aarch64-linux-gnu-${tool}" || true
             done
 
-            ln -sf \
-              "$ABS_TC/bin/ld.lld" \
-              "$ABS_TC/bin/aarch64-linux-gnu-ld" \
-              || true
+            ln -sf "$ABS_TC/bin/ld.lld" "$ABS_TC/bin/aarch64-linux-gnu-ld" || true
 
             MAKE_ARGS+=(
               "LLVM=1"
@@ -1289,14 +1272,13 @@ jobs:
               "OBJCOPY=llvm-objcopy"
               "OBJDUMP=llvm-objdump"
               "STRIP=llvm-strip"
-              # Keep KCFLAGS conservative; Neutron already uses O3/LTO/BOLT internally.
               "KCFLAGS=-O2 -fcommon -fno-strict-aliasing -Wno-error"
             )
-
           else
-
             MAKE_ARGS+=(
+              "LLVM=0"
               "LLVM_IAS=0"
+              "CC=gcc"
               "HOSTCC=gcc"
               "HOSTCXX=g++"
               "LD=aarch64-linux-gnu-ld"
@@ -1307,15 +1289,7 @@ jobs:
               "STRIP=aarch64-linux-gnu-strip"
               "KCFLAGS=-O2 -fcommon -fno-strict-aliasing -Wno-error"
             )
-
           fi
-
-          make \
-            "${MAKE_ARGS[@]}" \
-            Image \
-            dtbs \
-            2>&1 \
-            | tee "$ABS_LOG/build.log"
 
       # ── 19. vmlinux KSU/SUSFS symbol guard ────────────────────────────────────
       - name: Guard pass — verify KSU/SUSFS symbols
