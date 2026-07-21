@@ -1291,7 +1291,6 @@ jobs:
             )
           fi
 
-      # ── 19. vmlinux KSU/SUSFS symbol guard ────────────────────────────────────
       - name: Guard pass — verify KSU/SUSFS symbols
         if: ${{ inputs.dry_run != true }}
         working-directory: ${{ env.KERNEL_DIR }}
@@ -1301,7 +1300,8 @@ jobs:
           VMLINUX="$ABS_OUT/vmlinux"
 
           [[ -f "$VMLINUX" ]] || {
-            echo "FATAL: vmlinux not found" >&2
+            echo "FATAL: vmlinux not found at $VMLINUX" >&2
+            ls -la "$ABS_OUT" >&2 || true
             exit 1
           }
 
@@ -1313,18 +1313,8 @@ jobs:
             NM=nm
           fi
 
-          "$NM" \
-            "$VMLINUX" \
-            > "$ABS_LOG/vmlinux-symbols.log" \
-            2>&1 \
-            || true
+          "$NM" --format=bsd --defined-only "$VMLINUX" > "$ABS_LOG/vmlinux-symbols.log" 2>&1 || true
 
-          # ksu_handle_setresuid is expected here because it is called from
-          # the LSM task_fix_setuid hook (ksu_task_fix_setuid), not because
-          # of a kernel/sys.c patch — see fix-log item [A]. ksu_lsm_hook_init
-          # and ksu_task_fix_setuid are included to positively confirm the
-          # LSM-hook-based path (rather than a syscall patch) is what's
-          # actually compiled in.
           REQUIRED=(
             ksu_handle_execveat
             ksu_handle_faccessat
@@ -1338,22 +1328,12 @@ jobs:
           FAIL=0
 
           for sym in "${REQUIRED[@]}"; do
-
-            if grep -q \
-              -E \
-              "^[0-9a-fA-F]+ [A-Za-z] ${sym}$" \
-              "$ABS_LOG/vmlinux-symbols.log"; then
-
+            if grep -qE "[[:space:]]${sym}$" "$ABS_LOG/vmlinux-symbols.log"; then
               echo "OK: $sym"
-
             else
-
               echo "FATAL: missing symbol: $sym"
-
               FAIL=1
-
             fi
-
           done
 
           [[ "$FAIL" -eq 0 ]] || exit 1
