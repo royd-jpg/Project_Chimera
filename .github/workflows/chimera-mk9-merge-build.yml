@@ -1291,6 +1291,14 @@ jobs:
             )
           fi
 
+          make \
+            "${MAKE_ARGS[@]}" \
+            Image \
+            vmlinux \
+            dtbs \
+            2>&1 \
+            | tee "$ABS_LOG/build.log"
+
       - name: Guard pass — verify KSU/SUSFS symbols
         if: ${{ inputs.dry_run != true }}
         working-directory: ${{ env.KERNEL_DIR }}
