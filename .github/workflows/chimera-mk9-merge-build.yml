@@ -1272,7 +1272,7 @@ jobs:
               "OBJCOPY=llvm-objcopy"
               "OBJDUMP=llvm-objdump"
               "STRIP=llvm-strip"
-              "KCFLAGS=-O2 -fcommon -fno-strict-aliasing -Wno-error"
+              "KCFLAGS=-O2 -fcommon -fno-strict-aliasing -Wno-error -Wno-default-const-init-field-unsafe -Wno-default-const-init-unsafe"
             )
           else
             MAKE_ARGS+=(
