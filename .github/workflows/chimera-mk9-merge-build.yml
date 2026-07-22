@@ -940,8 +940,6 @@ jobs:
               TC_URL="https://mirrors.edge.kernel.org/pub/tools/llvm/files/llvm-20.1.8-x86_64.tar.xz"
               TC_ARCHIVE_FMT="tar.xz"
               TC_CACHE_KEY="korg-clang-20.1.8-ubuntu-24.04-v1"
-              TC_LLVM_IAS="1"
-              TC_USE_FULL_LLVM="true"
               ;;
             neutron19)
               TC_URL="https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/10032024/neutron-clang-10032024.tar.zst"
