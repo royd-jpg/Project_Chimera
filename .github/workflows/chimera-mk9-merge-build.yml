@@ -1066,10 +1066,14 @@ jobs:
         run: |
           set -Eeuo pipefail
 
+          mkdir -p "$ABS_TC/bin"
+
           export PATH="$ABS_TC/bin:$PATH"
           export LD=ld.lld
           export LLVM=1
           export LLVM_IAS=1
+
+          ln -sf "$ABS_TC/bin/ld.lld" /usr/local/bin/ld.lld || true
 
           JOBS="$(nproc)"
 
@@ -1085,14 +1089,11 @@ jobs:
           )
 
           if [[ "${{ inputs.toolchain }}" != "clang21-eva-gcc" ]]; then
-            mkdir -p "$ABS_TC/bin"
-
             for tool in ar nm objcopy objdump strip; do
               ln -sf "$ABS_TC/bin/llvm-${tool}" "$ABS_TC/bin/aarch64-linux-gnu-${tool}" || true
             done
 
             ln -sf "$ABS_TC/bin/ld.lld" "$ABS_TC/bin/aarch64-linux-gnu-ld" || true
-            ln -sf "$ABS_TC/bin/ld.lld" /usr/local/bin/ld.lld || true
 
             MAKE_ARGS+=(
               "LLVM=1"
@@ -1129,6 +1130,7 @@ jobs:
             dtbs \
             2>&1 \
             | tee "$ABS_LOG/build.log"
+            
       - name: Guard pass — verify KSU/SUSFS symbols
         if: ${{ inputs.dry_run != true }}
         working-directory: ${{ env.KERNEL_DIR }}
