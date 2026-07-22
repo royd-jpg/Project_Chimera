@@ -1089,12 +1089,6 @@ jobs:
           )
 
           if [[ "${{ inputs.toolchain }}" != "clang21-eva-gcc" ]]; then
-            for tool in ar nm objcopy objdump strip; do
-              ln -sf "$ABS_TC/bin/llvm-${tool}" "$ABS_TC/bin/aarch64-linux-gnu-${tool}" || true
-            done
-
-            ln -sf "$ABS_TC/bin/ld.lld" "$ABS_TC/bin/aarch64-linux-gnu-ld" || true
-
             MAKE_ARGS+=(
               "LLVM=1"
               "LLVM_IAS=1"
