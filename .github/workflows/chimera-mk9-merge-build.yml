@@ -1068,14 +1068,28 @@ jobs:
           LLVM_IAS: "1"
         run: |
           set -Eeuo pipefail
-          mkdir -p "$ABS_TC/bin"
-          export PATH="$ABS_TC/bin:$PATH"
+          
+          # Dynamically locate the actual toolchain bin folder 
+          ACTUAL_BIN=$(find "$ABS_TC" -type d -name "bin" | head -n 1)
+          
+          # Create an isolated custom bin directory to avoid modifying read-only paths
+          CUSTOM_BIN="$ABS_TC/custom-bin"
+          mkdir -p "$CUSTOM_BIN"
+          
+          # Symlink all core binaries from the actual toolchain into our custom bin
+          ln -sf "$ACTUAL_BIN"/* "$CUSTOM_BIN/"
+          
+          # Put our custom bin first in the PATH
+          export PATH="$CUSTOM_BIN:$PATH"
+          
+          # Generate the required cross-compile and linker aliases in our custom space
           for tool in ar nm objcopy objdump strip; do
-            ln -sf "$ABS_TC/bin/llvm-${tool}" "$ABS_TC/bin/aarch64-linux-gnu-${tool}" || true
+            ln -sf "$CUSTOM_BIN/llvm-${tool}" "$CUSTOM_BIN/aarch64-linux-gnu-${tool}" || true
           done
-          ln -sf "$ABS_TC/bin/ld.lld" "$ABS_TC/bin/aarch64-linux-gnu-ld" || true
-          ln -sf "$ABS_TC/bin/ld.lld" "$ABS_TC/bin/ld" || true
-          ln -sf "$ABS_TC/bin/ld.lld" /usr/local/bin/ld.lld || true
+          ln -sf "$CUSTOM_BIN/ld.lld" "$CUSTOM_BIN/aarch64-linux-gnu-ld" || true
+          ln -sf "$CUSTOM_BIN/ld.lld" "$CUSTOM_BIN/ld" || true
+          ln -sf "$CUSTOM_BIN/ld.lld" /usr/local/bin/ld.lld || true
+          
           JOBS="$(nproc)"
           MAKE_ARGS=(
             "O=$ABS_OUT"
