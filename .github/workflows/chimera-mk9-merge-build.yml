@@ -1063,23 +1063,22 @@ jobs:
           KBUILD_BUILD_HOST: ${{ env.BUILD_HOST }}
           KBUILD_BUILD_VERSION: ${{ env.BUILD_VERSION }}
           KBUILD_BUILD_TIMESTAMP: ${{ env.KBUILD_BUILD_TIMESTAMP }}
-          LD: ld.lld
-          LLVM: "1"
-          LLVM_IAS: "1"
         run: |
           set -Eeuo pipefail
 
           mkdir -p "$ABS_TC/bin"
 
           export PATH="$ABS_TC/bin:$PATH"
+          export LLVM=1
+          export LLVM_IAS=1
+
+          ln -sf "$ABS_TC/bin/ld.lld" "$ABS_TC/bin/ld" || true
+          ln -sf "$ABS_TC/bin/ld.lld" "$ABS_TC/bin/aarch64-linux-gnu-ld" || true
 
           for tool in ar nm objcopy objdump strip; do
+            ln -sf "$ABS_TC/bin/llvm-${tool}" "$ABS_TC/bin/${tool}" || true
             ln -sf "$ABS_TC/bin/llvm-${tool}" "$ABS_TC/bin/aarch64-linux-gnu-${tool}" || true
           done
-
-          ln -sf "$ABS_TC/bin/ld.lld" "$ABS_TC/bin/aarch64-linux-gnu-ld" || true
-          ln -sf "$ABS_TC/bin/ld.lld" "$ABS_TC/bin/ld" || true
-          ln -sf "$ABS_TC/bin/ld.lld" /usr/local/bin/ld.lld || true
 
           JOBS="$(nproc)"
 
@@ -1098,12 +1097,12 @@ jobs:
             MAKE_ARGS+=(
               "LLVM=1"
               "LLVM_IAS=1"
-              "LD=ld.lld"
-              "AR=llvm-ar"
-              "NM=llvm-nm"
-              "OBJCOPY=llvm-objcopy"
-              "OBJDUMP=llvm-objdump"
-              "STRIP=llvm-strip"
+              "LD=ld"
+              "AR=ar"
+              "NM=nm"
+              "OBJCOPY=objcopy"
+              "OBJDUMP=objdump"
+              "STRIP=strip"
               "KCFLAGS=-O2 -fcommon -fno-strict-aliasing -Wno-error"
             )
           else
