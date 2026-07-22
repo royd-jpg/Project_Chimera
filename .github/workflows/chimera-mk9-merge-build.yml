@@ -947,8 +947,8 @@ jobs:
               TC_CACHE_KEY="neutron-clang-05012024-ubuntu-24.04-v2"
               ;;
             zyc_stable)
+              TC_URL="https://github.com/ZyCromerZ/Clang/releases/download/21.0.0git-20250715-release/Clang-21.0.0git-20250715.tar.gz"
               TC_CACHE_KEY="zyc-clang-ubuntu-24.04-v2"
-              TC_URL=$(curl -fsSL "https://raw.githubusercontent.com/ZyCromerZ/Clang/main/Clang-main-link.txt" || true)
               ;;
             clang21-eva-gcc)
               TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/21b19c041de1f1df9b97fd9902ae5405c6cf8eb9/clang-r563880c.tar.gz"
