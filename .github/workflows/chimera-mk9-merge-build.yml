@@ -937,9 +937,9 @@ jobs:
               TC_CACHE_KEY="aosp-clang-r596125-ubuntu-24.04-v2"
               ;;
             llvm20)
-              TC_URL="https://github.com/llvm/llvm-project/releases/download/llvmorg-20.1.8/clang+llvm-20.1.8-x86_64-linux-gnu-ubuntu-22.04.tar.xz"
+              TC_URL="https://mirrors.edge.kernel.org/pub/tools/llvm/files/llvm-20.1.8-x86_64.tar.xz"
               TC_ARCHIVE_FMT="tar.xz"
-              TC_CACHE_KEY="llvm-clang-20.1.8-ubuntu-24.04-v1"
+              TC_CACHE_KEY="korg-clang-20.1.8-ubuntu-24.04-v1"
               TC_LLVM_IAS="1"
               TC_USE_FULL_LLVM="true"
               ;;
