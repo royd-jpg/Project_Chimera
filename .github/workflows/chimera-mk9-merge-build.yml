@@ -1065,8 +1065,14 @@ jobs:
           KBUILD_BUILD_TIMESTAMP: ${{ env.KBUILD_BUILD_TIMESTAMP }}
         run: |
           set -Eeuo pipefail
+
           export PATH="$ABS_TC/bin:$PATH"
+          export LD=ld.lld
+          export LLVM=1
+          export LLVM_IAS=1
+
           JOBS="$(nproc)"
+
           MAKE_ARGS=(
             "O=$ABS_OUT"
             "ARCH=arm64"
@@ -1077,11 +1083,16 @@ jobs:
             "-j${JOBS}"
             "LOCALVERSION=${BRAND}"
           )
+
           if [[ "${{ inputs.toolchain }}" != "clang21-eva-gcc" ]]; then
             for tool in ar nm objcopy objdump strip; do
               ln -sf "$ABS_TC/bin/llvm-${tool}" "$ABS_TC/bin/aarch64-linux-gnu-${tool}" || true
+              ln -sf "$ABS_TC/bin/llvm-${tool}" "/usr/local/bin/llvm-${tool}" || true
             done
+
             ln -sf "$ABS_TC/bin/ld.lld" "$ABS_TC/bin/aarch64-linux-gnu-ld" || true
+            ln -sf "$ABS_TC/bin/ld.lld" "/usr/local/bin/ld.lld" || true
+
             MAKE_ARGS+=(
               "LLVM=1"
               "LLVM_IAS=1"
@@ -1109,6 +1120,7 @@ jobs:
               "KCFLAGS=-O2 -fcommon -fno-strict-aliasing -Wno-error"
             )
           fi
+
           make \
             "${MAKE_ARGS[@]}" \
             Image \
