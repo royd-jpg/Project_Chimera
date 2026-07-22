@@ -1068,59 +1068,39 @@ jobs:
 
           mkdir -p "$ABS_TC/bin"
 
-          export PATH="$ABS_TC/bin:$PATH"
-          export LLVM=1
-          export LLVM_IAS=1
-
           ln -sf "$ABS_TC/bin/ld.lld" "$ABS_TC/bin/ld" || true
           ln -sf "$ABS_TC/bin/ld.lld" "$ABS_TC/bin/aarch64-linux-gnu-ld" || true
-
           for tool in ar nm objcopy objdump strip; do
             ln -sf "$ABS_TC/bin/llvm-${tool}" "$ABS_TC/bin/${tool}" || true
             ln -sf "$ABS_TC/bin/llvm-${tool}" "$ABS_TC/bin/aarch64-linux-gnu-${tool}" || true
           done
+
+          export PATH="$ABS_TC/bin:$PATH"
+          export CC=clang
+          export LD=ld
+          export LLVM=1
+          export LLVM_IAS=1
 
           JOBS="$(nproc)"
 
           MAKE_ARGS=(
             "O=$ABS_OUT"
             "ARCH=arm64"
-            "CC=clang"
             "CLANG_TRIPLE=aarch64-linux-gnu-"
             "CROSS_COMPILE=aarch64-linux-gnu-"
             "CROSS_COMPILE_ARM32=arm-linux-gnueabi-"
             "-j${JOBS}"
             "LOCALVERSION=${BRAND}"
+            "LLVM=1"
+            "LLVM_IAS=1"
+            "LD=ld"
+            "AR=ar"
+            "NM=nm"
+            "OBJCOPY=objcopy"
+            "OBJDUMP=objdump"
+            "STRIP=strip"
+            "KCFLAGS=-O2 -fcommon -fno-strict-aliasing -Wno-error"
           )
-
-          if [[ "${{ inputs.toolchain }}" != "clang21-eva-gcc" ]]; then
-            MAKE_ARGS+=(
-              "LLVM=1"
-              "LLVM_IAS=1"
-              "LD=ld"
-              "AR=ar"
-              "NM=nm"
-              "OBJCOPY=objcopy"
-              "OBJDUMP=objdump"
-              "STRIP=strip"
-              "KCFLAGS=-O2 -fcommon -fno-strict-aliasing -Wno-error"
-            )
-          else
-            MAKE_ARGS+=(
-              "LLVM=0"
-              "LLVM_IAS=0"
-              "CC=gcc"
-              "HOSTCC=gcc"
-              "HOSTCXX=g++"
-              "LD=aarch64-linux-gnu-ld"
-              "AR=aarch64-linux-gnu-ar"
-              "NM=aarch64-linux-gnu-nm"
-              "OBJCOPY=aarch64-linux-gnu-objcopy"
-              "OBJDUMP=aarch64-linux-gnu-objdump"
-              "STRIP=aarch64-linux-gnu-strip"
-              "KCFLAGS=-O2 -fcommon -fno-strict-aliasing -Wno-error"
-            )
-          fi
 
           make \
             "${MAKE_ARGS[@]}" \
