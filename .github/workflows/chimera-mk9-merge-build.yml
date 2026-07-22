@@ -218,7 +218,7 @@ on:
         description: "Toolchain: aosp19/aosp20/aosp21/aosp22/neutron19/neutron18/zyc_stable/clang21-eva-gcc"
         required: true
         type: choice
-        options: [aosp19, aosp20, aosp21, aosp22, neutron19, neutron18, zyc_stable, clang21-eva-gcc]
+        options: [aosp19, aosp20, aosp21, aosp22, llvm20, neutron19, neutron18, zyc_stable, clang21-eva-gcc]
         default: neutron19
 
       dry_run:
@@ -267,19 +267,19 @@ on:
         description: "LOCALVERSION suffix (must start with '-')"
         required: false
         type: string
-        default: "-Chimera_Mk9_Merge"
+        default: "-Chimera_Mk9"
 
       build_user:
         description: "KBUILD_BUILD_USER"
         required: false
         type: string
-        default: "C43L4N"
+        default: "REL"
 
       build_host:
         description: "KBUILD_BUILD_HOST"
         required: false
         type: string
-        default: "AegisDevLabs"
+        default: "CM9X0000"
 
       build_version:
         description: "KBUILD_BUILD_VERSION (#N token)"
@@ -291,7 +291,7 @@ on:
         description: "KBUILD_BUILD_TIMESTAMP (deterministic)"
         required: false
         type: string
-        default: "Mon 1 Jan 00:00:00 UTC 2026"
+        default: "Mon Jan 1 00:00:00 UTC 2026"
 
 env:
   CHIMERA_REPO: "https://github.com/royd-jpg/Project_Chimera.git"
@@ -305,11 +305,11 @@ env:
 
   CCACHE_MAXSIZE: "3G"
 
-  BRAND_DEFAULT: "-Chimera_Mk9_Merge"
-  BUILD_USER_DEFAULT: "C43L4N"
-  BUILD_HOST_DEFAULT: "AegisDevLabs"
+  BRAND_DEFAULT: "-Chimera_Mk9"
+  BUILD_USER_DEFAULT: "REL"
+  BUILD_HOST_DEFAULT: "CM9X0000"
   BUILD_VERSION_DEFAULT: "1"
-  KBUILD_BUILD_TIMESTAMP_DEFAULT: "Mon 1 Jan 00:00:00 UTC 2026"
+  KBUILD_BUILD_TIMESTAMP_DEFAULT: "Mon Jan 1 00:00:00 UTC 2026"
 
   PROFILE: ${{ inputs.profile }}
   TOOLCHAIN: ${{ inputs.toolchain }}
@@ -935,6 +935,13 @@ jobs:
             aosp22)
               TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/mirror-goog-main-llvm-toolchain-source/clang-r596125.tar.gz"
               TC_CACHE_KEY="aosp-clang-r596125-ubuntu-24.04-v2"
+              ;;
+            llvm20)
+              TC_URL="https://github.com/llvm/llvm-project/releases/download/llvmorg-20.1.8/clang+llvm-20.1.8-x86_64-linux-gnu-ubuntu-22.04.tar.xz"
+              TC_ARCHIVE_FMT="tar.xz"
+              TC_CACHE_KEY="llvm-clang-20.1.8-ubuntu-24.04-v1"
+              TC_LLVM_IAS="1"
+              TC_USE_FULL_LLVM="true"
               ;;
             neutron19)
               TC_URL="https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/10032024/neutron-clang-10032024.tar.zst"
