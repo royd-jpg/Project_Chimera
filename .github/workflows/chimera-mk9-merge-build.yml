@@ -1129,6 +1129,44 @@ jobs:
             dtbs \
             2>&1 \
             | tee "$ABS_LOG/build.log"
+      - name: Guard pass — verify KSU/SUSFS symbols
+        if: ${{ inputs.dry_run != true }}
+        working-directory: ${{ env.KERNEL_DIR }}
+        run: |
+          set -Eeuo pipefail
+          VMLINUX="$ABS_OUT/vmlinux"
+          [[ -f "$VMLINUX" ]] || {
+            echo "FATAL: vmlinux not found at $VMLINUX" >&2
+            ls -la "$ABS_OUT" >&2 || true
+            exit 1
+          }
+          if [[ -x "$ABS_TC/bin/llvm-nm" ]]; then
+            NM="$ABS_TC/bin/llvm-nm"
+          elif command -v llvm-nm >/dev/null 2>&1; then
+            NM=llvm-nm
+          else
+            NM=nm
+          fi
+          "$NM" --format=bsd --defined-only "$VMLINUX" > "$ABS_LOG/vmlinux-symbols.log" 2>&1 || true
+          REQUIRED=(
+            ksu_handle_execveat
+            ksu_handle_faccessat
+            ksu_handle_setresuid
+            ksu_handle_sys_reboot
+            ksu_lsm_hook_init
+            ksu_task_fix_setuid
+            susfs_is_inode_sus_path
+          )
+          FAIL=0
+          for sym in "${REQUIRED[@]}"; do
+            if grep -qE "[[:space:]]${sym}$" "$ABS_LOG/vmlinux-symbols.log"; then
+              echo "OK: $sym"
+            else
+              echo "FATAL: missing symbol: $sym"
+              FAIL=1
+            fi
+          done
+          [[ "$FAIL" -eq 0 ]] || exit 1
       # ── 20. Assemble legacy Samsung dtb.img ──────────────────────────────────
       - name: Assemble dtb.img from star2lte device DTBs
         if: ${{ inputs.dry_run != true }}
