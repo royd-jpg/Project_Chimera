@@ -59,7 +59,7 @@ log() { echo "[chimera-overlay] $*"; }
 # ─────────────────────────────────────────────────────────────────────────
 # [1] UFC short-circuit
 # ─────────────────────────────────────────────────────────────────────────
-log "=== [1/8] UFC short-circuit (drivers/cpufreq/exynos-ufc.c) ==="
+log "=== [1/9] UFC short-circuit (drivers/cpufreq/exynos-ufc.c) ==="
 
 UFC_MARKER="CMK9_UFC_SHORT_CIRCUIT"
 UFC_FILE="drivers/cpufreq/exynos-ufc.c"
@@ -111,7 +111,7 @@ fi
 # ─────────────────────────────────────────────────────────────────────────
 # [2] fs/proc/base.c mem_rw() SUS_MAP guard
 # ─────────────────────────────────────────────────────────────────────────
-log "=== [2/8] fs/proc/base.c mem_rw() SUS_MAP guard ==="
+log "=== [2/9] fs/proc/base.c mem_rw() SUS_MAP guard ==="
 
 MEMRW_MARKER="CMK9_MEM_RW_SUS_MAP_GUARD"
 BASE_C="fs/proc/base.c"
@@ -195,7 +195,7 @@ log "VERIFIED: pre-existing SUS_MAP maps-iteration guard intact"
 # ─────────────────────────────────────────────────────────────────────────
 # [3] fs/namei.c extra sus_path sub-path denial
 # ─────────────────────────────────────────────────────────────────────────
-log "=== [3/8] fs/namei.c extra sus_path sub-path denial ==="
+log "=== [3/9] fs/namei.c extra sus_path sub-path denial ==="
 
 NAMEI_MARKER="CMK9_NAMEI_SUS_PATH_RECHECK"
 NAMEI_C="fs/namei.c"
@@ -265,7 +265,7 @@ fi
 # ─────────────────────────────────────────────────────────────────────────
 # [4] kernel/sched/fair.c scheduler tuning
 # ─────────────────────────────────────────────────────────────────────────
-log "=== [4/8] kernel/sched/fair.c scheduler tuning ==="
+log "=== [4/9] kernel/sched/fair.c scheduler tuning ==="
 
 FAIR="kernel/sched/fair.c"
 [[ -f "$FAIR" ]] || { echo "FATAL: $FAIR not found" >&2; exit 1; }
@@ -297,7 +297,7 @@ fi
 # ─────────────────────────────────────────────────────────────────────────
 # [5] Board DTS tuning
 # ─────────────────────────────────────────────────────────────────────────
-log "=== [5/8] Board DTS tuning ==="
+log "=== [5/9] Board DTS tuning ==="
 
 DTS="arch/arm64/boot/dts/exynos/exynos9810-star2lte_eur_open_26.dts"
 DTS_MARKER="CMK9_DTS_BOARD_TUNING"
@@ -404,7 +404,7 @@ fi
 # ─────────────────────────────────────────────────────────────────────────
 # [6] kernel/sched/cpufreq_schedutil.c — sugov rate limits
 # ─────────────────────────────────────────────────────────────────────────
-log "=== [6/8] kernel/sched/cpufreq_schedutil.c sugov rate limits ==="
+log "=== [6/9] kernel/sched/cpufreq_schedutil.c sugov rate limits ==="
 
 export SUGOV_MARKER="CMK9_SUGOV_RATE_LIMIT"
 export SUGOV_FILE="kernel/sched/cpufreq_schedutil.c"
@@ -457,7 +457,7 @@ fi
 # untouched-suffix boundary left for a future escaping slip to corrupt
 # silently.
 # ─────────────────────────────────────────────────────────────────────────
-log "=== [7/8] kernel/sched/cpufreq_schedutil.c sugov kthread priority (SCHED_RR) ==="
+log "=== [7/9] kernel/sched/cpufreq_schedutil.c sugov kthread priority (SCHED_RR) ==="
 
 export SUGOV_PRIO_MARKER="CMK9_SUGOV_KTHREAD_PRIORITY"
 
@@ -583,7 +583,7 @@ fi
 # [8] kernel/sched/cpufreq_schedutil.c — sugov_init() second rate-limit
 #     application
 # ─────────────────────────────────────────────────────────────────────────
-log "=== [8/8] kernel/sched/cpufreq_schedutil.c sugov_init() rate limit ==="
+log "=== [8/9] kernel/sched/cpufreq_schedutil.c sugov_init() rate limit ==="
 
 export SUGOV_INIT_MARKER="CMK9_SUGOV_INIT_RATE_LIMIT"
 
@@ -621,6 +621,27 @@ p.write_text(src)
 print(f"{p}: sugov_init() rate limit hardcoded to up=1500/down=16000 (marker: {MARKER})")
 PYEOF
   log "PASS: sugov_init() rate limit applied"
+fi
+
+# ═════════════════════════════════════════════════════════════════════════
+# [9] drivers/mfd/madera-core.c — settle delay after reset release
+#    Fixes intermittent cold-boot probe failure on the cs47l93 codec
+#    (races the chip's internal boot ROM vs the first SPI register read).
+# ═════════════════════════════════════════════════════════════════════════
+log "=== [9/9] madera-core.c reset-release settle delay ==="
+
+MADERA_FILE="drivers/mfd/madera-core.c"
+MADERA_PATCH="$GITHUB_WORKSPACE/patches/0001-mfd-madera-core-settle-delay-after-reset-release.patch"
+
+[[ -f "$MADERA_FILE" ]] || fail "$MADERA_FILE not found"
+[[ -f "$MADERA_PATCH" ]] || fail "$MADERA_PATCH not found"
+
+if grep -q "Allow internal boot ROM / SPI interface to become ready" "$MADERA_FILE"; then
+  log "$MADERA_FILE: settle delay already present — skipping"
+else
+  git apply "$MADERA_PATCH" \
+    || fail "madera-core.c settle-delay patch failed to apply — base file may have changed"
+  log "PASS: madera-core.c settle delay applied"
 fi
 
 log "=== Chimera overlay: all sections complete ==="
