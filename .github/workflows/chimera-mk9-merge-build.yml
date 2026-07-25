@@ -208,11 +208,11 @@ on:
   workflow_dispatch:
     inputs:
       profile:
-        description: "Build profile: cm8 (runtime SUSFS spoof) or cm8e (compile-time identity)"
+        description: "Build profile: cm9 (runtime SUSFS spoof) or cm9e (compile-time identity)"
         required: true
         type: choice
-        options: [cm8, cm8e]
-        default: cm8
+        options: [cm9, cm9e]
+        default: cm9
 
       toolchain:
         description: "Toolchain: aosp19/aosp20/aosp21/aosp22/llvm20/llvm21/neutron19/zyc_stable/clang21-eva-gcc"
@@ -249,13 +249,13 @@ on:
         description: "Base ref/branch/SHA — default is the verified integration commit"
         required: false
         type: string
-        default: "61cb0324c43c5c481b7a9b87a51b349b149bd2ba"
+        default: "e0710943f1c00397054e5d9995376195ce38d58e"
 
       ksu_commit:
         description: "KernelSU-Next exact commit SHA (pin; overrides submodule-pinned commit if different)"
         required: false
         type: string
-        default: "242f245b2c971eb5c1cc4a689e01dcdeaff4c939"
+        default: "3abe57b59e567e14b60a2798d5f6e4f2c96138e1"
 
       susfs_note:
         description: "SUSFS provenance note only — SUSFS is vendored into the gavdoc38 base tree (branch suffix '-susfs2'), not a separate checkout"
@@ -313,7 +313,7 @@ env:
 
   PROFILE: ${{ inputs.profile }}
   TOOLCHAIN: ${{ inputs.toolchain }}
-  IDENTITY_ENGINE_ACTIVE: ${{ inputs.profile == 'cm8e' }}
+  IDENTITY_ENGINE_ACTIVE: ${{ inputs.profile == 'cm9e' }}
   FORCE_REPATCH: ${{ inputs.force_repatch }}
   BASE_REPO: ${{ inputs.base_repo }}
 
