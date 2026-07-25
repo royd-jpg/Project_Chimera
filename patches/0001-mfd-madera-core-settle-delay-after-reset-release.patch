@@ -1,0 +1,43 @@
+From: Chimera <chimera@localhost>
+Subject: [PATCH] mfd: madera-core: add settle delay after reset release
+ before first SPI register access
+
+madera_dev_init() releases the codec's hardware RESET line and then
+immediately performs the first SPI register read (MADERA_SOFTWARE_RESET,
+the chip-ID check) with no delay in between. The chip's internal boot
+ROM needs a short settle time after reset deassertion before its SPI
+control interface reliably responds; racing that window causes the ID
+read to fail, which aborts the whole probe (goto err_reset) and leaves
+the codec completely unpowered until something manually re-triggers a
+bind.
+
+This is timing-sensitive and more likely to lose the race on a cold
+boot (PMIC rail ramp-up and reset-release timing are less predictable
+coming from fully powered-off) than on a warm reboot (rails are often
+already primed from the prior cycle), which matches the cs47l93 on
+star2lte intermittently failing to probe specifically on cold boot.
+
+Add a conservative 5-10ms settle delay between releasing reset and the
+first register access, matching the margin the Cirrus CS47L92/93
+datasheet's power-up sequencing calls for. This makes cold boot behave
+identically to warm reboot with no userspace rebind step required.
+
+Signed-off-by: Chimera <chimera@localhost>
+---
+ drivers/mfd/madera-core.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/drivers/mfd/madera-core.c b/drivers/mfd/madera-core.c
+index 0000000..0000000 100644
+--- a/drivers/mfd/madera-core.c
++++ b/drivers/mfd/madera-core.c
+@@ -678,6 +678,9 @@ int madera_dev_init(struct madera *madera)
+ 
+ 	madera_disable_hard_reset(madera);
+ 
++	/* Allow internal boot ROM / SPI interface to become ready */
++	usleep_range(5000, 10000);
++
+ 	regcache_cache_only(madera->regmap, false);
+ 	regcache_cache_only(madera->regmap_32bit, false);
+ 
