@@ -215,10 +215,10 @@ on:
         default: cm8
 
       toolchain:
-        description: "Toolchain: aosp19/aosp20/aosp21/aosp22/neutron19/neutron18/zyc_stable/clang21-eva-gcc"
+        description: "Toolchain: aosp19/aosp20/aosp21/aosp22/llvm20/llvm21/neutron19/zyc_stable/clang21-eva-gcc"
         required: true
         type: choice
-        options: [aosp19, aosp20, aosp21, aosp22, llvm20, neutron19, neutron18, zyc_stable, clang21-eva-gcc]
+        options: [aosp19, aosp20, aosp21, aosp22, llvm20, llvm21, neutron19, zyc_stable, clang21-eva-gcc]
         default: neutron19
 
       dry_run:
@@ -941,15 +941,15 @@ jobs:
               TC_ARCHIVE_FMT="tar.xz"
               TC_CACHE_KEY="korg-clang-20.1.8-ubuntu-24.04-v1"
               ;;
+            llvm21)
+              TC_URL="https://mirrors.edge.kernel.org/pub/tools/llvm/files/llvm-21.1.0-x86_64.tar.xz"
+              TC_ARCHIVE_FMT="tar.xz"
+              TC_CACHE_KEY="llvm-clang-21.1.0-ubuntu-24.04-v1"
+              ;;
             neutron19)
               TC_URL="https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/10032024/neutron-clang-10032024.tar.zst"
               TC_ARCHIVE_FMT="tar.zst"
               TC_CACHE_KEY="neutron-clang-10032024-ubuntu-24.04-v2"
-              ;;
-            neutron18)
-              TC_URL="https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/05012024/neutron-clang-05012024.tar.zst"
-              TC_ARCHIVE_FMT="tar.zst"
-              TC_CACHE_KEY="neutron-clang-05012024-ubuntu-24.04-v2"
               ;;
             zyc_stable)
               TC_URL="https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250928-release/Clang-22.0.0git-20250928.tar.gz"
