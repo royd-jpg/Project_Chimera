@@ -1,4 +1,4 @@
-name: Project Chimera Mk9 — gavdoc38 Canonical Base Build
+name: Project Chimera Mk9 — gavdoc38 Canonical Base Build v.20260730
 
 # ─────────────────────────────────────────────────────────────────────────────
 # REFACTOR RATIONALE (originally verified against gavdoc38 commit
@@ -28,6 +28,13 @@ name: Project Chimera Mk9 — gavdoc38 Canonical Base Build
 # for the current tip and re-pin both base_ref and ksu_commit (verifying
 # the new tip's files match the ones in fix-log items above before
 # assuming it's a drop-in replacement).
+#
+# TOOLCHAIN MERGE (2026-07-30): llvm20/llvm21 (korg-hosted LLVM release
+# tarballs) restored into this version's toolchain matrix — present in an
+# earlier draft of this workflow but missing from this v.20260730 base.
+# URLs/cache keys carried over unchanged; zyc_stable's dynamic
+# Clang-main-link.txt lookup (this version's own approach, not the older
+# hardcoded-URL one) is left as-is.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ARCHITECTURE CHANGE
@@ -118,7 +125,7 @@ name: Project Chimera Mk9 — gavdoc38 Canonical Base Build
 #     -----------------------------------------------------------------------
 #     KernelSU-Next's kernel/Kbuild performs its own backport detection and
 #     application via $(shell grep ...)/$(shell sed -i ...) at Makefile-parse
-#     time for the drivers/kernelsu directory. Under Linux's recursive Kbuild
+#     time for the drivers/kernelsu sub-make. Under Linux's recursive Kbuild
 #     model, each directory (fs/, security/, drivers/kernelsu/, ...) is built
 #     by its own sub-make invocation, and there is no guaranteed ordering
 #     between them — especially under `make -j`. If fs/'s sub-make compiles
@@ -296,10 +303,10 @@ on:
         default: cm8
 
       toolchain:
-        description: "Toolchain: aosp19/aosp20/aosp21/aosp22/neutron19/zyc_stable/clang21-eva-gcc"
+        description: "Toolchain: aosp19/aosp20/aosp21/aosp22/llvm20/llvm21/neutron19/zyc_stable/clang21-eva-gcc"
         required: true
         type: choice
-        options: [aosp19, aosp20, aosp21, aosp22, neutron19, zyc_stable, clang21-eva-gcc]
+        options: [aosp19, aosp20, aosp21, aosp22, llvm20, llvm21, neutron19, zyc_stable, clang21-eva-gcc]
         default: neutron19
 
       dry_run:
@@ -1183,6 +1190,18 @@ jobs:
             aosp22)
               TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/mirror-goog-main-llvm-toolchain-source/clang-r596125.tar.gz"
               TC_CACHE_KEY="aosp-clang-r596125-ubuntu-24.04-v2"
+              ;;
+
+            llvm20)
+              TC_URL="https://mirrors.edge.kernel.org/pub/tools/llvm/files/llvm-20.1.8-x86_64.tar.xz"
+              TC_ARCHIVE_FMT="tar.xz"
+              TC_CACHE_KEY="korg-clang-20.1.8-ubuntu-24.04-v1"
+              ;;
+
+            llvm21)
+              TC_URL="https://mirrors.edge.kernel.org/pub/tools/llvm/files/llvm-21.1.0-x86_64.tar.xz"
+              TC_ARCHIVE_FMT="tar.xz"
+              TC_CACHE_KEY="llvm-clang-21.1.0-ubuntu-24.04-v1"
               ;;
 
             neutron19)
