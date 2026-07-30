@@ -1354,40 +1354,45 @@ jobs:
           KBUILD_BUILD_HOST: ${{ env.BUILD_HOST }}
           KBUILD_BUILD_VERSION: ${{ env.BUILD_VERSION }}
           KBUILD_BUILD_TIMESTAMP: ${{ env.KBUILD_BUILD_TIMESTAMP }}
+          LD: ld.lld
+          LLVM: "1"
+          LLVM_IAS: "1"
         run: |
           set -Eeuo pipefail
-
-          export PATH="$ABS_TC/bin:$PATH"
-
+          
+          # Dynamically locate the actual toolchain bin folder 
+          ACTUAL_BIN=$(find "$ABS_TC" -type d -name "bin" | head -n 1)
+          
+          # Create an isolated custom bin directory to avoid modifying read-only paths
+          CUSTOM_BIN="$ABS_TC/custom-bin"
+          mkdir -p "$CUSTOM_BIN"
+          
+          # Symlink all core binaries from the actual toolchain into our custom bin
+          ln -sf "$ACTUAL_BIN"/* "$CUSTOM_BIN/"
+          
+          # Put our custom bin first in the PATH
+          export PATH="$CUSTOM_BIN:$PATH"
+          
+          # Generate the required cross-compile and linker aliases in our custom space
+          for tool in ar nm objcopy objdump strip; do
+            ln -sf "$CUSTOM_BIN/llvm-${tool}" "$CUSTOM_BIN/aarch64-linux-gnu-${tool}" || true
+          done
+          ln -sf "$CUSTOM_BIN/ld.lld" "$CUSTOM_BIN/aarch64-linux-gnu-ld" || true
+          ln -sf "$CUSTOM_BIN/ld.lld" "$CUSTOM_BIN/ld" || true
+          ln -sf "$CUSTOM_BIN/ld.lld" /usr/local/bin/ld.lld || true
+          
           JOBS="$(nproc)"
-
           MAKE_ARGS=(
             "O=$ABS_OUT"
             "ARCH=arm64"
-            "CC=ccache clang"
+            "CC=clang"
             "CLANG_TRIPLE=aarch64-linux-gnu-"
             "CROSS_COMPILE=aarch64-linux-gnu-"
             "CROSS_COMPILE_ARM32=arm-linux-gnueabi-"
             "-j${JOBS}"
             "LOCALVERSION=${BRAND}"
           )
-
           if [[ "${{ inputs.toolchain }}" != "clang21-eva-gcc" ]]; then
-
-            for tool in ar nm objcopy objdump strip; do
-
-              ln -sf \
-                "$ABS_TC/bin/llvm-${tool}" \
-                "$ABS_TC/bin/aarch64-linux-gnu-${tool}" \
-                || true
-
-            done
-
-            ln -sf \
-              "$ABS_TC/bin/ld.lld" \
-              "$ABS_TC/bin/aarch64-linux-gnu-ld" \
-              || true
-
             MAKE_ARGS+=(
               "LLVM=1"
               "LLVM_IAS=1"
@@ -1399,11 +1404,11 @@ jobs:
               "STRIP=llvm-strip"
               "KCFLAGS=-O2 -fcommon -fno-strict-aliasing -Wno-error -fuse-ld=lld"
             )
-
           else
-
             MAKE_ARGS+=(
+              "LLVM=0"
               "LLVM_IAS=0"
+              "CC=gcc"
               "HOSTCC=gcc"
               "HOSTCXX=g++"
               "LD=aarch64-linux-gnu-ld"
@@ -1414,12 +1419,11 @@ jobs:
               "STRIP=aarch64-linux-gnu-strip"
               "KCFLAGS=-O2 -fcommon -fno-strict-aliasing -Wno-error"
             )
-
           fi
-
           make \
             "${MAKE_ARGS[@]}" \
             Image \
+            vmlinux \
             dtbs \
             2>&1 \
             | tee "$ABS_LOG/build.log"
