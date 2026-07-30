@@ -1142,7 +1142,15 @@ jobs:
             CONFIG_HZ_300
             CONFIG_MFD_MADERA
             CONFIG_MFD_CS47L92
+            CONFIG_TCP_CONG_ADVANCED
             CONFIG_TCP_CONG_BBR
+            CONFIG_TCP_CONG_CUBIC
+            CONFIG_DEFAULT_BBR
+            CONFIG_CRC32_ARMV8_CRC
+            CONFIG_NET_SCHED
+            CONFIG_NET_SCH_FQ
+            CONFIG_NET_SCH_FQ_CODEL
+            CONFIG_DEFAULT_FQ_CODEL
           )
 
           for sym in "${REQUIRED[@]}"; do
