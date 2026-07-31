@@ -303,10 +303,10 @@ on:
         default: cm8
 
       toolchain:
-        description: "Toolchain: aosp19/aosp20/aosp21/aosp22/llvm20/llvm21/neutron19/zyc_stable/clang21-eva-gcc"
+        description: "Toolchain: aosp19/aosp20/aosp21/aosp22/llvm20/llvm21/llvm22/neutron19/zyc_stable/clang21-eva-gcc"
         required: true
         type: choice
-        options: [aosp19, aosp20, aosp21, aosp22, llvm20, llvm21, neutron19, zyc_stable, clang21-eva-gcc]
+        options: [aosp19, aosp20, aosp21, aosp22, llvm20, llvm21, llvm22, neutron19, zyc_stable, clang21-eva-gcc]
         default: neutron19
 
       dry_run:
@@ -1208,6 +1208,12 @@ jobs:
               TC_URL="https://mirrors.edge.kernel.org/pub/tools/llvm/files/llvm-21.1.0-x86_64.tar.xz"
               TC_ARCHIVE_FMT="tar.xz"
               TC_CACHE_KEY="llvm-clang-21.1.0-ubuntu-24.04-v1"
+              ;;
+
+            llvm22)
+              TC_URL="https://mirrors.edge.kernel.org/pub/tools/llvm/files/llvm-22.1.7-x86_64.tar.xz"
+              TC_ARCHIVE_FMT="tar.xz"
+              TC_CACHE_KEY="llvm-clang-22.1.7-ubuntu-24.04-v1"
               ;;
 
             neutron19)
