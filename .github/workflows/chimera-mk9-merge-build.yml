@@ -1,4 +1,4 @@
-name: Project Chimera Mk9 — gavdoc38 Canonical Base Build v.20260730
+name: Project Chimera Mk9 — gavdoc38 Canonical Base Build v.20260731
 
 # ─────────────────────────────────────────────────────────────────────────────
 # REFACTOR RATIONALE (originally verified against gavdoc38 commit
@@ -296,10 +296,10 @@ on:
   workflow_dispatch:
     inputs:
       profile:
-        description: "Build profile: cm8 (runtime SUSFS spoof) or cm8e (compile-time identity)"
+        description: "Build profile: cm9 (runtime SUSFS spoof) or cm9e (compile-time identity)"
         required: true
         type: choice
-        options: [cm8, cm8e]
+        options: [cm9, cm9e]
         default: cm8
 
       toolchain:
@@ -355,19 +355,19 @@ on:
         description: "LOCALVERSION suffix (must start with '-')"
         required: false
         type: string
-        default: "-Chimera_Mk9_Merge"
+        default: "-Chimera_Mk9"
 
       build_user:
         description: "KBUILD_BUILD_USER"
         required: false
         type: string
-        default: "C43L4N"
+        default: "GA"
 
       build_host:
         description: "KBUILD_BUILD_HOST"
         required: false
         type: string
-        default: "AegisDevLabs"
+        default: "CMX9NNNN"
 
       build_version:
         description: "KBUILD_BUILD_VERSION (#N token)"
@@ -393,9 +393,9 @@ env:
 
   CCACHE_MAXSIZE: "3G"
 
-  BRAND_DEFAULT: "-Chimera_Mk9_Merge"
-  BUILD_USER_DEFAULT: "C43L4N"
-  BUILD_HOST_DEFAULT: "AegisDevLabs"
+  BRAND_DEFAULT: "-Chimera_Mk9"
+  BUILD_USER_DEFAULT: "GA"
+  BUILD_HOST_DEFAULT: "CM9XNNNN"
   BUILD_VERSION_DEFAULT: "1"
   KBUILD_BUILD_TIMESTAMP_DEFAULT: "Mon 1 Jan 00:00:00 UTC 2026"
 
