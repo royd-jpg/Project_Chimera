@@ -87,8 +87,7 @@ name: Project Chimera Mk9 — gavdoc38 Canonical Base Build v.20260804
 #     intended declaration referencing that definition. Applying the old
 #     patch would produce two definitions of the same global in the same
 #     link unit — a hard "multiple definition" error under -fno-common,
-#     which is the default for modern GCC and for LLD (this workflow's
-#     linker on every toolchain except clang21-eva-gcc).
+#     which is the default for modern GCC and for LLD (this workflow's linker).
 #     FIX: patch removed. A verify-only step confirms avc.c defines it
 #     exactly once and fs/susfs.c only declares it extern.
 #
@@ -303,11 +302,11 @@ on:
         default: cm8
 
       toolchain:
-        description: "Toolchain: aosp19/aosp20/aosp21/aosp22/llvm20/llvm21/llvm22/neutron19/zyc_stable"
+        description: "Toolchain: llvm22/llvm21/llvm20/aosp22/aosp21/aosp20/aosp19/neutron19/zyc_stable"
         required: true
         type: choice
-        options: [aosp19, aosp20, aosp21, aosp22, llvm20, llvm21, llvm22, neutron19, zyc_stable]
-        default: neutron19
+        options: [llvm22, llvm21, llvm20, aosp22, aosp21, aosp20, aosp19, neutron19, zyc_stable]
+        default: llvm22
 
       dry_run:
         description: "Validate only — skip build and package"
@@ -988,8 +987,6 @@ jobs:
         run: |
           set -Eeuo pipefail
 
-          export PATH="$ABS_TC/bin:$PATH"
-
           cp \
             "$GITHUB_WORKSPACE/chimera-ksu-susfs.cfg" \
             /tmp/chimera-ksu-susfs.cfg
@@ -1001,6 +998,15 @@ jobs:
           make \
             O="$ABS_OUT" \
             ARCH=arm64 \
+            CC=clang \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            LD=ld.lld \
+            AR=llvm-ar \
+            NM=llvm-nm \
+            OBJCOPY=llvm-objcopy \
+            OBJDUMP=llvm-objdump \
+            STRIP=llvm-strip \
             "$(basename "$DEFCONFIG")" \
             | tee "$ABS_LOG/defconfig-base.log"
 
@@ -1015,6 +1021,15 @@ jobs:
           make \
             O="$ABS_OUT" \
             ARCH=arm64 \
+            CC=clang \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            LD=ld.lld \
+            AR=llvm-ar \
+            NM=llvm-nm \
+            OBJCOPY=llvm-objcopy \
+            OBJDUMP=llvm-objdump \
+            STRIP=llvm-strip \
             olddefconfig \
             | tee -a "$ABS_LOG/merge-config.log"
 
@@ -1061,6 +1076,15 @@ jobs:
           make \
             O="$ABS_OUT" \
             ARCH=arm64 \
+            CC=clang \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            LD=ld.lld \
+            AR=llvm-ar \
+            NM=llvm-nm \
+            OBJCOPY=llvm-objcopy \
+            OBJDUMP=llvm-objdump \
+            STRIP=llvm-strip \
             olddefconfig \
             | tee -a "$ABS_LOG/merge-config.log"
 
@@ -1254,51 +1278,51 @@ jobs:
 
           ARCHIVE="/tmp/clang_archive"
 
-          aria2c \
-            -x4 \
-            -s4 \
-            -q \
-            -d /tmp \
-            -o clang_archive \
-            "$TC_URL" \
-            || wget -O "$ARCHIVE" "$TC_URL"
+          aria2c -x 16 -s 16 -k 1M -c \
+            --max-tries=5 \
+            --retry-wait=5 \
+            --timeout=60 \
+            --dir="/tmp" \
+            --out="clang_archive" \
+            "$TC_URL"
 
-          rm -rf toolchains/clang
+          if [[ ! -f "$ARCHIVE" ]]; then
+            echo "FATAL: aria2c failed to download the toolchain archive."
+            exit 1
+          fi
 
-          mkdir -p toolchains/clang
+          rm -rf "$ABS_TC"
+          mkdir -p "$ABS_TC"
 
           case "$TC_ARCHIVE_FMT" in
-
             tar.gz|tar)
-              tar \
-                -C toolchains/clang \
-                -xzf "$ARCHIVE"
+              tar -C "$ABS_TC" -xzf "$ARCHIVE"
               ;;
-
             tar.xz)
-              tar \
-                -C toolchains/clang \
-                -xJf "$ARCHIVE"
+              tar -C "$ABS_TC" -xJf "$ARCHIVE"
               ;;
-
             tar.zst)
-              zstd \
-                -d \
-                "$ARCHIVE" \
-                -o /tmp/clang.tar \
-                --force
-
-              tar \
-                -C toolchains/clang \
-                -xf /tmp/clang.tar
+              zstd -d "$ARCHIVE" -o /tmp/clang.tar --force
+              tar -C "$ABS_TC" -xf /tmp/clang.tar
               ;;
-
           esac
 
-          chmod +x \
-            toolchains/clang/bin/* \
-            2>/dev/null \
-            || true
+      - name: Configure toolchain PATH
+        run: |
+          set -Eeuo pipefail
+
+          ACTUAL_BIN=$(find "$ABS_TC" -type d -name "bin" -printf "%d\t%p\n" | sort -n | cut -f2 | head -n 1)
+
+          if [[ -z "$ACTUAL_BIN" || ! -d "$ACTUAL_BIN" ]]; then
+            echo "FATAL: Could not find 'bin' directory inside extracted toolchain ($ABS_TC)."
+            exit 1
+          fi
+
+          echo "Found toolchain bin: $ACTUAL_BIN"
+          chmod +x "$ACTUAL_BIN"/* 2>/dev/null || true
+
+          # Expose it globally to all subsequent workflow steps
+          echo "$ACTUAL_BIN" >> "$GITHUB_PATH"
 
       # ── 16. ccache ───────────────────────────────────────────────────────────
       - name: Set up ccache
@@ -1312,17 +1336,43 @@ jobs:
 
           max-size: ${{ env.CCACHE_MAXSIZE }}
 
+      # ── 16b. Verification ────────────────────────────────────────────────────
+      - name: Verify Toolchain
+        run: |
+          set -Eeuo pipefail
+
+          echo "Validating toolchain in PATH..."
+          
+          command -v clang
+          command -v llvm-nm
+          command -v llvm-objdump
+          command -v ld.lld
+          
+          clang --version
+          llvm-nm --version
+          llvm-objdump --version
+          ld.lld --version
+          
+          test -n "$PATH"
+
       # ── 17. Finalize config ───────────────────────────────────────────────────
       - name: Finalise kernel .config
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
 
-          export PATH="$ABS_TC/bin:$PATH"
-
           make \
             O="$ABS_OUT" \
             ARCH=arm64 \
+            CC=clang \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            LD=ld.lld \
+            AR=llvm-ar \
+            NM=llvm-nm \
+            OBJCOPY=llvm-objcopy \
+            OBJDUMP=llvm-objdump \
+            STRIP=llvm-strip \
             CLANG_TRIPLE=aarch64-linux-gnu- \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
@@ -1348,43 +1398,23 @@ jobs:
           KBUILD_BUILD_HOST: ${{ env.BUILD_HOST }}
           KBUILD_BUILD_VERSION: ${{ env.BUILD_VERSION }}
           KBUILD_BUILD_TIMESTAMP: ${{ env.KBUILD_BUILD_TIMESTAMP }}
+          CC: clang
           LD: ld.lld
+          AR: llvm-ar
+          NM: llvm-nm
+          OBJCOPY: llvm-objcopy
+          OBJDUMP: llvm-objdump
+          STRIP: llvm-strip
           LLVM: "1"
           LLVM_IAS: "1"
         run: |
           set -Eeuo pipefail
-          
-          # Dynamically locate the actual toolchain bin folder 
-          ACTUAL_BIN=$(find "$ABS_TC" -type d -name "bin" | head -n 1)
-          
-          # Create an isolated custom bin directory to avoid modifying read-only paths
-          CUSTOM_BIN="$ABS_TC/custom-bin"
-          mkdir -p "$CUSTOM_BIN"
-          
-          # Symlink all core binaries from the actual toolchain into our custom bin
-          ln -sf "$ACTUAL_BIN"/* "$CUSTOM_BIN/"
-          
-          # Put our custom bin first in the PATH
-          export PATH="$CUSTOM_BIN:$PATH"
-          
-          # Generate the required cross-compile and linker aliases in our custom space
-          for tool in ar nm objcopy objdump strip; do
-            ln -sf "$CUSTOM_BIN/llvm-${tool}" "$CUSTOM_BIN/aarch64-linux-gnu-${tool}" || true
-          done
-          ln -sf "$CUSTOM_BIN/ld.lld" "$CUSTOM_BIN/aarch64-linux-gnu-ld" || true
-          ln -sf "$CUSTOM_BIN/ld.lld" "$CUSTOM_BIN/ld" || true
-          ln -sf "$CUSTOM_BIN/ld.lld" /usr/local/bin/ld.lld || true
           
           JOBS="$(nproc)"
           MAKE_ARGS=(
             "O=$ABS_OUT"
             "ARCH=arm64"
             "CC=clang"
-            "CLANG_TRIPLE=aarch64-linux-gnu-"
-            "CROSS_COMPILE=aarch64-linux-gnu-"
-            "CROSS_COMPILE_ARM32=arm-linux-gnueabi-"
-            "-j${JOBS}"
-            "LOCALVERSION=${BRAND}"
             "LLVM=1"
             "LLVM_IAS=1"
             "LD=ld.lld"
@@ -1393,8 +1423,14 @@ jobs:
             "OBJCOPY=llvm-objcopy"
             "OBJDUMP=llvm-objdump"
             "STRIP=llvm-strip"
+            "CLANG_TRIPLE=aarch64-linux-gnu-"
+            "CROSS_COMPILE=aarch64-linux-gnu-"
+            "CROSS_COMPILE_ARM32=arm-linux-gnueabi-"
+            "-j${JOBS}"
+            "LOCALVERSION=${BRAND}"
             "KCFLAGS=-O2 -fcommon -fno-strict-aliasing -Wno-error -fuse-ld=lld"
           )
+          
           make \
             "${MAKE_ARGS[@]}" \
             Image \
