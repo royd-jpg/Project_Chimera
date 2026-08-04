@@ -1,4 +1,4 @@
-name: Project Chimera Mk9 — gavdoc38 Canonical Base Build v.20260731
+name: Project Chimera Mk9 — gavdoc38 Canonical Base Build v.20260804
 
 # ─────────────────────────────────────────────────────────────────────────────
 # REFACTOR RATIONALE (originally verified against gavdoc38 commit
@@ -303,10 +303,10 @@ on:
         default: cm8
 
       toolchain:
-        description: "Toolchain: aosp19/aosp20/aosp21/aosp22/llvm20/llvm21/llvm22/neutron19/zyc_stable/clang21-eva-gcc"
+        description: "Toolchain: aosp19/aosp20/aosp21/aosp22/llvm20/llvm21/llvm22/neutron19/zyc_stable"
         required: true
         type: choice
-        options: [aosp19, aosp20, aosp21, aosp22, llvm20, llvm21, llvm22, neutron19, zyc_stable, clang21-eva-gcc]
+        options: [aosp19, aosp20, aosp21, aosp22, llvm20, llvm21, llvm22, neutron19, zyc_stable]
         default: neutron19
 
       dry_run:
@@ -443,17 +443,6 @@ jobs:
             zip
 
           python3 --version
-
-      - name: Install GCC cross-compiler (clang21-eva-gcc only)
-        if: ${{ inputs.toolchain == 'clang21-eva-gcc' }}
-        run: |
-          set -Eeuo pipefail
-
-          sudo apt-get install -y --no-install-recommends \
-            gcc-aarch64-linux-gnu \
-            gcc-arm-linux-gnueabi \
-            binutils-aarch64-linux-gnu \
-            binutils-arm-linux-gnueabi
 
       # ── 2. Checkout Project_Chimera (workflow repo — overlay patches + Kconfig) ──
       - name: Checkout Project_Chimera (workflow repo — overlay + Kconfig fragment)
@@ -1230,13 +1219,6 @@ jobs:
                 || true)
               ;;
 
-            clang21-eva-gcc)
-              TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/21b19c041de1f1df9b97fd9902ae5405c6cf8eb9/clang-r563880c.tar.gz"
-              TC_CACHE_KEY="aosp-clang-r563880c-ubuntu-24.04-v2"
-              TC_USE_FULL_LLVM="false"
-              TC_LLVM_IAS="0"
-              ;;
-
             *)
               echo \
                 "ERROR: unsupported toolchain '$TOOLCHAIN'" \
@@ -1403,35 +1385,16 @@ jobs:
             "CROSS_COMPILE_ARM32=arm-linux-gnueabi-"
             "-j${JOBS}"
             "LOCALVERSION=${BRAND}"
+            "LLVM=1"
+            "LLVM_IAS=1"
+            "LD=ld.lld"
+            "AR=llvm-ar"
+            "NM=llvm-nm"
+            "OBJCOPY=llvm-objcopy"
+            "OBJDUMP=llvm-objdump"
+            "STRIP=llvm-strip"
+            "KCFLAGS=-O2 -fcommon -fno-strict-aliasing -Wno-error -fuse-ld=lld"
           )
-          if [[ "${{ inputs.toolchain }}" != "clang21-eva-gcc" ]]; then
-            MAKE_ARGS+=(
-              "LLVM=1"
-              "LLVM_IAS=1"
-              "LD=ld.lld"
-              "AR=llvm-ar"
-              "NM=llvm-nm"
-              "OBJCOPY=llvm-objcopy"
-              "OBJDUMP=llvm-objdump"
-              "STRIP=llvm-strip"
-              "KCFLAGS=-O2 -fcommon -fno-strict-aliasing -Wno-error -fuse-ld=lld"
-            )
-          else
-            MAKE_ARGS+=(
-              "LLVM=0"
-              "LLVM_IAS=0"
-              "CC=gcc"
-              "HOSTCC=gcc"
-              "HOSTCXX=g++"
-              "LD=aarch64-linux-gnu-ld"
-              "AR=aarch64-linux-gnu-ar"
-              "NM=aarch64-linux-gnu-nm"
-              "OBJCOPY=aarch64-linux-gnu-objcopy"
-              "OBJDUMP=aarch64-linux-gnu-objdump"
-              "STRIP=aarch64-linux-gnu-strip"
-              "KCFLAGS=-O2 -fcommon -fno-strict-aliasing -Wno-error"
-            )
-          fi
           make \
             "${MAKE_ARGS[@]}" \
             Image \
