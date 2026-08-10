@@ -336,13 +336,13 @@ on:
         description: "Base ref/branch/SHA — default is the verified integration commit (re-pinned after gavdoc38's selinux_cred Kbuild fix, see fix-log item [I])"
         required: false
         type: string
-        default: "4d8c9e7c675b77d8b00fa0080b2aa61474fd21c4"
+        default: "73892fe0c3b2462195e7558737c2feab2416422a"
 
       ksu_commit:
         description: "KernelSU-Next exact commit SHA (pin; overrides submodule-pinned commit if different) — must be bumped together with base_ref, see fix-log item [I]"
         required: false
         type: string
-        default: "8ff37831ecea3e5a00dd3940c0c658e81f27c202"
+        default: "ffdff69a2cbea4378c09d915022fea9850a21696"
 
       susfs_note:
         description: "SUSFS provenance note only — SUSFS is vendored into the gavdoc38 base tree (branch suffix '-susfs2'), not a separate checkout"
@@ -366,7 +366,7 @@ on:
         description: "KBUILD_BUILD_HOST"
         required: false
         type: string
-        default: "CMX9NNNN"
+        default: "CM9XNNNN"
 
       build_version:
         description: "KBUILD_BUILD_VERSION (#N token)"
