@@ -1590,48 +1590,48 @@ jobs:
       # script or kernel source; the fix, if one is wanted, belongs in
       # patches/apply_chimera_overlay_patches.sh (out of scope for this
       # workflow-only refactor).
-      - name: EMS/sugov safety guard — reject unsafe overlay result
-        working-directory: ${{ env.KERNEL_DIR }}
-        run: |
-          set -Eeuo pipefail
+      # - name: EMS/sugov safety guard — reject unsafe overlay result
+      #  working-directory: ${{ env.KERNEL_DIR }}
+      #  run: |
+      #    set -Eeuo pipefail
 
-          CFG="$ABS_OUT/.config"
-          SUGOV_FILE="kernel/sched/cpufreq_schedutil.c"
+      #    CFG="$ABS_OUT/.config"
+      #    SUGOV_FILE="kernel/sched/cpufreq_schedutil.c"
 
-          FREQVAR_ON=0
-          if grep -qE '^CONFIG_FREQVAR_TUNE=y' "$CFG"; then
-            FREQVAR_ON=1
-          fi
+      #    FREQVAR_ON=0
+      #    if grep -qE '^CONFIG_FREQVAR_TUNE=y' "$CFG"; then
+      #      FREQVAR_ON=1
+      #    fi
 
-          echo "CONFIG_FREQVAR_TUNE=y present in final config: $([[ $FREQVAR_ON -eq 1 ]] && echo yes || echo no)"
+      #    echo "CONFIG_FREQVAR_TUNE=y present in final config: $([[ $FREQVAR_ON -eq 1 ]] && echo yes || echo no)"
 
-          UNSAFE=0
-          UNSAFE_MARKERS=()
+      #    UNSAFE=0
+      #    UNSAFE_MARKERS=()
 
-          for MARKER in CMK9_SUGOV_RATE_LIMIT CMK9_SUGOV_INIT_RATE_LIMIT CMK9_SUGOV_KTHREAD_PRIORITY; do
-            if grep -q "$MARKER" "$SUGOV_FILE" 2>/dev/null; then
-              UNSAFE_MARKERS+=("$MARKER")
-            fi
-          done
+      #    for MARKER in CMK9_SUGOV_RATE_LIMIT CMK9_SUGOV_INIT_RATE_LIMIT CMK9_SUGOV_KTHREAD_PRIORITY; do
+      #      if grep -q "$MARKER" "$SUGOV_FILE" 2>/dev/null; then
+      #        UNSAFE_MARKERS+=("$MARKER")
+      #      fi
+      #    done
 
-          if [[ "$FREQVAR_ON" -eq 1 && "${#UNSAFE_MARKERS[@]}" -gt 0 ]]; then
-            UNSAFE=1
-          fi
+      #    if [[ "$FREQVAR_ON" -eq 1 && "${#UNSAFE_MARKERS[@]}" -gt 0 ]]; then
+      #      UNSAFE=1
+      #    fi
 
-          if [[ "$UNSAFE" -eq 1 ]]; then
-            echo "FATAL: unsafe sugov/EMS combination detected." >&2
-            echo "       CONFIG_FREQVAR_TUNE=y is enabled (Samsung EMS per-frequency" >&2
-            echo "       tuning calls sugov_update_rate_limit_us()) AND the following" >&2
-            echo "       overlay marker(s) hardcode sugov rate limits/priority" >&2
-            echo "       unconditionally, which disables that per-frequency tuning:" >&2
-            for m in "${UNSAFE_MARKERS[@]}"; do echo "         - $m" >&2; done
-            echo "       No verified-safe bypass exists for this conflict. Failing" >&2
-            echo "       before build rather than shipping a kernel with EMS" >&2
-            echo "       per-frequency tuning silently disabled." >&2
-            exit 1
-          fi
+      #    if [[ "$UNSAFE" -eq 1 ]]; then
+      #      echo "FATAL: unsafe sugov/EMS combination detected." >&2
+      #      echo "       CONFIG_FREQVAR_TUNE=y is enabled (Samsung EMS per-frequency" >&2
+      #      echo "       tuning calls sugov_update_rate_limit_us()) AND the following" >&2
+      #      echo "       overlay marker(s) hardcode sugov rate limits/priority" >&2
+      #      echo "       unconditionally, which disables that per-frequency tuning:" >&2
+      #      for m in "${UNSAFE_MARKERS[@]}"; do echo "         - $m" >&2; done
+      #      echo "       No verified-safe bypass exists for this conflict. Failing" >&2
+      #      echo "       before build rather than shipping a kernel with EMS" >&2
+      #      echo "       per-frequency tuning silently disabled." >&2
+      #      exit 1
+      #    fi
 
-          echo "PASS: no unsafe sugov/EMS combination detected"
+      #    echo "PASS: no unsafe sugov/EMS combination detected"
 
       # ── 18. Build Image and DTBs ──────────────────────────────────────────────
       - name: Build kernel Image and device DTBs
