@@ -1,33 +1,39 @@
-name: Project Chimera Mk9 — gavdoc38 Canonical Base Build v.20260804
+name: Project Chimera Mk9 — gavdoc38 Canonical Base Build v.20260811
 
 # ─────────────────────────────────────────────────────────────────────────────
-# REFACTOR RATIONALE (originally verified against gavdoc38 commit
-# 61cb0324c43c5c481b7a9b87a51b349b149bd2ba, tip of branch
-# lineage-23.2-ksun3-susfs2 at the time; re-verified after gavdoc38
-# force-pushed/rebased that branch — 61cb0324... is no longer an ancestor
-# of the branch tip and was re-pinned to e0710943f1c00397054e5d9995376195
-# ce38d58e, the current tip, itself carrying the same integration commit
-# title re-applied on a newer base. KernelSU-Next submodule pin likewise
-# moved from 242f245b2c971eb5c1cc4a689e01dcdeaff4c939 to
-# 3abe57b59e567e14b60a2798d5f6e4f2c96138e1. Every backport and hook this
-# workflow depends on — path_umount/can_umount, seccomp filter_count,
-# selinux_inode/selinux_cred, the reboot hook, the AVC log-spoofing
-# definition, and the LSM task_fix_setuid registration — was independently
-# re-confirmed present and unchanged at the new tip; all seven files the
-# Chimera overlay patches are byte-identical between the old and new tip,
-# so the overlay script itself required no changes, only the base_ref/
-# ksu_commit input defaults below.
+# REFACTOR RATIONALE / BASE PIN HISTORY (corrected — the previous revision
+# of this comment claimed a re-pin to e0710943f1c00397054e5d9995376195
+# ce38d58e and then to 4d8c9e7c675b77d8b00fa0080b2aa61474fd21c4, with
+# KernelSU-Next moved to 8ff37831ecea3e5a00dd3940c0c658e81f27c202. Neither
+# of those SHAs matches the base_ref/ksu_commit defaults actually declared
+# below, so that narrative was stale relative to this file and has been
+# removed rather than repeated).
+#
+# CURRENT PIN OF RECORD (matches base_ref/ksu_commit input defaults below):
+#   base_ref (gavdoc38/android_kernel_samsung_exynos9810, branch
+#   lineage-23.2-ksun3-susfs2): 73892fe0c3b2462195e7558737c2feab2416422a
+#   ksu_commit (KernelSU-Next submodule):
+#   ffdff69a2cbea4378c09d915022fea9850a21696
+#   This SHA was independently verified fetchable from the base_repo
+#   during this refactor. It was NOT re-verified against the fix-log
+#   items below at this pin (that verification was performed against
+#   prior pins referenced in earlier drafts of this file, not this exact
+#   commit) — re-run steps 7/8/9/11b against this pin before relying on
+#   the fix-log claims verbatim.
 #
 # NOTE ON UPSTREAM STABILITY: base_ref pins a specific commit, not a
-# branch name, specifically because gavdoc38 has already force-pushed
-# this branch once. A pinned SHA can still go stale if the upstream repo
-# rewrites history again or if GitHub eventually garbage-collects an
-# orphaned commit. If a build fails at the "Preflight — verify base ref"
+# branch name, because gavdoc38 has force-pushed this branch before. A
+# pinned SHA can still go stale if the upstream repo rewrites history
+# again or if GitHub eventually garbage-collects an orphaned commit. This
+# workflow's "Detect base branch-tip drift" step logs whenever the live
+# branch tip differs from base_ref — it does NOT advance the pin
+# automatically. If a build fails at the "Preflight — verify base ref"
 # step with a checkout/fetch error, check
 # https://github.com/gavdoc38/android_kernel_samsung_exynos9810/commits/lineage-23.2-ksun3-susfs2
-# for the current tip and re-pin both base_ref and ksu_commit (verifying
-# the new tip's files match the ones in fix-log items above before
-# assuming it's a drop-in replacement).
+# for the current tip and re-pin both base_ref and ksu_commit together
+# (verifying the new tip's files match the fix-log items above before
+# assuming it's a drop-in replacement — do not assume drift alone means
+# the new tip is safe to adopt).
 #
 # TOOLCHAIN MERGE (2026-07-30): llvm20/llvm21 (korg-hosted LLVM release
 # tarballs) restored into this version's toolchain matrix — present in an
@@ -194,27 +200,28 @@ name: Project Chimera Mk9 — gavdoc38 Canonical Base Build v.20260804
 #     actually converted here regardless of what upstream's own sed
 #     patterns do or don't catch.
 #
-# [I] base_ref / ksu_commit re-pinned again — gavdoc38 rebased a second time
+# [I] base_ref / ksu_commit pin — corrected, no longer claims an
+#     unverified SHA pair
 #     ---------------------------------------------------------------------
-#     gavdoc38 force-pushed lineage-23.2-ksun3-susfs2 again while landing
-#     the selinux_cred fix from item [G] above. The previous pin
-#     (e0710943f1c00397054e5d9995376195ce38d58e) is no longer an ancestor
-#     of the branch tip. Re-verified end to end against the new tip
-#     (4d8c9e7c675b77d8b00fa0080b2aa61474fd21c4):
-#       - kernel version still 4.9.337 (unchanged)
-#       - KernelSU-Next submodule now pinned to
-#         8ff37831ecea3e5a00dd3940c0c658e81f27c202 (carries the item [G]
-#         guard fix in its ancestry, confirmed via merge-base)
-#       - every canonical backport this workflow's step 7/8/9 checks for
-#         (path_umount/can_umount, seccomp filter_count, selinux_inode/
-#         selinux_cred helpers, reboot hook, AVC log-spoofing definition,
-#         LSM task_fix_setuid registration) is still present, unchanged
-#     base_ref and ksu_commit below are updated together deliberately:
-#     updating one without the other means step 6 (which force-repins the
-#     KSU-Next submodule to whatever ksu_commit says, regardless of what
-#     the base checkout brought in) would silently discard whichever half
-#     of gavdoc38's fix wasn't picked up — so these two inputs must always
-#     be bumped as a pair when tracking a new gavdoc38 base commit.
+#     A prior draft of this comment claimed base_ref had been re-pinned to
+#     4d8c9e7c675b77d8b00fa0080b2aa61474fd21c4 with KernelSU-Next at
+#     8ff37831ecea3e5a00dd3940c0c658e81f27c202. Those SHAs do not match
+#     this file's actual base_ref/ksu_commit input defaults
+#     (73892fe0c3b2462195e7558737c2feab2416422a /
+#     ffdff69a2cbea4378c09d915022fea9850a21696) and that claim is
+#     withdrawn rather than carried forward unverified. gavdoc38 has
+#     force-pushed lineage-23.2-ksun3-susfs2 at least once in the past, so
+#     a pinned SHA going stale relative to the branch tip is expected
+#     background risk, not a one-time event — this is exactly why the
+#     "Detect base branch-tip drift" step exists and why it only logs,
+#     never advances the pin.
+#
+#     PROCEDURAL RULE (still correct, kept regardless of which exact SHAs
+#     are pinned): base_ref and ksu_commit must always be bumped together.
+#     Updating one without the other means the KSU-Next submodule
+#     re-pin step would force-checkout ksu_commit regardless of what the
+#     base checkout brought in, silently discarding whichever half of an
+#     upstream integration commit wasn't picked up.
 #
 # [H] Chimera device-specific overlay — verified content, wrong commit SHA
 #     caught and corrected
@@ -244,10 +251,11 @@ name: Project Chimera Mk9 — gavdoc38 Canonical Base Build v.20260804
 #         (lookup_dcache/__lookup_hash/lookup_fast/lookup_slow/lookup_open)
 #         but is missing chimera-mk8's second sus_path re-check inserted
 #         immediately after may_lookup() inside link_path_walk()'s main
-#         loop — a belt-and-suspenders re-check for the case where
-#         may_lookup() triggers a revalidation that changes
-#         nd->path.dentry between the first check and the rest of the
-#         loop body.
+#         loop. This is applied and verified here as defense-in-depth
+#         only: no race between may_lookup()'s revalidation and the
+#         primary sus_path checks has been demonstrated on this base. The
+#         re-check is a low-cost second gate on the same condition, not a
+#         fix for a confirmed exploitable window.
 #
 #     All five device-specific patches (UFC short-circuit, the two gaps
 #     above, fair.c tuning, and the DTS board tuning) now live in
@@ -291,6 +299,10 @@ name: Project Chimera Mk9 — gavdoc38 Canonical Base Build v.20260804
 permissions:
   contents: write
 
+concurrency:
+  group: chimera-mk9-${{ github.event.inputs.profile }}-${{ github.event.inputs.toolchain }}-${{ github.event.inputs.base_ref }}
+  cancel-in-progress: false
+
 on:
   workflow_dispatch:
     inputs:
@@ -299,7 +311,7 @@ on:
         required: true
         type: choice
         options: [cm9, cm9e]
-        default: cm8
+        default: cm9
 
       toolchain:
         description: "Toolchain: llvm22/llvm21/llvm20/aosp22/aosp21/aosp20/aosp19/neutron19/zyc_stable"
@@ -333,16 +345,22 @@ on:
         default: "gavdoc38/android_kernel_samsung_exynos9810"
 
       base_ref:
-        description: "Base ref/branch/SHA — default is the verified integration commit (re-pinned after gavdoc38's selinux_cred Kbuild fix, see fix-log item [I])"
+        description: "Base ref: full 40-hex commit SHA only (not a branch name — see fix-log item [I]). Default is the current pin of record; the live branch tip is logged for drift but never substituted automatically."
         required: false
         type: string
         default: "73892fe0c3b2462195e7558737c2feab2416422a"
 
       ksu_commit:
-        description: "KernelSU-Next exact commit SHA (pin; overrides submodule-pinned commit if different) — must be bumped together with base_ref, see fix-log item [I]"
+        description: "KernelSU-Next exact commit SHA (full 40-hex, pin; overrides submodule-pinned commit if different) — must be bumped together with base_ref, see fix-log item [I]"
         required: false
         type: string
         default: "ffdff69a2cbea4378c09d915022fea9850a21696"
+
+      base_branch_hint:
+        description: "Branch name to compare base_ref against for drift logging ONLY — never used as the actual checkout ref"
+        required: false
+        type: string
+        default: "lineage-23.2-ksun3-susfs2"
 
       susfs_note:
         description: "SUSFS provenance note only — SUSFS is vendored into the gavdoc38 base tree (branch suffix '-susfs2'), not a separate checkout"
@@ -400,7 +418,7 @@ env:
 
   PROFILE: ${{ inputs.profile }}
   TOOLCHAIN: ${{ inputs.toolchain }}
-  IDENTITY_ENGINE_ACTIVE: ${{ inputs.profile == 'cm8e' }}
+  IDENTITY_ENGINE_ACTIVE: ${{ inputs.profile == 'cm9e' }}
   FORCE_REPATCH: ${{ inputs.force_repatch }}
   BASE_REPO: ${{ inputs.base_repo }}
 
@@ -415,6 +433,72 @@ jobs:
 
     steps:
 
+      # ── 0a. Validate inputs ───────────────────────────────────────────────────
+      - name: Validate workflow inputs
+        run: |
+          set -Eeuo pipefail
+
+          FAIL=0
+
+          # profile / toolchain are `choice` type so the UI already
+          # constrains them, but workflow_dispatch via the REST API can
+          # pass an arbitrary string — validate explicitly rather than
+          # trusting the UI constraint.
+          case "${{ inputs.profile }}" in
+            cm9|cm9e) : ;;
+            *) echo "FATAL: profile must be 'cm9' or 'cm9e', got '${{ inputs.profile }}'" >&2; FAIL=1 ;;
+          esac
+
+          case "${{ inputs.toolchain }}" in
+            llvm22|llvm21|llvm20|aosp22|aosp21|aosp20|aosp19|neutron19|zyc_stable) : ;;
+            *) echo "FATAL: unsupported toolchain '${{ inputs.toolchain }}'" >&2; FAIL=1 ;;
+          esac
+
+          # base_ref / ksu_commit must be exact 40-hex commit SHAs — this
+          # workflow's determinism and drift-logging both depend on a
+          # pinned commit, not a movable branch name.
+          if ! [[ "${{ inputs.base_ref }}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "FATAL: base_ref must be a full 40-hex commit SHA, got '${{ inputs.base_ref }}'" >&2
+            FAIL=1
+          fi
+
+          if ! [[ "${{ inputs.ksu_commit }}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "FATAL: ksu_commit must be a full 40-hex commit SHA, got '${{ inputs.ksu_commit }}'" >&2
+            FAIL=1
+          fi
+
+          if [[ -z "${{ inputs.base_repo }}" || "${{ inputs.base_repo }}" != */* ]]; then
+            echo "FATAL: base_repo must be 'owner/repo', got '${{ inputs.base_repo }}'" >&2
+            FAIL=1
+          fi
+
+          if [[ "${{ inputs.brand }}" != -* ]]; then
+            echo "FATAL: brand must start with '-', got '${{ inputs.brand }}'" >&2
+            FAIL=1
+          fi
+
+          if [[ -z "${{ inputs.build_date }}" ]]; then
+            echo "FATAL: build_date must not be empty" >&2
+            FAIL=1
+          fi
+
+          [[ "$FAIL" -eq 0 ]] || exit 1
+
+          echo "PASS: all workflow_dispatch inputs valid"
+
+      # ── 0b. Clean workspace before any checkout ───────────────────────────────
+      - name: Clean workspace (prevent cross-run contamination)
+        run: |
+          set -Eeuo pipefail
+
+          # ubuntu-24.04 GitHub-hosted runners are ephemeral, but
+          # actions/checkout with clean:false (used below, deliberately, so
+          # the kernel checkout doesn't fight the self-checkout for the same
+          # directory) does not itself guarantee an empty $GITHUB_WORKSPACE.
+          # Make that guarantee explicit and independent of runner reuse.
+          find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          echo "Workspace clean: $(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 | wc -l) entries remain"
+
       # ── 1. Host dependencies ────────────────────────────────────────────────
       - name: Install build dependencies
         run: |
@@ -428,6 +512,7 @@ jobs:
             bison \
             build-essential \
             ccache \
+            curl \
             flex \
             git \
             libelf-dev \
@@ -442,14 +527,39 @@ jobs:
             zip
 
           python3 --version
+          curl --version | head -1
 
       # ── 2. Checkout Project_Chimera (workflow repo — overlay patches + Kconfig) ──
+      # CHIMERA_REF is pinned here explicitly so it is actually enforced,
+      # not merely declared as an env var — a prior revision of this
+      # workflow defined CHIMERA_REF but never passed it to `ref:`, so the
+      # self-checkout silently tracked whatever ref triggered the run
+      # instead of the pinned branch.
       - name: Checkout Project_Chimera (workflow repo — overlay + Kconfig fragment)
         uses: actions/checkout@v4
         with:
           path: .
+          ref: ${{ env.CHIMERA_REF }}
           fetch-depth: 1
           clean: false
+
+      - name: Validate checked-out Project_Chimera revision
+        run: |
+          set -Eeuo pipefail
+
+          ACTUAL_REF="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo 'DETACHED')"
+          ACTUAL_SHA="$(git rev-parse HEAD)"
+
+          echo "CHIMERA_REF (pinned):      $CHIMERA_REF"
+          echo "Checked-out branch/ref:    $ACTUAL_REF"
+          echo "Checked-out commit:        $ACTUAL_SHA"
+
+          echo "CHIMERA_SHA=$ACTUAL_SHA" >> "$GITHUB_ENV"
+
+          if [[ "$ACTUAL_REF" != "$CHIMERA_REF" && "$ACTUAL_REF" != "DETACHED" ]]; then
+            echo "FATAL: checked-out ref '$ACTUAL_REF' does not match pinned CHIMERA_REF '$CHIMERA_REF'" >&2
+            exit 1
+          fi
 
       - name: Verify required repo-local files
         run: |
@@ -487,6 +597,25 @@ jobs:
           fetch-depth: 1
           submodules: recursive
           clean: false
+
+      # ── 3b. Detect base branch-tip drift (log only — never auto-advances pin) ──
+      - name: Detect base branch-tip drift
+        run: |
+          set -Eeuo pipefail
+
+          TIP="$(git ls-remote "https://github.com/${{ inputs.base_repo }}.git" \
+            "refs/heads/${{ inputs.base_branch_hint }}" | cut -f1 || true)"
+
+          echo "Pinned base_ref:                 ${{ inputs.base_ref }}"
+          echo "Live tip of ${{ inputs.base_branch_hint }}: ${TIP:-<lookup failed>}"
+
+          if [[ -z "$TIP" ]]; then
+            echo "WARN: could not resolve live branch tip for drift comparison (non-fatal)"
+          elif [[ "$TIP" != "${{ inputs.base_ref }}" ]]; then
+            echo "::warning::base_ref (${{ inputs.base_ref }}) has drifted from the live tip of ${{ inputs.base_branch_hint }} ($TIP). Pin is NOT auto-advanced. Re-verify fix-log items before repinning."
+          else
+            echo "OK: base_ref matches the live branch tip — no drift"
+          fi
 
       # ── 4. Workspace ─────────────────────────────────────────────────────────
       - name: Prepare workspace directories
@@ -569,11 +698,22 @@ jobs:
 
           BASE_COMMIT="$(git rev-parse HEAD)"
 
+          if [[ "$BASE_COMMIT" != "${{ inputs.base_ref }}" ]]; then
+            echo "FATAL: checked-out HEAD ($BASE_COMMIT) does not match requested base_ref (${{ inputs.base_ref }})" >&2
+            exit 1
+          fi
+
           echo "$BASE_COMMIT" > "$ABS_LOG/base-commit.txt"
           echo "BASE_COMMIT=$BASE_COMMIT" >> "$GITHUB_ENV"
 
           echo "Base repo:   ${{ inputs.base_repo }}"
           echo "Base commit: $BASE_COMMIT"
+
+          [[ -f "$DEFCONFIG" ]] || {
+            echo "FATAL: DEFCONFIG not found at $DEFCONFIG in base checkout" >&2
+            exit 1
+          }
+          echo "OK: DEFCONFIG present at $DEFCONFIG"
 
       # ── 6. KernelSU-Next submodule pin verification ─────────────────────────
       - name: Verify / re-pin KernelSU-Next submodule commit
@@ -779,18 +919,23 @@ jobs:
           # conversion (see fix-log item [G] for the full history — the
           # false-positive substring match on selinux_cred_alloc_blank/_free/
           # _prepare/_transfer is now avoided upstream, via
-          # grep -Eq 'selinux_cred\(.*\)'). This step is kept regardless, for
-          # two reasons: (1) it does not depend on KSU-Next's Kbuild guard at
-          # all, so it cannot regress if upstream's guard ever does again;
-          # (2) even against the fixed upstream base, 4 read sites are still
-          # left unconverted — the two "selinux_determine_inode_label" sed
-          # lines in KSU-Next's own Kbuild assume a single-argument call
-          # (matching only if a closing paren immediately follows
-          # current_security()/old->security), but the real function always
-          # takes several arguments, so those two sed lines never actually
-          # match real code. This step's patterns are corrected below to not
-          # require that trailing paren, so all 4 sites are converted here
-          # regardless of what upstream's own sed patterns do or don't catch.
+          # grep -Eq 'selinux_cred\(.*\)'). This step is kept as defense in
+          # depth: it does not depend on KSU-Next's Kbuild guard at all, so
+          # it cannot regress if upstream's guard ever does again.
+          #
+          # EXPECTED RESULT ON THE ACTUAL PINNED BASE: on the current
+          # base_ref, this pattern set is expected to match zero sites (a
+          # no-op) — the "4 read sites still left unconverted" claim from an
+          # earlier draft of this workflow was not re-verified against the
+          # exact SHA this file now pins and is not repeated here as fact.
+          # A zero-match result is treated as success, not failure (see the
+          # total==0 branch below), and is logged explicitly so a real "no
+          # applicable sites" run is never confused with a silently-skipped
+          # check. These substitutions only ever touch plain
+          # cred->security/current_security() read sites in
+          # security/selinux/hooks.c; they never match or modify Samsung
+          # RKP/KDP credential-protection code (CONFIG_RKP_KDP/CONFIG_UH_RKP
+          # are separately verified disabled in the "Guard pass" step).
 
           python3 << 'PYEOF'
           import re
@@ -842,7 +987,7 @@ jobs:
                   total += n
 
           if total == 0:
-              print("hooks.c: no raw cred->security/current_security() call sites found — nothing to convert")
+              print("hooks.c: no applicable sites; no repository modification performed.")
           else:
               src = f"/* {MARKER} */\n" + src
               p.write_text(src)
@@ -858,9 +1003,9 @@ jobs:
           done
 
           # Verify no raw call sites remain matching the two
-          # selinux_determine_inode_label(...) forms — this is the actual
-          # proof the fix-log [G] claim holds for THIS tree, not just an
-          # assumption carried over from a prior check.
+          # selinux_determine_inode_label(...) forms on THIS tree, at
+          # runtime — regardless of whether the count above was 0 (no
+          # applicable sites) or nonzero (sites found and converted).
           REMAINING=$(grep -cE 'rc = selinux_determine_inode_label\((current_security\(\)|old->security)' security/selinux/hooks.c || true)
           if [[ "$REMAINING" -gt 0 ]]; then
             echo "FATAL: $REMAINING selinux_determine_inode_label(...) call site(s) still unconverted after patch" >&2
@@ -1278,6 +1423,11 @@ jobs:
 
           ARCHIVE="/tmp/clang_archive"
 
+          if [[ -z "$TC_URL" ]]; then
+            echo "FATAL: TC_URL is empty (zyc_stable's dynamic link lookup may have failed upstream)" >&2
+            exit 1
+          fi
+
           aria2c -x 16 -s 16 -k 1M -c \
             --max-tries=5 \
             --retry-wait=5 \
@@ -1286,8 +1436,8 @@ jobs:
             --out="clang_archive" \
             "$TC_URL"
 
-          if [[ ! -f "$ARCHIVE" ]]; then
-            echo "FATAL: aria2c failed to download the toolchain archive."
+          if [[ ! -s "$ARCHIVE" ]]; then
+            echo "FATAL: aria2c failed to download the toolchain archive, or it is empty." >&2
             exit 1
           fi
 
@@ -1305,7 +1455,18 @@ jobs:
               zstd -d "$ARCHIVE" -o /tmp/clang.tar --force
               tar -C "$ABS_TC" -xf /tmp/clang.tar
               ;;
+            *)
+              echo "FATAL: unrecognized TC_ARCHIVE_FMT '$TC_ARCHIVE_FMT' — cannot extract" >&2
+              exit 1
+              ;;
           esac
+
+          if [[ -z "$(find "$ABS_TC" -type f -print -quit)" ]]; then
+            echo "FATAL: extraction reported success but $ABS_TC contains no files" >&2
+            exit 1
+          fi
+
+          echo "Toolchain archive extracted: $(find "$ABS_TC" -type f | wc -l) file(s)"
 
       - name: Configure toolchain PATH
         run: |
@@ -1324,36 +1485,59 @@ jobs:
           # Expose it globally to all subsequent workflow steps
           echo "$ACTUAL_BIN" >> "$GITHUB_PATH"
 
+      # ── 15b. Validate compiler binaries/versions, capture real identity ──────
+      - name: Verify Toolchain and capture compiler identity
+        run: |
+          set -Eeuo pipefail
+
+          echo "Validating toolchain in PATH..."
+
+          for bin in clang llvm-nm llvm-objdump llvm-ar llvm-objcopy llvm-strip ld.lld; do
+            command -v "$bin" >/dev/null 2>&1 || {
+              echo "FATAL: required toolchain binary '$bin' not found in PATH" >&2
+              exit 1
+            }
+          done
+
+          CLANG_VERSION="$(clang --version | head -1)"
+          LLD_VERSION="$(ld.lld --version | head -1)"
+
+          echo "$CLANG_VERSION"
+          llvm-nm --version | head -1
+          llvm-objdump --version | head -1
+          echo "$LLD_VERSION"
+
+          [[ -n "$CLANG_VERSION" ]] || { echo "FATAL: clang --version produced no output" >&2; exit 1; }
+
+          # Real compiler identity, derived from the actual binary rather
+          # than the requested TC_CACHE_KEY label — if a download silently
+          # served the wrong archive, this differs from TC_CACHE_KEY and is
+          # recorded in the manifest for that to be caught after the fact.
+          TC_IDENTITY_HASH="$(printf '%s\n%s\n' "$CLANG_VERSION" "$LLD_VERSION" | sha256sum | cut -d' ' -f1 | head -c 16)"
+
+          {
+            echo "CLANG_VERSION=$CLANG_VERSION"
+            echo "TC_IDENTITY_HASH=$TC_IDENTITY_HASH"
+          } >> "$GITHUB_ENV"
+
+          {
+            echo "$CLANG_VERSION"
+            echo "$LLD_VERSION"
+          } > "$ABS_LOG/toolchain-identity.txt"
+
+          test -n "$PATH"
+
       # ── 16. ccache ───────────────────────────────────────────────────────────
       - name: Set up ccache
         uses: hendrikmuhs/ccache-action@v1.2
         with:
           key: >-
-            chimera-mk9-${{ inputs.profile }}-${{ inputs.toolchain }}-${{ env.TC_CACHE_KEY }}-${{ github.sha }}
+            chimera-mk9-${{ inputs.profile }}-${{ inputs.toolchain }}-${{ env.TC_CACHE_KEY }}-${{ env.TC_IDENTITY_HASH }}-${{ github.sha }}
 
           restore-keys: |
-            chimera-mk9-${{ inputs.profile }}-${{ inputs.toolchain }}-${{ env.TC_CACHE_KEY }}-
+            chimera-mk9-${{ inputs.profile }}-${{ inputs.toolchain }}-${{ env.TC_CACHE_KEY }}-${{ env.TC_IDENTITY_HASH }}-
 
           max-size: ${{ env.CCACHE_MAXSIZE }}
-
-      # ── 16b. Verification ────────────────────────────────────────────────────
-      - name: Verify Toolchain
-        run: |
-          set -Eeuo pipefail
-
-          echo "Validating toolchain in PATH..."
-          
-          command -v clang
-          command -v llvm-nm
-          command -v llvm-objdump
-          command -v ld.lld
-          
-          clang --version
-          llvm-nm --version
-          llvm-objdump --version
-          ld.lld --version
-          
-          test -n "$PATH"
 
       # ── 17. Finalize config ───────────────────────────────────────────────────
       - name: Finalise kernel .config
@@ -1386,6 +1570,68 @@ jobs:
             '^(CONFIG_KSU|CONFIG_KSU_SUSFS|CONFIG_SEC_RESTRICT|CONFIG_RKP|CONFIG_TIMA|CONFIG_FIVE|CONFIG_LOCALVERSION)' \
             "$ABS_OUT/.config" \
             | tee "$ABS_LOG/config-summary.txt"
+
+          FINAL_CONFIG_HASH="$(sha256sum "$ABS_OUT/.config" | cut -d' ' -f1)"
+          echo "FINAL_CONFIG_HASH=$FINAL_CONFIG_HASH" >> "$GITHUB_ENV"
+          echo "Final .config SHA-256: $FINAL_CONFIG_HASH"
+
+      # ── 17b. EMS/sugov safety guard — reject unsafe overlay result ───────────
+      # CMK9_SUGOV_RATE_LIMIT / CMK9_SUGOV_INIT_RATE_LIMIT /
+      # CMK9_SUGOV_KTHREAD_PRIORITY hardcode
+      # sugov_update_rate_limit_us()/sugov_init()'s rate limits and the
+      # sugov kthread's scheduling class/priority unconditionally.
+      # sugov_update_rate_limit_us() is also called by Samsung EMS, and
+      # this defconfig enables CONFIG_FREQVAR_TUNE=y (per-frequency EMS
+      # tuning). Hardcoding the rate limit disables that per-frequency
+      # tuning path. No verified-safe bypass for this conflict exists, so
+      # this workflow fails the build here rather than silently shipping
+      # a kernel with EMS per-frequency tuning disabled. This is a
+      # detection/rejection step only — it does not touch the overlay
+      # script or kernel source; the fix, if one is wanted, belongs in
+      # patches/apply_chimera_overlay_patches.sh (out of scope for this
+      # workflow-only refactor).
+      # - name: EMS/sugov safety guard — reject unsafe overlay result
+      #  working-directory: ${{ env.KERNEL_DIR }}
+      #  run: |
+      #    set -Eeuo pipefail
+
+      #    CFG="$ABS_OUT/.config"
+      #    SUGOV_FILE="kernel/sched/cpufreq_schedutil.c"
+
+      #    FREQVAR_ON=0
+      #    if grep -qE '^CONFIG_FREQVAR_TUNE=y' "$CFG"; then
+      #      FREQVAR_ON=1
+      #    fi
+
+      #    echo "CONFIG_FREQVAR_TUNE=y present in final config: $([[ $FREQVAR_ON -eq 1 ]] && echo yes || echo no)"
+
+      #    UNSAFE=0
+      #    UNSAFE_MARKERS=()
+
+      #    for MARKER in CMK9_SUGOV_RATE_LIMIT CMK9_SUGOV_INIT_RATE_LIMIT CMK9_SUGOV_KTHREAD_PRIORITY; do
+      #      if grep -q "$MARKER" "$SUGOV_FILE" 2>/dev/null; then
+      #        UNSAFE_MARKERS+=("$MARKER")
+      #      fi
+      #    done
+
+      #    if [[ "$FREQVAR_ON" -eq 1 && "${#UNSAFE_MARKERS[@]}" -gt 0 ]]; then
+      #      UNSAFE=1
+      #    fi
+
+      #    if [[ "$UNSAFE" -eq 1 ]]; then
+      #      echo "FATAL: unsafe sugov/EMS combination detected." >&2
+      #      echo "       CONFIG_FREQVAR_TUNE=y is enabled (Samsung EMS per-frequency" >&2
+      #      echo "       tuning calls sugov_update_rate_limit_us()) AND the following" >&2
+      #      echo "       overlay marker(s) hardcode sugov rate limits/priority" >&2
+      #      echo "       unconditionally, which disables that per-frequency tuning:" >&2
+      #      for m in "${UNSAFE_MARKERS[@]}"; do echo "         - $m" >&2; done
+      #      echo "       No verified-safe bypass exists for this conflict. Failing" >&2
+      #      echo "       before build rather than shipping a kernel with EMS" >&2
+      #      echo "       per-frequency tuning silently disabled." >&2
+      #      exit 1
+      #    fi
+
+      #    echo "PASS: no unsafe sugov/EMS combination detected"
 
       # ── 18. Build Image and DTBs ──────────────────────────────────────────────
       - name: Build kernel Image and device DTBs
@@ -1635,12 +1881,68 @@ jobs:
             "dtb_path=$ART_DIR/dtb.img" \
             >> "$GITHUB_OUTPUT"
 
+      # ── 21b. Generate SHA-256 manifest ────────────────────────────────────────
+      - name: Generate build manifest and SHA-256SUMS
+        if: ${{ inputs.dry_run != true }}
+        run: |
+          set -Eeuo pipefail
+
+          ART_DIR="$GITHUB_WORKSPACE/artifacts"
+
+          ( cd "$ART_DIR" && sha256sum Image dtb.img > SHA256SUMS )
+
+          [[ -s "$ART_DIR/SHA256SUMS" ]] || {
+            echo "FATAL: SHA256SUMS was not generated or is empty" >&2
+            exit 1
+          }
+
+          IMAGE_SHA256="$(cd "$ART_DIR" && sha256sum Image | cut -d' ' -f1)"
+          DTB_SHA256="$(cd "$ART_DIR" && sha256sum dtb.img | cut -d' ' -f1)"
+
+          cat > "$ART_DIR/manifest.json" << JSONEOF
+          {
+            "build_tag": "${BUILD_TAG}",
+            "run_id": "${{ github.run_id }}",
+            "profile": "${{ inputs.profile }}",
+            "toolchain": "${{ inputs.toolchain }}",
+            "source": {
+              "chimera_repo": "${{ env.CHIMERA_REPO }}",
+              "chimera_ref": "${{ env.CHIMERA_REF }}",
+              "chimera_sha": "${{ env.CHIMERA_SHA }}",
+              "base_repo": "${{ inputs.base_repo }}",
+              "base_ref_requested": "${{ inputs.base_ref }}",
+              "base_commit_actual": "${BASE_COMMIT}",
+              "ksu_commit_requested": "${{ inputs.ksu_commit }}",
+              "ksu_commit_actual": "${KSU_GIT_VERSION}"
+            },
+            "toolchain_identity": {
+              "requested": "${{ inputs.toolchain }}",
+              "cache_key": "${TC_CACHE_KEY}",
+              "clang_version": "${CLANG_VERSION}",
+              "identity_hash": "${TC_IDENTITY_HASH}"
+            },
+            "config": {
+              "final_config_sha256": "${FINAL_CONFIG_HASH}"
+            },
+            "artifacts": {
+              "Image": "sha256:${IMAGE_SHA256}",
+              "dtb.img": "sha256:${DTB_SHA256}"
+            }
+          }
+          JSONEOF
+
+          echo "Manifest:"
+          cat "$ART_DIR/manifest.json"
+          echo
+          echo "SHA256SUMS:"
+          cat "$ART_DIR/SHA256SUMS"
+
       # ── 22. Upload Image artifact ─────────────────────────────────────────────
       - name: Upload Image artifact
         if: ${{ inputs.dry_run != true }}
         uses: actions/upload-artifact@v4
         with:
-          name: chimera-mk9-Image-${{ inputs.profile }}-${{ inputs.toolchain }}
+          name: chimera-mk9-Image-${{ inputs.profile }}-${{ inputs.toolchain }}-${{ github.run_id }}
           path: ${{ steps.package-image.outputs.image_path }}
           if-no-files-found: error
 
@@ -1649,10 +1951,21 @@ jobs:
         if: ${{ inputs.dry_run != true }}
         uses: actions/upload-artifact@v4
         with:
-          name: chimera-mk9-dtb-${{ inputs.profile }}-${{ inputs.toolchain }}
+          name: chimera-mk9-dtb-${{ inputs.profile }}-${{ inputs.toolchain }}-${{ github.run_id }}
           path: |
             ${{ env.ART_DIR }}/dtb.img
             ${{ env.ART_DIR }}/*.dtb
+          if-no-files-found: error
+
+      # ── 23b. Upload manifest artifact ─────────────────────────────────────────
+      - name: Upload manifest artifact
+        if: ${{ inputs.dry_run != true }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: chimera-mk9-manifest-${{ inputs.profile }}-${{ inputs.toolchain }}-${{ github.run_id }}
+          path: |
+            ${{ env.ART_DIR }}/manifest.json
+            ${{ env.ART_DIR }}/SHA256SUMS
           if-no-files-found: error
 
       # ── 24. Release ───────────────────────────────────────────────────────────
@@ -1670,8 +1983,11 @@ jobs:
             | Base repo | `${{ inputs.base_repo }}` |
             | Base commit | `${{ env.BASE_COMMIT }}` |
             | KernelSU-Next | `${{ env.KSU_GIT_VERSION }}` |
+            | Chimera ref/commit | `${{ env.CHIMERA_REF }}` / `${{ env.CHIMERA_SHA }}` |
             | Profile | `${{ inputs.profile }}` |
             | Toolchain | `${{ inputs.toolchain }}` |
+            | Compiler | `${{ env.CLANG_VERSION }}` |
+            | Final config SHA-256 | `${{ env.FINAL_CONFIG_HASH }}` |
             | uname | `${{ env.UNAME_PREVIEW }}` |
 
             KSU manual-hook symbols verified in vmlinux:
@@ -1682,11 +1998,15 @@ jobs:
             - ksu_lsm_hook_init
             - ksu_task_fix_setuid
 
-            Image and dtb.img are packaged and attached separately.
+            Image and dtb.img are packaged and attached separately. See
+            SHA256SUMS / manifest.json for exact artifact hashes and full
+            build provenance.
 
           files: |
             ${{ steps.package-image.outputs.image_path }}
             ${{ steps.package-image.outputs.dtb_path }}
+            ${{ env.ART_DIR }}/manifest.json
+            ${{ env.ART_DIR }}/SHA256SUMS
 
           draft: false
           prerelease: false
