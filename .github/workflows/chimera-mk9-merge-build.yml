@@ -315,10 +315,10 @@ on:
         default: cm9
 
       toolchain:
-        description: "Toolchain: llvm22/llvm21/llvm20/aosp22/aosp21/aosp20/aosp19/neutron19/zyc_stable"
+        description: "Toolchain: llvm22/llvm21/llvm20/aosp22/aosp21/aosp20/aosp19/neutron19/neutron23/zyc_stable"
         required: true
         type: choice
-        options: [llvm22, llvm21, llvm20, aosp22, aosp21, aosp20, aosp19, neutron19, zyc_stable]
+        options: [llvm22, llvm21, llvm20, aosp22, aosp21, aosp20, aosp19, neutron19, neutron23, zyc_stable]
         default: llvm22
 
       dry_run:
@@ -1431,6 +1431,12 @@ jobs:
               TC_URL="https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/10032024/neutron-clang-10032024.tar.zst"
               TC_ARCHIVE_FMT="tar.zst"
               TC_CACHE_KEY="neutron-clang-10032024-ubuntu-24.04-v2"
+              ;;
+
+            neutron23)
+              TC_URL="https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/22052026/neutron-clang-22052026.tar.zst"
+              TC_ARCHIVE_FMT="tar.zst"
+              TC_CACHE_KEY="neutron-clang-22052026-ubuntu-24.04-v2"
               ;;
 
             zyc_stable)
