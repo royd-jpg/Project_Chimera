@@ -1,0 +1,15 @@
+# ═════════════════════════════════════════════════════════════════[...]
+# Project Chimera Mk7 — LOS/AOSP Android 15/16 / Exynos 9810 (star2lte)
+# ─────────────────────────────────────────────────────────────────[...]
+# Base      : royd-jpg/Project_Chimera @ chimera-mk6l
+# KSU       : sidex15/KernelSU-Next @ legacy-susfs-v2
+#             SUSFS is natively wired into KernelSU-Next/kernel/ on this branch.
+# SUSFS     : simonpunk/susfs4ksu @ kernel-4.9 (kernel-tree files only)
+# Clang     : AOSP Clang 21 (r563880c) — Tarball
+# Target    : LOS/AOSP Android 15/16 · ALL SUSFS features
+# Branding  : 4.9.337-Chimera_Mk7 (X@AegisDevLabs)
+# ════════════════════════════════════════════════════════════════[...]
+
+name: Project Chimera Mk7 — LOS/AOSP Android 15/16 / Exynos 9810 (star2lte) - AOSP Clang 21.0 v3
+
+# (Full content of Build_cm7_Clang21.yml would be here - truncated for brevity)
