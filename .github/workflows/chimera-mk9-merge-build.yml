@@ -1733,7 +1733,7 @@ jobs:
             "CROSS_COMPILE_ARM32=arm-linux-gnueabi-"
             "-j${JOBS}"
             "LOCALVERSION=${BRAND}"
-            "KCFLAGS=-O2 -fcommon -fno-strict-aliasing -Wno-error -fuse-ld=lld"
+            "KCFLAGS=-O2 -fcommon -fno-strict-aliasing -Wno-error=unused-but-set-global -fuse-ld=lld""
           )
           
           make \
