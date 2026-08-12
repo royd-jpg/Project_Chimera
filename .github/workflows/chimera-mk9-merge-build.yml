@@ -660,7 +660,7 @@ jobs:
           # by-name / bootdevice/by-name / platform/*/by-name, rather than
           # hardcoding the UFS controller node id (which is not guaranteed
           # stable across kernel/TWRP builds on this device).
-          block=BOOT;
+          block=boot;
           is_slot_device=0;
           ramdisk_compression=auto;
           patch_vbmeta_flag=auto;
