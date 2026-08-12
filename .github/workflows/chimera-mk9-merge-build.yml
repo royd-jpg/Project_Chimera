@@ -1995,55 +1995,57 @@ jobs:
         id: package-anykernel
         run: |
           set -Eeuo pipefail
-
+      
           ART_DIR="$GITHUB_WORKSPACE/artifacts"
-          AK3_DIR="$AK3_DIR"
-
+          AK3_DIR="${AK3_DIR:?AK3_DIR not set}"
+      
           [[ -d "$AK3_DIR" ]] || {
             echo "FATAL: AnyKernel3 directory not found at $AK3_DIR" >&2
             exit 1
           }
-
-          # Prefer a combined Image.gz-dtb if the build produced one; this
-          # build's make targets (Image vmlinux dtbs) do not currently
-          # generate that file, so this branch is defensive/forward-looking
-          # rather than the expected path on this workflow as configured.
-          COMBINED="$ABS_OUT/arch/arm64/boot/Image.gz-dtb"
-
-          if [[ -f "$COMBINED" ]]; then
-            echo "Found combined Image.gz-dtb — using it instead of separate Image/dtb"
-            cp "$COMBINED" "$AK3_DIR/Image.gz-dtb"
-            echo "ak3_kernel_payload=Image.gz-dtb" >> "$GITHUB_OUTPUT"
-          else
-            [[ -f "$ART_DIR/Image" ]] || {
-              echo "FATAL: $ART_DIR/Image not found — Package Image step must run first" >&2
-              exit 1
-            }
-            cp "$ART_DIR/Image" "$AK3_DIR/Image"
-
-            if [[ -f "$ART_DIR/dtb.img" ]]; then
-              cp "$ART_DIR/dtb.img" "$AK3_DIR/dtb"
-              echo "ak3_kernel_payload=Image + dtb" >> "$GITHUB_OUTPUT"
-            else
-              echo "WARN: $ART_DIR/dtb.img not present — packaging Image only" \
-                | tee -a "$ABS_LOG/anykernel-package.log"
-              echo "ak3_kernel_payload=Image only" >> "$GITHUB_OUTPUT"
-            fi
-          fi
-
+      
           ZIP_NAME="${BUILD_TAG}-AnyKernel3.zip"
           ZIP_PATH="$ART_DIR/$ZIP_NAME"
-
+      
+          rm -f "$AK3_DIR/Image" "$AK3_DIR/dtb" "$AK3_DIR/Image.gz-dtb" "$ZIP_PATH"
+      
+          COMBINED="$ABS_OUT/arch/arm64/boot/Image.gz-dtb"
+          SPLIT_IMAGE="$ART_DIR/Image"
+          SPLIT_DTB="$ART_DIR/dtb"
+      
+          if [[ -f "$COMBINED" ]]; then
+            echo "Found combined kernel payload: $COMBINED"
+            cp "$COMBINED" "$AK3_DIR/Image.gz-dtb"
+            echo "ak3_kernel_payload=Image.gz-dtb" >> "$GITHUB_OUTPUT"
+          elif [[ -f "$SPLIT_IMAGE" ]]; then
+            echo "Found split kernel payload: $SPLIT_IMAGE"
+            cp "$SPLIT_IMAGE" "$AK3_DIR/Image"
+      
+            if [[ -f "$SPLIT_DTB" ]]; then
+              cp "$SPLIT_DTB" "$AK3_DIR/dtb"
+              echo "ak3_kernel_payload=Image + dtb" >> "$GITHUB_OUTPUT"
+            else
+              echo "WARN: $SPLIT_DTB not present — packaging Image only" | tee -a "$ABS_LOG/anykernel-package.log"
+              echo "ak3_kernel_payload=Image only" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "FATAL: No valid kernel payload found" >&2
+            echo "Expected either:" >&2
+            echo "  - $COMBINED" >&2
+            echo "  - $SPLIT_IMAGE" >&2
+            exit 1
+          fi
+      
           ( cd "$AK3_DIR" && zip -r9 "$ZIP_PATH" . -x ".git/*" ".github/*" )
-
+      
           [[ -s "$ZIP_PATH" ]] || {
             echo "FATAL: $ZIP_PATH was not created or is empty" >&2
             exit 1
           }
-
+      
           echo "AnyKernel3 zip: $ZIP_PATH ($(stat -c%s "$ZIP_PATH") bytes)"
           echo "anykernel_zip_path=$ZIP_PATH" >> "$GITHUB_OUTPUT"
-
+    
       # ── 22. Upload Image artifact ─────────────────────────────────────────────
       - name: Upload Image artifact
         if: ${{ inputs.dry_run != true }}
