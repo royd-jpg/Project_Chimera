@@ -1437,7 +1437,7 @@ jobs:
               TC_CACHE_KEY="zyc-clang-ubuntu-24.04-v2"
 
               TC_URL=$(curl -fsSL \
-                "https://raw.githubusercontent.com/ZyCromerZ/Clang/main/Clang-main-link.txt" \
+                "https://raw.githubusercontent.com/ZyCromerZ/Clang/refs/heads/22.0.0git-20250928/Clang-main-link.txt" \
                 || true)
               ;;
 
