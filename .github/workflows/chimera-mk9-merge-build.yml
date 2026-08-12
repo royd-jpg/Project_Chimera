@@ -2004,6 +2004,13 @@ jobs:
             exit 1
           }
       
+          [[ -f "$GITHUB_WORKSPACE/anykernel.sh" ]] || {
+            echo "FATAL: anykernel.sh not found at repo root" >&2
+            exit 1
+          }
+      
+          cp "$GITHUB_WORKSPACE/anykernel.sh" "$AK3_DIR/anykernel.sh"
+      
           ZIP_NAME="${BUILD_TAG}-AnyKernel3.zip"
           ZIP_PATH="$ART_DIR/$ZIP_NAME"
       
