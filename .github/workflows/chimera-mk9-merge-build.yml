@@ -349,7 +349,7 @@ on:
         description: "Base ref: full 40-hex commit SHA only (not a branch name — see fix-log item [I]). Default is the current pin of record; the live branch tip is logged for drift but never substituted automatically."
         required: false
         type: string
-        default: "009efeb42d295f254b053194c4d0b79cc16daaae"
+        default: "4428629dc94ab9d55eba804dfda846d8563d56e5"
 
       ksu_commit:
         description: "KernelSU-Next exact commit SHA (full 40-hex, pin; overrides submodule-pinned commit if different) — must be bumped together with base_ref, see fix-log item [I]"
