@@ -1,0 +1,240 @@
+name: Commit Chimera Mk6 Light Kernel Tuning
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  commit-tuning:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout chimera-mk6l
+        uses: actions/checkout@v4
+        with:
+          repository: royd-jpg/Project_Chimera
+          ref: chimera-mk6l
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Show tree info
+        run: |
+          pwd
+          ls drivers/cpufreq | head -20
+
+      #
+      # EXYNOS ACME TUNING
+      #
+
+      - name: Tune Exynos ACME scheduler
+        run: |
+          set -Eeuo pipefail
+
+          FILE="drivers/cpufreq/exynos-acme.c"
+
+          test -f "$FILE"
+
+          cp "$FILE" "${FILE}.bak"
+
+          python3 <<'PYEOF'
+          from pathlib import Path
+          import re
+
+          path = Path("drivers/cpufreq/exynos-acme.c")
+          text = path.read_text()
+
+          original = text
+
+          #
+          # Lower aggressive Samsung rate limits
+          #
+
+          text = re.sub(
+              r'up_rate_limit_us\s*=\s*[0-9]+',
+              'up_rate_limit_us = 1500',
+              text
+          )
+
+          text = re.sub(
+              r'down_rate_limit_us\s*=\s*[0-9]+',
+              'down_rate_limit_us = 16000',
+              text
+          )
+
+          #
+          # Reduce RT scheduler aggressiveness
+          #
+
+          text = re.sub(
+              r'MAX_RT_PRIO\s*-\s*1',
+              '1',
+              text
+          )
+
+          text = text.replace(
+              'SCHED_FIFO',
+              'SCHED_RR'
+          )
+
+          if text == original:
+              print("No ACME changes matched")
+          else:
+              path.write_text(text)
+              print("ACME tuning applied")
+          PYEOF
+
+      #
+      # DISABLE UFC RESET LOOP
+      #
+
+      - name: Disable Exynos UFC notifier
+        run: |
+          set -Eeuo pipefail
+
+          FILE="drivers/cpufreq/exynos-ufc.c"
+
+          test -f "$FILE"
+
+          cp "$FILE" "${FILE}.bak"
+
+          python3 <<'PYEOF'
+          from pathlib import Path
+          import re
+
+          path = Path("drivers/cpufreq/exynos-ufc.c")
+          text = path.read_text()
+
+          original = text
+
+          text = re.sub(
+              r'cpufreq_register_notifier\s*\([^;]+;',
+              'pr_info("UFC notifier disabled for Chimera Mk6 Light\\n");',
+              text
+          )
+
+          if text == original:
+              print("No UFC notifier matched")
+          else:
+              path.write_text(text)
+              print("UFC notifier disabled")
+          PYEOF
+
+      #
+      # CFS LATENCY TUNING
+      #
+
+      - name: Tune CFS scheduler
+        run: |
+          set -Eeuo pipefail
+
+          FILE="kernel/sched/fair.c"
+
+          test -f "$FILE"
+
+          python3 <<'PYEOF'
+          from pathlib import Path
+          import re
+
+          path = Path("kernel/sched/fair.c")
+          text = path.read_text()
+
+          replacements = {
+              r'sysctl_sched_latency\s*=\s*[0-9]+ULL':
+                  'sysctl_sched_latency = 6000000ULL',
+
+              r'sysctl_sched_min_granularity\s*=\s*[0-9]+ULL':
+                  'sysctl_sched_min_granularity = 750000ULL',
+
+              r'sysctl_sched_wakeup_granularity\s*=\s*[0-9]+ULL':
+                  'sysctl_sched_wakeup_granularity = 1000000ULL',
+
+              r'sysctl_sched_migration_cost\s*=\s*[0-9]+ULL':
+                  'sysctl_sched_migration_cost = 5000000ULL',
+          }
+
+          for pattern, replacement in replacements.items():
+              text = re.sub(pattern, replacement, text)
+
+          path.write_text(text)
+
+          print("CFS tuning applied")
+          PYEOF
+
+      #
+      # MMC READAHEAD
+      #
+
+      - name: Tune MMC read_ahead
+        run: |
+          set -Eeuo pipefail
+
+          FILE="drivers/mmc/core/block.c"
+
+          if [[ -f "$FILE" ]]; then
+            sed -ri \
+              's/blk_queue_read_ahead\((.*), *1024\)/blk_queue_read_ahead(\1, 128)/g' \
+              "$FILE" || true
+          fi
+
+      #
+      # DEFCONFIG TUNING
+      #
+
+      - name: Tune defconfig
+        run: |
+          set -Eeuo pipefail
+
+          DEFCONFIG="arch/arm64/configs/exynos9810-star2lte_defconfig"
+
+          test -f "$DEFCONFIG"
+
+          set_cfg() {
+            sed -i "/^$1=.*/d" "$DEFCONFIG"
+            sed -i "/^# $1 is not set/d" "$DEFCONFIG"
+            echo "$1=$2" >> "$DEFCONFIG"
+          }
+
+          set_cfg CONFIG_HZ_300 y
+          set_cfg CONFIG_HZ 300
+          set_cfg CONFIG_PREEMPT y
+          set_cfg CONFIG_TCP_CONG_BBR y
+          set_cfg CONFIG_DEFAULT_TCP_CONG "\"bbr\""
+          set_cfg CONFIG_CRYPTO_LZ4 y
+          set_cfg CONFIG_ZRAM y
+          set_cfg CONFIG_ZSMALLOC y
+
+      #
+      # LOCALVERSION
+      #
+
+      - name: Set innocuous uname
+        run: |
+          echo 'CONFIG_LOCALVERSION="-4.9.337-CM6L"' \
+            >> arch/arm64/configs/exynos9810-star2lte_defconfig
+
+      #
+      # COMMIT
+      #
+
+      - name: Commit changes
+        run: |
+          set -Eeuo pipefail
+
+          git config user.name "Chimera Bot"
+          git config user.email "chimera@local"
+
+          git add -A
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+
+          git commit -m \
+            "Chimera Mk6 Light: Samsung BSP scheduler + UFC tuning"
+
+      - name: Push changes
+        run: |
+          git push origin chimera-mk6l

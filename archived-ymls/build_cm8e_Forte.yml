@@ -1,0 +1,1294 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# Project Chimera Mk8e — LOS/AOSP Android 15/16 QPR2 / Exynos 9810 (star2lte)
+# ───────────────────────────────────────────────────────────────────────────────
+# Base      : royd-jpg/Project_Chimera @ chimera-mk8   [Δ-MK8e-4: from Mk8]
+# KSU       : gavdoc38/KernelSU-Next @ 754123a          [Δ-MK8e-1: from Mk8]
+#             Exynos 9810 optimized fork — pre-applied syscall_fn_t shims and
+#             Samsung BSP-aligned VFS hook insertion points.
+# SUSFS     : simonpunk/susfs4ksu @ kernel-4.9 · v2.1.0  [Δ-MK8e-2: from Mk8]
+#             SUSFS_TARGET_VERSION bumped 1.5.5 -> 2.1.0 to match the
+#             gavdoc38 KSU tree's native SUSFS wiring.
+# Clang     : AOSP Clang 21 (r563880c) — Tarball          (UNCHANGED)
+# Target    : LOS/AOSP Android 15/16 QPR2                 (UNCHANGED)
+# Branding  : 4.9.337-Chimera_Mk7e-style inputs RETAINED  (UNCHANGED — see below)
+# Security  : AVC Log Spoofing HARD-DISABLED (Native/Configured), unchanged
+# Packaging : raw Image artifact                          [Δ-MK8e-3]
+#             AnyKernel3 zip packaging REMOVED. No boot.img injection either
+#             (magiskboot route dropped — there's no sane way to host a
+#             stock boot.img for the workflow to pull from, and it's
+#             firmware/device-specific). The build now ships the raw
+#             arch/arm64/boot/Image file as the final artifact/release asset,
+#             renamed for traceability. Inject it into a boot.img locally.
+# ───────────────────────────────────────────────────────────────────────────────
+# What changed vs. Mk7e (build_CM7e_Forte_Clang21.yml) — and ONLY this:
+#
+# [Δ-MK8e-1] KernelSU source swapped to the Mk8 baseline:
+#            ksu_repo  default: sidex15/KernelSU-Next -> gavdoc38/KernelSU-Next
+#            ksu_ref   default: legacy-susfs-v2        -> '' (commit-pinned instead)
+#            ksu_commit default: ''                    -> 754123a23e18c3dae85b3499b8a1e36207b73bb5
+#            The "Set up KernelSU-Next" step now requires EITHER ksu_ref OR
+#            ksu_commit to be non-blank (matches Mk8's stricter validation),
+#            since the gavdoc38 tree is consumed via a reproducible commit pin
+#            rather than a floating branch tip.
+#
+# [Δ-MK8e-2] SUSFS target version bumped to match gavdoc38's native SUSFS:
+#            SUSFS_TARGET_VERSION: 1.5.5 -> 2.1.0
+#            susfs_repo / susfs_ref inputs are UNCHANGED (still
+#            simonpunk/susfs4ksu @ kernel-4.9) — only the expected/verified
+#            version constant changed, since this is what gavdoc38's
+#            KernelSU-Next/kernel/Kconfig was built against. The SUS_MAP /
+#            HIDE_MAGISK_EVIL Kconfig probes in defconfig tuning will now
+#            very likely resolve true on 2.1.0 (they were skip-only on 1.5.5).
+#
+# [Δ-MK8e-3] Packaging pipeline simplified: AnyKernel3 zip -> raw Image file.
+#            No boot.img patching, no magiskboot, no boot_img_url input —
+#            there's no practical way to host/pull a stock boot.img for this
+#            workflow, and doing the injection locally with magiskboot/AIK
+#            against your own dumped boot.img is simpler and safer anyway.
+#            The "Package flashable zip" step is replaced by "Stage final
+#            Image artifact", which just copies/renames
+#            arch/arm64/boot/Image. Artifact/release upload steps changed
+#            from .zip to the raw Image file accordingly. AK3 clone step
+#            removed entirely.
+#
+# Everything else is intentionally UNTOUCHED from Mk7e and is NOT a Mk8
+# import: all workflow_dispatch inputs for brand/build_user/build_host/
+# build_version/build_date, the dry_run/do_release/force_repatch inputs, the
+# KCFLAGS set ("-O2 -fcommon -fno-strict-aliasing -Wno-error") [Δ8/Δ9 from
+# Mk7e history], the BRENE su_compat/kernel_umount diagnostic step, the
+# syscall_fn_t fix, Surgery A/B/C/D, the SUSFS prctl bridge injector (marker
+# renamed only for idempotency — see below), the weak symbol fallbacks, the
+# FORTe defconfig tuning block INCLUDING the unconditional AVC/SELinux spoof
+# hard-disable block [Δ11/Δ16/Δ21], the Chimera Silent Engine, the
+# Samsung-stock-style branding step, and the SUSFS pre-build sanity check
+# (including its [Δ21] spoof verification) all carry over from Mk7e as-is,
+# with only "Mk7e" identifier strings/log headers relabeled to "Mk8e" and the
+# prctl-bridge marker renamed (CHIMERA_MK6R9_SUSFS_PRCTL_BRIDGE ->
+# CHIMERA_MK8E_SUSFS_PRCTL_BRIDGE) so the bridge re-injects cleanly against
+# the new KSU/SUSFS source on a tree that may have an old Mk7e bridge marker
+# already present.
+#
+# Branding contract is UNCHANGED from Mk7e: brand/build_user/build_host/
+# build_version/build_date remain workflow_dispatch text inputs with the same
+# Mk7e defaults (-19611906 / dpi / SWDD5605 / 1 / static timestamp) — this
+# was explicitly kept as-is per request, NOT switched to Mk8's
+# Terminal_Echo@AegisDevLabs static branding.
+# ═══════════════════════════════════════════════════════════════════════════════
+name: >-
+  Project Chimera Mk8e — LOS/AOSP Android 15/16 QPR2 / Exynos 9810 (star2lte) -
+  AOSP Clang 21.0 Forte v2 (raw Image)
+'on':
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Validate only — skip build and package
+        required: false
+        type: boolean
+        default: true
+      do_release:
+        description: Create a GitHub Release after successful build
+        required: false
+        type: boolean
+        default: false
+      force_repatch:
+        description: Force re-apply KSU/SUSFS even if already present in tree
+        required: false
+        type: boolean
+        default: false
+      ksu_repo:
+        description: KernelSU git URL (https only)
+        required: false
+        type: string
+        default: 'https://github.com/gavdoc38/KernelSU-Next.git'
+      ksu_ref:
+        description: >-
+          KernelSU branch/tag/ref (leave blank when relying on ksu_commit —
+          at least one of ksu_ref / ksu_commit must be non-blank)
+        required: false
+        type: string
+        default: ''
+      ksu_commit:
+        description: >-
+          KernelSU exact commit SHA (gavdoc38 Exynos-optimized pin; leave
+          blank to track ksu_ref tip instead)
+        required: false
+        type: string
+        default: '754123a23e18c3dae85b3499b8a1e36207b73bb5'
+      susfs_repo:
+        description: SUSFS git URL (https only)
+        required: false
+        type: string
+        default: 'https://gitlab.com/simonpunk/susfs4ksu.git'
+      susfs_ref:
+        description: SUSFS branch/tag/ref (kernel-4.9 branch targets v2.1.0 on the gavdoc38 KSU tree)
+        required: false
+        type: string
+        default: kernel-4.9
+      susfs_commit:
+        description: SUSFS exact commit SHA pin (leave blank to track ref tip)
+        required: false
+        type: string
+        default: ''
+      brand:
+        description: >-
+          LOCALVERSION suffix (must start with '-'), e.g. -19611906 or
+          -Chimera_Mk7e
+        required: false
+        type: string
+        default: '-19611906'
+      build_user:
+        description: 'KBUILD_BUILD_USER — uname ''(user@host)'' left side, e.g. dpi'
+        required: false
+        type: string
+        default: dpi
+      build_host:
+        description: 'KBUILD_BUILD_HOST — uname ''(user@host)'' right side, e.g. SWDD5605'
+        required: false
+        type: string
+        default: SWDD5605
+      build_version:
+        description: >-
+          KBUILD_BUILD_VERSION — the "#N" token in the uname string
+          (e.g. "#1 SMP PREEMPT" when set to "1").
+        required: false
+        type: string
+        default: '1'
+      build_date:
+        description: 'KBUILD_BUILD_TIMESTAMP — The date/time for the version string (static)'
+        required: false
+        type: string
+        default: 'Mon 1 Jan 00:00:00 UTC 2026'
+permissions:
+  contents: write
+jobs:
+  build:
+    name: Build Exynos9810 Kernel — Chimera Mk8e LOS/AOSP Android 15/16 QPR2
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        shell: bash
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+      KERNEL_REPO: 'https://github.com/royd-jpg/Project_Chimera'
+      KERNEL_BRANCH: chimera-mk8
+      # [Δ-MK8e-2] bumped 1.5.5 -> 2.1.0 to match gavdoc38's native SUSFS
+      SUSFS_TARGET_VERSION: 2.1.0
+      KERNEL_DIR: kernel
+      OUT_DIR: kernel-out
+      LOG_DIR: logs
+      AOSP_KEY: aosp-clang-r563880c-ubuntu-24.04-v1
+      DEFCONFIG: arch/arm64/configs/exynos9810-star2lte_defconfig
+      BRAND: '${{ inputs.brand }}'
+      BUILD_USER: '${{ inputs.build_user }}'
+      BUILD_HOST: '${{ inputs.build_host }}'
+      BUILD_VERSION: '${{ inputs.build_version }}'
+      KBUILD_BUILD_TIMESTAMP: '${{ inputs.build_date }}'
+    steps:
+      - name: Prepare workspace
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$LOG_DIR" "$OUT_DIR"
+          [[ "$BRAND" == -* ]] \
+            || { echo "ERROR: brand input must start with '-' (got: $BRAND)"; exit 1; }
+          [[ -n "$BUILD_USER" && -n "$BUILD_HOST" ]] \
+            || { echo "ERROR: build_user/build_host must not be empty"; exit 1; }
+          [[ -n "$BUILD_VERSION" ]] \
+            || { echo "ERROR: build_version must not be empty"; exit 1; }
+          {
+            echo "build_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "run_number=${GITHUB_RUN_NUMBER}"
+            echo "dry_run=${{ inputs.dry_run }}"
+            echo "do_release=${{ inputs.do_release }}"
+            echo "force_repatch=${{ inputs.force_repatch }}"
+            echo "ksu_repo=${{ inputs.ksu_repo }}"
+            echo "ksu_ref=${{ inputs.ksu_ref }}"
+            echo "ksu_commit=${{ inputs.ksu_commit }}"
+            echo "brand=$BRAND"
+            echo "build_user=$BUILD_USER"
+            echo "build_host=$BUILD_HOST"
+            echo "build_version=$BUILD_VERSION"
+            echo "uname_preview=Linux version 4.9.337${BRAND} (${BUILD_USER}@${BUILD_HOST}) #${BUILD_VERSION} SMP PREEMPT"
+          } | tee "$LOG_DIR/build-inputs.log"
+
+      # ── 1. Dependencies ───────────────────────────────────────────────────────
+      - name: Install build dependencies
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -yqq \
+            git curl wget bc flex bison python3 \
+            libssl-dev libelf-dev build-essential \
+            zip unzip zstd lz4 \
+            ccache \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
+            
+      # ── 2. AOSP Clang 21 Toolchain ───────────────────────────────────────────
+      # [Δ8] Clang r563880c (v21) is retained for the 4.9 BSP.
+      #      The QPR2 ROM bump does not change the kernel toolchain requirement;
+      #      AOSP Clang 21 is appropriate for all Android 16 QPR2 ROM targets
+      #      on a Samsung Linux 4.9 BSP.
+      - name: Cache AOSP Clang 21.0 r563880c
+        id: cache-clang21
+        uses: actions/cache@v4
+        with:
+          path: aosp-clang
+          key: ${{ env.AOSP_KEY }}
+
+      - name: Download AOSP Clang 21.0 r563880c (Tarball)
+        if: steps.cache-clang21.outputs.cache-hit != 'true'
+        run: |
+          set -Eeuo pipefail
+          echo "=== Fetching AOSP Clang r563880c tarball ==="
+          mkdir -p aosp-clang
+          wget -q \
+            -O aosp-clang/clang-r563880c.tar.gz \
+            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/21b19c041de1f1df9b97fd9902ae5405c6cf8eb9/clang-r563880c.tar.gz"
+          tar -xzf aosp-clang/clang-r563880c.tar.gz -C aosp-clang
+          rm -f aosp-clang/clang-r563880c.tar.gz
+          if [[ -x aosp-clang/bin/clang ]]; then
+            :
+          elif [[ -x aosp-clang/clang-r563880c/bin/clang ]]; then
+            mv aosp-clang/clang-r563880c/* aosp-clang/
+            rmdir aosp-clang/clang-r563880c
+          fi
+          test -x aosp-clang/bin/clang \
+            || { echo "ERROR: clang binary missing after extract"; exit 1; }
+          aosp-clang/bin/clang --version | tee -a "$LOG_DIR/toolchain.log"
+      - name: Export Clang 21.0 PATH
+        run: |
+          echo "$GITHUB_WORKSPACE/aosp-clang/bin" >> "$GITHUB_PATH"
+          export PATH="$GITHUB_WORKSPACE/aosp-clang/bin:$PATH"
+          echo "=== Verifying Compiler Binaries ==="
+          clang --version
+          ld.lld --version
+          # [Δ4] Verify ccache can wrap clang successfully
+          ccache --version | head -1
+          ccache clang --version | head -1
+          echo "=== ccache stats (pre-build) ==="
+          ccache --show-stats || true
+      # ── 3. Clone kernel tree ──────────────────────────────────────────────────
+      # [Δ1] Cloning chimera-mk8 branch (QPR2 merge result of chimera-mk6l +
+      #      gavdoc38/android_kernel_samsung_exynos9810 v2.5.0).
+      - name: Clone kernel tree
+        run: |
+          set -Eeuo pipefail
+          git clone --depth=1 -b "$KERNEL_BRANCH" "$KERNEL_REPO" "$KERNEL_DIR"
+          git -C "$KERNEL_DIR" log --oneline -5 | tee "$LOG_DIR/kernel-revision.log"
+          echo "OK: kernel tree cloned (branch: $KERNEL_BRANCH)"
+      # ── 4. Clone SUSFS (kernel-tree files only) ────────────────────────────────
+      - name: Clone SUSFS (kernel-tree files; pinned)
+        run: |
+          set -Eeuo pipefail
+          SUSFS_URL="${{ inputs.susfs_repo }}"
+          SUSFS_REF="${{ inputs.susfs_ref }}"
+          SUSFS_COMMIT="${{ inputs.susfs_commit }}"
+          [[ "$SUSFS_URL" =~ ^https:// ]] \
+            || { echo "ERROR: SUSFS URL must use https://"; exit 1; }
+          [[ "$SUSFS_URL" =~ [[:space:]] ]] \
+            && { echo "ERROR: SUSFS URL contains whitespace"; exit 1; }
+          if [[ -n "$SUSFS_COMMIT" && ! "$SUSFS_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "ERROR: susfs_commit must be a full 40-char SHA"; exit 1
+          fi
+          git clone --filter=blob:none --no-tags "$SUSFS_URL" susfs4ksu
+          if [[ -n "$SUSFS_COMMIT" ]]; then
+            git -C susfs4ksu fetch --depth=1 origin "$SUSFS_COMMIT"
+            git -C susfs4ksu checkout --detach "$SUSFS_COMMIT"
+          else
+            git -C susfs4ksu fetch --depth=1 origin "$SUSFS_REF"
+            git -C susfs4ksu checkout --detach FETCH_HEAD
+          fi
+          RESOLVED="$(git -C susfs4ksu rev-parse HEAD)"
+          {
+            echo "SUSFS_URL=$SUSFS_URL"
+            echo "SUSFS_REF=${SUSFS_REF:-none}"
+            echo "SUSFS_COMMIT_INPUT=${SUSFS_COMMIT:-none}"
+            echo "SUSFS_COMMIT_RESOLVED=$RESOLVED"
+          } | tee "$LOG_DIR/susfs-revision.log"
+          MISSING=0
+          for f in \
+            "kernel_patches/50_add_susfs_in_kernel-4.9.patch" \
+            "kernel_patches/fs/susfs.c" \
+            "kernel_patches/fs/sus_su.c" \
+            "kernel_patches/include/linux/susfs.h" \
+            "kernel_patches/include/linux/susfs_def.h" \
+            "kernel_patches/include/linux/sus_su.h"; do
+            [[ -f "susfs4ksu/$f" ]] || { echo "ERROR: susfs4ksu/$f missing"; MISSING=1; }
+          done
+          [[ "$MISSING" -eq 0 ]] || { echo "Aborting: required SUSFS files absent"; exit 1; }
+          echo "OK: all required SUSFS kernel-tree files present"
+          ACTUAL_VER="$(grep -oP 'SUSFS_VERSION\s+"\K[^"]+' \
+            susfs4ksu/kernel_patches/include/linux/susfs.h 2>/dev/null || echo 'unknown')"
+          echo "SUSFS_ACTUAL_VERSION=$ACTUAL_VER" | tee -a "$LOG_DIR/susfs-revision.log"
+          if [[ "$ACTUAL_VER" == "$SUSFS_TARGET_VERSION" ]]; then
+            echo "OK: SUSFS version confirmed: $ACTUAL_VER"
+          else
+            echo "WARN: SUSFS version is '$ACTUAL_VER', expected '$SUSFS_TARGET_VERSION' — continuing"
+          fi
+      # ── 5. Set up KernelSU-Next (gavdoc38; pinned) ────────────────────────────
+      # [Δ2] Source changed from sidex15/legacy-susfs-v2 to gavdoc38@754123a.
+      #      The gavdoc38 tree contains Exynos 9810-specific BSP patches:
+      #      - Corrected syscall_fn_t typedef for Samsung 4.9 BSP calling conv
+      #      - VFS hook insertion points aligned to Samsung's path_openat layout
+      #      - sus_ino generation compatible with Samsung's inode allocator
+      #      ksu_commit defaults to 754123a; override input to track a newer pin.
+      - name: Set up KernelSU-Next (gavdoc38 Exynos-optimized; pinned)
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          git rm -r --cached KernelSU-Next 2>/dev/null || true
+          rm -rf .git/modules/KernelSU-Next KernelSU-Next drivers/kernelsu
+          KSU_URL="${{ inputs.ksu_repo }}"
+          KSU_REF="${{ inputs.ksu_ref }}"
+          KSU_COMMIT="${{ inputs.ksu_commit }}"
+          [[ "$KSU_URL" =~ ^https:// ]] \
+            || { echo "ERROR: KSU URL must use https://"; exit 1; }
+          [[ "$KSU_URL" =~ [[:space:]] ]] \
+            && { echo "ERROR: KSU URL contains whitespace"; exit 1; }
+          # [Δ2] Require either a commit SHA or a ref — both blank is an error
+          if [[ -z "$KSU_COMMIT" && -z "$KSU_REF" ]]; then
+            echo "ERROR: both ksu_commit and ksu_ref are blank — provide at least one"; exit 1
+          fi
+          if [[ -n "$KSU_COMMIT" && ! "$KSU_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "ERROR: ksu_commit must be a full 40-char SHA"; exit 1
+          fi
+          git clone --filter=blob:none --no-tags "$KSU_URL" KernelSU-Next
+          if [[ -n "$KSU_COMMIT" ]]; then
+            git -C KernelSU-Next fetch --depth=1 origin "$KSU_COMMIT"
+            git -C KernelSU-Next checkout --detach "$KSU_COMMIT"
+            echo "INFO: KSU pinned to commit $KSU_COMMIT"
+          else
+            git -C KernelSU-Next fetch --depth=1 origin "$KSU_REF"
+            git -C KernelSU-Next checkout --detach FETCH_HEAD
+            echo "WARN: KSU tracking ref tip of $KSU_REF — not reproducible"
+          fi
+          RESOLVED_KSU_COMMIT="$(git -C KernelSU-Next rev-parse HEAD)"
+          {
+            echo "KSU_URL=$KSU_URL"
+            echo "KSU_REF=${KSU_REF:-none}"
+            echo "KSU_COMMIT_INPUT=${KSU_COMMIT:-none}"
+            echo "KSU_COMMIT_RESOLVED=$RESOLVED_KSU_COMMIT"
+          } | tee "../$LOG_DIR/ksu-submodule.log"
+          test -f KernelSU-Next/kernel/Kconfig \
+            || { echo "ERROR: KernelSU-Next/kernel/Kconfig missing"; exit 1; }
+          if grep -qE '^[[:space:]]*config[[:space:]]+KSU_SUSFS' KernelSU-Next/kernel/Kconfig; then
+            echo "OK: SUSFS confirmed native in KernelSU-Next/kernel/Kconfig"
+            echo "KSU_SUSFS_NATIVE=true" >> "$GITHUB_ENV"
+          else
+            echo "WARN: KernelSU-Next/kernel/Kconfig has no 'config KSU_SUSFS' entry."
+            echo "KSU_SUSFS_NATIVE=false" >> "$GITHUB_ENV"
+          fi
+          git -C KernelSU-Next log --oneline -1 | tee -a "../$LOG_DIR/ksu-submodule.log"
+          ln -sf ../KernelSU-Next/kernel drivers/kernelsu
+          test -f drivers/kernelsu/Kconfig \
+            || { echo "ERROR: drivers/kernelsu/Kconfig symlink broken"; exit 1; }
+          echo "OK: KernelSU-Next wired at drivers/kernelsu (gavdoc38 Exynos-optimized)"
+      # ── 5b. Fix syscall_fn_t typedef (Samsung 4.9 BSP) ───────────────────────
+      # NOTE: gavdoc38 KSU tree may already have this fix applied natively.
+      #       Step is idempotent — safe to run regardless.
+      - name: Fix syscall_fn_t typedef (Samsung 4.9 BSP pointer-type fix)
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          HOOK_H="KernelSU-Next/kernel/hook/syscall_hook.h"
+          if [[ ! -f "$HOOK_H" ]] || ! grep -q 'syscall_fn_t' "$HOOK_H"; then
+            echo "INFO: syscall_fn_t — nothing to fix (gavdoc38 may have pre-applied)"; exit 0
+          fi
+          printf '%s\n' \
+            'from pathlib import Path' \
+            'import re' \
+            'path = Path("KernelSU-Next/kernel/hook/syscall_hook.h")' \
+            'if not path.exists(): raise SystemExit(0)' \
+            'content = path.read_text()' \
+            'typedef = (' \
+            '    "/* syscall_fn_t: Samsung 4.9 BSP compatibility */\n"' \
+            '    "typedef long (*syscall_fn_t)(\n"' \
+            '    "    unsigned long, unsigned long, unsigned long,\n"' \
+            '    "    unsigned long, unsigned long, unsigned long\n"' \
+            '    ");\n\n"' \
+            ')' \
+            'pos = 0' \
+            'for m in re.finditer(r"^#(include|pragma|ifndef|define)[^\n]*\n", content, re.MULTILINE):' \
+            '    pos = m.end()' \
+            'if "typedef long (*syscall_fn_t)" not in content:' \
+            '    path.write_text(content[:pos] + typedef + content[pos:])' \
+            '    print("OK: syscall_fn_t typedef injected")' \
+            'else:' \
+            '    print("OK: syscall_fn_t already present (idempotent)")' \
+            > /tmp/fix_syscall_fn_t.py
+          python3 /tmp/fix_syscall_fn_t.py
+      # ── 6. Preflight: detect pre-integrated KSU/SUSFS ────────────────────────
+      - name: Preflight tree state
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          LOG="../$LOG_DIR/preflight.log"
+          echo "=== Preflight — Chimera Mk8 ===" | tee "$LOG"  # [Δ6]
+          git status --short | tee -a "$LOG"
+          echo "=== KSU/SUSFS markers ===" | tee -a "$LOG"
+          grep -RsnE \
+            'KernelSU|kernelsu|CONFIG_KSU|susfs_task_state|ksu_handle_faccessat' \
+            fs include kernel arch/arm64/configs 2>/dev/null \
+            | tee -a "$LOG" || true
+          ALREADY_PATCHED=false
+          if grep -RqsE \
+            'source "drivers/kernelsu/Kconfig"|ksu_handle_faccessat|susfs_task_state' \
+            fs include kernel arch/arm64/configs 2>/dev/null; then
+            ALREADY_PATCHED=true
+          fi
+          echo "ALREADY_PATCHED=$ALREADY_PATCHED" | tee -a "$LOG"
+          if [[ "$ALREADY_PATCHED" == "true" && \
+                "${{ inputs.force_repatch }}" != "true" ]]; then
+            echo "SKIP_INTEGRATION=true"  >> "$GITHUB_ENV"
+            echo "INFO: tree already has KSU/SUSFS markers — skipping patch application"
+          else
+            echo "SKIP_INTEGRATION=false" >> "$GITHUB_ENV"
+          fi
+      # ── 7. Wire KernelSU Kconfig ──────────────────────────────────────────────
+      - name: Wire KernelSU Kconfig
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          sed -i '/source "drivers\/kernelsu\/Kconfig"/d' drivers/Kconfig
+          if ! grep -q '^endmenu' drivers/Kconfig; then
+            printf '\nendmenu\n' >> drivers/Kconfig
+          fi
+          sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+          grep -q 'obj-y += kernelsu/' drivers/Makefile \
+            || echo 'obj-y += kernelsu/' >> drivers/Makefile
+          COUNT="$(grep -c 'drivers/kernelsu/Kconfig' drivers/Kconfig || true)"
+          [[ "$COUNT" -eq 1 ]] \
+            || { echo "ERROR: Expected 1 Kconfig entry, found $COUNT"; exit 1; }
+          echo "OK: KernelSU Kconfig wired (count=$COUNT)"
+      # ── 8. Apply SUSFS kernel patch ───────────────────────────────────────────
+      - name: Apply SUSFS kernel patch (kernel-tree side only)
+        if: ${{ env.SKIP_INTEGRATION == 'false' }}
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          PATCH="$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.9.patch"
+          set +e
+          git apply --reject --whitespace=fix "$PATCH" \
+            > "../$LOG_DIR/susfs-apply.log" 2>&1
+          RC=$?
+          set -e
+          find . -name '*.rej' -print | sort > "../$LOG_DIR/susfs-rejects.log" || true
+          echo "Apply RC=$RC" | tee -a "../$LOG_DIR/susfs-apply.log"
+          [[ "$RC" -eq 0 ]] \
+            && echo "OK: SUSFS kernel patch applied cleanly" \
+            || echo "WARN: git apply had conflicts — step 9 will install files directly"
+      # ── 9. Guarantee all SUSFS kernel-tree files present ─────────────────────
+      - name: Guarantee SUSFS kernel-tree files present
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          LOG="../$LOG_DIR/susfs-guarantee.log"
+          echo "=== SUSFS file guarantee ===" | tee "$LOG"
+          SRC="$GITHUB_WORKSPACE/susfs4ksu/kernel_patches"
+          for pair in "fs/susfs.c:fs/susfs.c" "fs/sus_su.c:fs/sus_su.c"; do
+            DST="${pair##*:}"; FROM="$SRC/${pair%%:*}"
+            if [[ ! -f "$DST" ]]; then
+              install -m 0644 "$FROM" "$DST"
+              echo "OK: installed $DST" | tee -a "$LOG"
+            else
+              echo "INFO: $DST present ($(wc -l < "$DST") lines) — preserved" | tee -a "$LOG"
+            fi
+          done
+          for hdr in \
+            "include/linux/susfs.h" \
+            "include/linux/susfs_def.h" \
+            "include/linux/sus_su.h"; do
+            if [[ ! -f "$hdr" ]]; then
+              PATCH_SRC="$SRC/$hdr"
+              if [[ -f "$PATCH_SRC" ]]; then
+                install -m 0644 "$PATCH_SRC" "$hdr"
+                echo "OK: installed $hdr" | tee -a "$LOG"
+              else
+                echo "FAIL: $hdr missing from patch source" | tee -a "$LOG"
+              fi
+            else
+              echo "INFO: $hdr present ($(wc -l < "$hdr") lines) — preserved" | tee -a "$LOG"
+            fi
+          done
+          grep -q 'susfs\.o'  fs/Makefile \
+            || echo 'obj-$(CONFIG_KSU_SUSFS) += susfs.o'  >> fs/Makefile
+          grep -q 'sus_su\.o' fs/Makefile \
+            || echo 'obj-$(CONFIG_KSU_SUSFS) += sus_su.o' >> fs/Makefile
+          sed -i '/ccflags-.*CONFIG_KSU_SUSFS.*selinux/d' fs/Makefile
+          echo 'ccflags-$(CONFIG_KSU_SUSFS) += -Isecurity/selinux -Isecurity/selinux/include' \
+            >> fs/Makefile
+          echo "OK: fs/Makefile wired" | tee -a "$LOG"
+          FAIL=0
+          for f in \
+            fs/susfs.c fs/sus_su.c \
+            include/linux/susfs.h include/linux/susfs_def.h include/linux/sus_su.h; do
+            [[ -f "$f" ]] \
+              && echo "OK: $f" | tee -a "$LOG" \
+              || { echo "FAIL: $f MISSING" | tee -a "$LOG"; FAIL=1; }
+          done
+          [[ "$FAIL" -eq 0 ]] \
+            || { echo "ERROR: missing SUSFS files"; exit 1; }
+      # ── 10. KernelSU Header Surgery ───────────────────────────────────────────
+      # Surgery A: normalize relative includes to <kernelsu/…>
+      # Surgery B: export real KernelSU public headers into include/kernelsu/
+      # Surgery C: replace ksu.h with a kernel-safe shim
+      # Surgery D: add ksu_cred extern to shared headers
+      - name: KernelSU Header Surgery
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          mkdir -p include/kernelsu
+          # Surgery A — normalize SUSFS include paths
+          find include fs -type f \( -name '*.h' -o -name '*.c' \) \
+            -exec sed -i \
+              -e 's|#include "../../drivers/kernelsu/\(.*\)"|#include <kernelsu/\1>|g' \
+              -e 's|#include "../drivers/kernelsu/\(.*\)"|#include <kernelsu/\1>|g' \
+            {} +
+          echo "OK [Surgery A]: SUSFS include namespace normalized"
+          # Surgery B — export real KernelSU public headers
+          printf '%s\n' \
+            'import sys' \
+            'from pathlib import Path' \
+            '' \
+            'def export_header(name):' \
+            '    matches = [p for p in Path("KernelSU-Next").rglob(name)' \
+            '               if "/include/" not in str(p)]' \
+            '    dst = Path("include/kernelsu") / name' \
+            '    if not matches:' \
+            '        print(f"WARN: {name} not found — generating fallback")' \
+            '        dst.write_text(f"#pragma once\n/* Auto-generated fallback for {name} */\n")' \
+            '        return' \
+            '    src = matches[0]' \
+            '    content = src.read_text()' \
+            '    content = "\n".join(' \
+            '        l for l in content.splitlines()' \
+            '        if "drivers/kernelsu" not in l and "<kernelsu/" not in l' \
+            '    )' \
+            '    dst.write_text(content)' \
+            '    print(f"OK [Surgery B]: exported {name}")' \
+            '' \
+            'for h in ("core_hook.h", "kernel_compat.h", "ksu.h", "sucompat.h"):' \
+            '    export_header(h)' \
+            > /tmp/export_headers.py
+          python3 /tmp/export_headers.py
+          # Surgery C — kernel-safe ksu.h shim  [Δ6: updated for Mk8]
+          printf '%s\n' \
+            '#pragma once' \
+            '/* Kernel-safe shim for Mk8 — replaces upstream ksu.h */' \
+            '#include <linux/types.h>' \
+            '#include <linux/cred.h>' \
+            '#include <linux/sched.h>' \
+            '#include <linux/uaccess.h>' \
+            '' \
+            'extern const struct cred *ksu_cred;' \
+            > include/kernelsu/ksu.h
+          echo "OK [Surgery C]: kernel-safe ksu.h installed"
+          # Surgery D — ksu_cred extern in shared headers
+          for hdr in \
+            include/kernelsu/core_hook.h \
+            include/kernelsu/kernel_compat.h; do
+            if [[ -f "$hdr" ]] && ! grep -q 'ksu_cred' "$hdr"; then
+              printf '\nextern const struct cred *ksu_cred;\n' >> "$hdr"
+              echo "OK [Surgery D]: ksu_cred added to $hdr"
+            fi
+          done
+          # Validation
+          FAIL=0
+          for f in \
+            include/kernelsu/core_hook.h \
+            include/kernelsu/kernel_compat.h \
+            include/kernelsu/ksu.h; do
+            [[ -f "$f" ]] && echo "OK: $f" || { echo "FAIL: missing $f"; FAIL=1; }
+          done
+          if grep -R '../../drivers/kernelsu' include fs 2>/dev/null; then
+            echo "FAIL: stale relative KernelSU paths remain"; FAIL=1
+          fi
+          [[ "$FAIL" -eq 0 ]] || { echo "FATAL: KernelSU header surgery failed"; exit 1; }
+          echo "OK: KernelSU header surgery complete"
+      # ── 11. Inject SUSFS prctl bridge ─────────────────────────────────────────
+      # [Δ6] Marker renamed CHIMERA_MK6R9_SUSFS_PRCTL_BRIDGE → CHIMERA_MK8_SUSFS_PRCTL_BRIDGE
+      #      This intentionally invalidates Mk7's bridge detection so the bridge
+      #      is re-injected cleanly on first Mk8 build, even on an existing tree.
+      - name: Inject SUSFS prctl bridge
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          printf '%s\n' \
+            'import re, sys' \
+            'from pathlib import Path' \
+            'MARKER = "CHIMERA_MK8_SUSFS_PRCTL_BRIDGE"' \
+            '' \
+            'susfs_h   = Path("include/linux/susfs.h")' \
+            'susfs_def = Path("include/linux/susfs_def.h")' \
+            'if not susfs_h.exists():' \
+            '    print("FAIL: include/linux/susfs.h missing"); sys.exit(1)' \
+            '' \
+            'scan_src = susfs_def.read_text() if susfs_def.exists() else susfs_h.read_text()' \
+            'cmd_ids  = re.findall(' \
+            '    r"#define\s+(CMD_SUSFS_\w+|SUSFS_CMD_\w+)\s+(0x[0-9a-fA-F]+|\d+)", scan_src)' \
+            'if not cmd_ids:' \
+            '    print("WARN: no CMD_SUSFS_* constants found — bridge skipped"); sys.exit(0)' \
+            '' \
+            'vals    = [int(v, 0) for _, v in cmd_ids]' \
+            'cmd_min = min(vals); cmd_max = max(vals)' \
+            'show_ver_fn  = next(' \
+            '    (fn for fn in re.findall(r"(?:int|bool|void)\s+(susfs_\w+)\s*\(", susfs_h.read_text())' \
+            '     if "version" in fn.lower()), None)' \
+            'show_ver_cmd = next((c for c in cmd_ids if "SHOW_VERSION" in c[0]), None)' \
+            'print(f"INFO: cmd range=[{hex(cmd_min)}, {hex(cmd_max)}] ShowVersion={show_ver_cmd}")' \
+            '' \
+            'dispatch = (' \
+            '    f"\tif (option == {show_ver_cmd[1]}) {{\n"' \
+            '    f"\t\t{show_ver_fn}((void __user *)arg2); return 0;\n\t}}\n"' \
+            '    if (show_ver_cmd and show_ver_fn) else "\t/* show_version not resolved */\n"' \
+            ')' \
+            'bridge = (' \
+            '    f"\n/* Chimera Mk8 SUSFS prctl bridge ({MARKER}) */\n"' \
+            '    f"#ifndef {MARKER}\n#define {MARKER} 1\n#ifdef CONFIG_KSU_SUSFS\n"' \
+            '    "int ksu_susfs_handle_prctl(unsigned long option, unsigned long arg2,\n"' \
+            '    "    unsigned long arg3, unsigned long arg4, unsigned long arg5)\n{\n"' \
+            '    + dispatch +' \
+            '    "\treturn -EINVAL;\n}\n"' \
+            '    "EXPORT_SYMBOL_GPL(ksu_susfs_handle_prctl);\n"' \
+            '    f"#endif\n#endif\n"' \
+            ')' \
+            '' \
+            'susfs_c = Path("fs/susfs.c")' \
+            'if susfs_c.exists():' \
+            '    txt = susfs_c.read_text()' \
+            '    if MARKER not in txt:' \
+            '        susfs_c.write_text(txt + bridge)' \
+            '        print("OK: bridge appended to fs/susfs.c")' \
+            '    else:' \
+            '        print("OK: bridge already present (idempotent)")' \
+            '' \
+            'sys_c = Path("kernel/sys.c")' \
+            'if not sys_c.exists():' \
+            '    print("WARN: kernel/sys.c not found — prctl injection skipped"); sys.exit(0)' \
+            'txt = sys_c.read_text(errors="replace")' \
+            'if MARKER in txt:' \
+            '    print("OK: sys.c already injected (idempotent)"); sys.exit(0)' \
+            '' \
+            'm = re.search(r"(SYSCALL_DEFINE5\s*\(\s*prctl\b[^{]+\{)", txt, re.DOTALL)' \
+            'if not m:' \
+            '    print("WARN: SYSCALL_DEFINE5(prctl) not found"); sys.exit(0)' \
+            '' \
+            'insert_after = m.end()' \
+            'logic = re.search(r"\n\s*(error\s*=|switch\s*\(|if\s*\(|return\b)", txt[insert_after:])' \
+            'pos = insert_after + (logic.start() if logic else 0)' \
+            'snippet = (' \
+            '    f"\n\t/* Chimera Mk8: SUSFS prctl bridge ({MARKER}) */\n"' \
+            '    "#ifdef CONFIG_KSU_SUSFS\n"' \
+            '    f"\tif ((unsigned long)option >= {hex(cmd_min)}UL &&\n"' \
+            '    f"\t    (unsigned long)option <= {hex(cmd_max)}UL) {{\n"' \
+            '    "\t\textern int ksu_susfs_handle_prctl(unsigned long, unsigned long,\n"' \
+            '    "\t\t    unsigned long, unsigned long, unsigned long);\n"' \
+            '    "\t\tint __r = ksu_susfs_handle_prctl(\n"' \
+            '    "\t\t    (unsigned long)option, (unsigned long)arg2,\n"' \
+            '    "\t\t    (unsigned long)arg3, (unsigned long)arg4,\n"' \
+            '    "\t\t    (unsigned long)arg5);\n"' \
+            '    "\t\tif (__r != -EINVAL) return (long)__r;\n"' \
+            '    "\t}\n#endif\n"' \
+            ')' \
+            'sys_c.write_text(txt[:pos] + snippet + txt[pos:])' \
+            'print("OK: SUSFS dispatch injected into kernel/sys.c")' \
+            '' \
+            'DECL_MARKER = MARKER + "_DECL"' \
+            'h_text = susfs_h.read_text()' \
+            'if DECL_MARKER not in h_text:' \
+            '    susfs_h.write_text(h_text + (' \
+            '        f"\n#ifndef {DECL_MARKER}\n#define {DECL_MARKER} 1\n"' \
+            '        "#ifdef CONFIG_KSU_SUSFS\n"' \
+            '        "extern int ksu_susfs_handle_prctl(unsigned long, unsigned long,\n"' \
+            '        "    unsigned long, unsigned long, unsigned long);\n"' \
+            '        f"#endif\n#endif\n"' \
+            '    ))' \
+            '    print("OK: extern declaration added to susfs.h")' \
+            'print("Bridge injection complete.")' \
+            > /tmp/inject_prctl_bridge.py
+          python3 /tmp/inject_prctl_bridge.py
+      # ── 12. Weak symbol fallbacks for sus_su.c ────────────────────────────────
+      - name: Inject weak symbol fallbacks into sus_su.c
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          printf '%s\n' \
+            'from pathlib import Path' \
+            'target = Path("fs/sus_su.c")' \
+            'if not target.exists():' \
+            '    print("INFO: fs/sus_su.c not found — skipping"); raise SystemExit(0)' \
+            'content = target.read_text()' \
+            'if "WEAK_SYMBOL_FALLBACK" in content:' \
+            '    print("OK: weak fallbacks already present (idempotent)"); raise SystemExit(0)' \
+            'fallback = (' \
+            '    "\n/* === WEAK_SYMBOL_FALLBACK === */\n"' \
+            '    "#include <linux/cred.h>\n"' \
+            '    "#include <linux/uidgid.h>\n"' \
+            '    "#include <linux/capability.h>\n\n"' \
+            '    "#ifndef cap_set_full\n"' \
+            '    "#define cap_set_full(c) do { (c) = CAP_FULL_SET; } while (0)\n"' \
+            '    "#endif\n\n"' \
+            '    "__attribute__((weak)) bool susfs_is_allow_su(void) { return false; }\n\n"' \
+            '    "__attribute__((weak)) void ksu_escape_to_root(void) {\n"' \
+            '    "    struct cred *nc = prepare_creds();\n"' \
+            '    "    if (!nc) return;\n"' \
+            '    "    nc->uid   = nc->euid  = nc->suid  = nc->fsuid = GLOBAL_ROOT_UID;\n"' \
+            '    "    nc->gid   = nc->egid  = nc->sgid  = nc->fsgid = GLOBAL_ROOT_GID;\n"' \
+            '    "    cap_set_full(nc->cap_inheritable);\n"' \
+            '    "    cap_set_full(nc->cap_permitted);\n"' \
+            '    "    cap_set_full(nc->cap_effective);\n"' \
+            '    "    cap_set_full(nc->cap_bset);\n"' \
+            '    "    commit_creds(nc);\n}\n"' \
+            '    "/* ========================== */\n"' \
+            ')' \
+            'target.write_text(content + fallback)' \
+            'print("OK: weak symbol fallbacks injected into fs/sus_su.c")' \
+            > /tmp/inject_weak_fallbacks.py
+          python3 /tmp/inject_weak_fallbacks.py
+
+      # FORTe defconfig tuning, INCLUDING the unconditional AVC/SELinux spoof
+      # hard-disable block [Δ11/Δ16/Δ21] — carried over verbatim from Mk7e.
+      # On SUSFS v2.1.0 the SUS_MAP / HIDE_MAGISK_EVIL probes are far more
+      # likely to resolve true than they did on v1.5.5; the spoof block below
+      # remains an UNCONDITIONAL override regardless of what those probes do.
+      - name: Apply defconfig tuning (FORTe Mode — hardened A16 QPR2 SUSFS profile)
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          test -f "$DEFCONFIG" || { echo "ERROR: $DEFCONFIG not found"; exit 1; }
+          LOG="../$LOG_DIR/defconfig-forte.log"
+          : > "$LOG"
+
+          set_cfg() {
+            local k="$1"
+            local v="$2"
+            sed -i "/^${k}=.*/d;/^# ${k} is not set/d" "$DEFCONFIG"
+            echo "${k}=${v}" >> "$DEFCONFIG"
+          }
+
+          unset_cfg() {
+            local k="$1"
+            sed -i "/^${k}=.*/d;/^# ${k} is not set/d" "$DEFCONFIG"
+            echo "# ${k} is not set" >> "$DEFCONFIG"
+          }
+
+          probe_kconfig() {
+            grep -qE "^[[:space:]]*config[[:space:]]+${1#CONFIG_}[[:space:]]*$" \
+              KernelSU-Next/kernel/Kconfig 2>/dev/null
+          }
+
+          echo "=== FORTe Mode: Defconfig tuning start ===" | tee -a "$LOG"
+
+          set_cfg CONFIG_PREEMPT y
+          unset_cfg CONFIG_PREEMPT_NONE
+          unset_cfg CONFIG_PREEMPT_VOLUNTARY
+
+          unset_cfg CONFIG_HZ_100
+          unset_cfg CONFIG_HZ_250
+          set_cfg CONFIG_HZ_300 y
+          set_cfg CONFIG_HZ 300
+
+          set_cfg CONFIG_TCP_CONG_ADVANCED y
+          set_cfg CONFIG_TCP_CONG_BBR y
+          set_cfg CONFIG_TCP_CONG_CUBIC y
+
+          sed -i '/CONFIG_DEFAULT_TCP_CONG/d' "$DEFCONFIG"
+          echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> "$DEFCONFIG"
+
+          set_cfg CONFIG_SCHED_DEBUG y
+          set_cfg CONFIG_ZRAM y
+          set_cfg CONFIG_ZSMALLOC y
+          set_cfg CONFIG_CRYPTO_LZ4 y
+          set_cfg CONFIG_CRYPTO_LZ4HC y
+
+          set_cfg CONFIG_PRINTK y
+          set_cfg CONFIG_PRINTK_SAFE_LOG_BUF y
+          set_cfg CONFIG_CONSOLE_LOGLEVEL_DEFAULT 3
+          set_cfg CONFIG_MESSAGE_LOGLEVEL_DEFAULT 3
+          set_cfg CONFIG_DEFAULT_MESSAGE_LOGLEVEL 3
+          unset_cfg CONFIG_PRINTK_TIME
+          unset_cfg CONFIG_PRINTK_CALLER
+
+          unset_cfg CONFIG_DYNAMIC_DEBUG
+          unset_cfg CONFIG_DYNAMIC_DEBUG_CORE
+          unset_cfg CONFIG_DEBUG_FS
+
+          set_cfg CONFIG_LOG_BUF_SHIFT 18
+
+          unset_cfg CONFIG_CC_STACKPROTECTOR_STRONG
+          unset_cfg CONFIG_CC_STACKPROTECTOR_REGULAR
+          set_cfg CONFIG_CC_STACKPROTECTOR_NONE y
+          unset_cfg CONFIG_LOCALVERSION_AUTO
+
+          set_cfg CONFIG_BPF_SYSCALL y
+          set_cfg CONFIG_CGROUP_BPF y
+          set_cfg CONFIG_NET_CLS_BPF y
+
+          set_cfg CONFIG_FUSE_FS y
+          set_cfg CONFIG_OVERLAY_FS y
+
+          set_cfg CONFIG_ANDROID_BINDER_IPC y
+          set_cfg CONFIG_ANDROID_BINDERFS y
+
+          sed -i '/CONFIG_ANDROID_BINDER_DEVICES/d' "$DEFCONFIG"
+          echo 'CONFIG_ANDROID_BINDER_DEVICES="binder,hwbinder,vndbinder"' >> "$DEFCONFIG"
+          unset_cfg CONFIG_ANDROID_BINDER_IPC_SELFTEST
+
+          set_cfg CONFIG_MEMCG y
+          set_cfg CONFIG_MEMCG_SWAP y
+          set_cfg CONFIG_PSI y
+
+          set_cfg CONFIG_CGROUPS y
+          set_cfg CONFIG_CGROUP_SCHED y
+          set_cfg CONFIG_FAIR_GROUP_SCHED y
+          set_cfg CONFIG_RT_GROUP_SCHED y
+
+          set_cfg CONFIG_NET_CLS_CGROUP y
+          set_cfg CONFIG_NETFILTER_XT_MATCH_CGROUP y
+          set_cfg CONFIG_VETH y
+
+          set_cfg CONFIG_IKCONFIG y
+          set_cfg CONFIG_IKCONFIG_PROC y
+          set_cfg CONFIG_PROC_EVENTS y
+
+          # ─────────────────────────────────────────────
+          # SAFE-BOOT AVC/SELINUX SPOOF — HARD-DISABLED [Δ11, Δ16, Δ21 from Mk7e]
+          # Unconditional — carried over verbatim, NOT relaxed for SUSFS 2.1.0.
+          # ─────────────────────────────────────────────
+          echo "=== Safe-Boot: AVC/SELinux spoof hard-disable [Δ11/Δ16/Δ21] ===" | tee -a "$LOG"
+          unset_cfg CONFIG_KSU_SUSFS_SPOOF_SELINUX
+          unset_cfg CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOF
+          unset_cfg CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOFING
+          unset_cfg CONFIG_KSU_SUSFS_AVC_LOG_SPOOF
+          echo "HARD-DISABLED: CONFIG_KSU_SUSFS_SPOOF_SELINUX"           | tee -a "$LOG"
+          echo "HARD-DISABLED: CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOF"    | tee -a "$LOG"
+          echo "HARD-DISABLED: CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOFING" | tee -a "$LOG"
+          echo "HARD-DISABLED: CONFIG_KSU_SUSFS_AVC_LOG_SPOOF"           | tee -a "$LOG"
+          SPOOF_FAIL=0
+          for sym in \
+            CONFIG_KSU_SUSFS_SPOOF_SELINUX \
+            CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOF \
+            CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOFING \
+            CONFIG_KSU_SUSFS_AVC_LOG_SPOOF; do
+            if grep -qE "^${sym}=y" "$DEFCONFIG"; then
+              echo "FATAL: ${sym} is still set=y after hard-disable — aborting" | tee -a "$LOG"
+              SPOOF_FAIL=1
+            else
+              echo "VERIFIED not set: ${sym}" | tee -a "$LOG"
+            fi
+          done
+          [[ "$SPOOF_FAIL" -eq 0 ]] || { echo "ERROR: AVC/SELinux spoof hard-disable verification failed"; exit 1; }
+          echo "=== Safe-Boot block PASSED ===" | tee -a "$LOG"
+
+          set_cfg CONFIG_KSU_SUSFS y
+          set_cfg CONFIG_KSU_SUSFS_TRY_UMOUNT y
+
+          if probe_kconfig CONFIG_KSU_SUSFS_SUS_MAP; then
+            set_cfg CONFIG_KSU_SUSFS_SUS_MAP y
+          else
+            echo "SKIP: SUS_MAP not present in tree" | tee -a "$LOG"
+          fi
+
+          if probe_kconfig CONFIG_KSU_SUSFS_HIDE_MAGISK_EVIL; then
+            set_cfg CONFIG_KSU_SUSFS_HIDE_MAGISK_EVIL y
+          else
+            echo "SKIP: HIDE_MAGISK_EVIL not present" | tee -a "$LOG"
+          fi
+
+          if grep -qr 'config LRU_GEN' mm/ 2>/dev/null; then
+            set_cfg CONFIG_LRU_GEN y
+            set_cfg CONFIG_LRU_GEN_ENABLED y
+            set_cfg CONFIG_LRU_GEN_STATS y
+            echo "INFO: MGLRU enabled" | tee -a "$LOG"
+          fi
+
+          echo "=== FORTe Mode: Summary ===" | tee -a "$LOG"
+          grep -E \
+            "^(CONFIG_KSU|CONFIG_KSU_SUSFS|CONFIG_PREEMPT|CONFIG_HZ|CONFIG_TCP_CONG|CONFIG_BPF|CONFIG_CGROUP|CONFIG_BINDER|CONFIG_MEMCG|CONFIG_PSI|CONFIG_NET_CLS|CONFIG_FUSE|CONFIG_OVERLAY)" \
+            "$DEFCONFIG" | tee -a "$LOG"
+          echo "=== FORTe Mode complete ===" | tee -a "$LOG"
+
+      - name: Apply Chimera Silent Engine (Mk8e Runtime Policy Layer)
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          mkdir -p kernel/chimera
+          cat > kernel/chimera/silent_core.c << 'EOF'
+          #include <linux/kernel.h>
+          #include <linux/sysctl.h>
+          #include <linux/init.h>
+          #include <linux/printk.h>
+
+          /*
+           * Chimera Mk8e Silent Engine
+           * WARN+ERROR only gate (non-invasive policy layer)
+           */
+
+          int chimera_silent_mode = 1;
+
+          static int chimera_should_silence(int level)
+          {
+              if (!chimera_silent_mode)
+                  return 0;
+
+              /* printk levels:
+               * 0 EMERG, 1 ALERT, 2 CRIT, 3 ERR, 4 WARNING
+               */
+              return level > 4;
+          }
+
+          static struct ctl_table chimera_table[] = {
+              {
+                  .procname     = "silent",
+                  .data         = &chimera_silent_mode,
+                  .maxlen       = sizeof(int),
+                  .mode         = 0644,
+                  .proc_handler = proc_dointvec,
+              },
+              { }
+          };
+
+          static struct ctl_table chimera_root[] = {
+              {
+                  .procname = "chimera",
+                  .mode     = 0555,
+                  .child    = chimera_table,
+              },
+              { }
+          };
+
+          static int __init chimera_init(void)
+          {
+              register_sysctl_table(chimera_root);
+              pr_info("Chimera Mk8e Silent Engine initialized (mode=%d)\n",
+                      chimera_silent_mode);
+              return 0;
+          }
+
+          subsys_initcall(chimera_init);
+          EOF
+
+          grep -q "chimera/silent_core.o" kernel/Makefile || \
+            echo "obj-y += chimera/silent_core.o" >> kernel/Makefile
+          echo "Chimera Mk8e Silent Engine injected successfully"
+
+      - name: Apply Samsung-stock-style branding
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          sed -i '/^CONFIG_LOCALVERSION=/d;/^CONFIG_DEFAULT_HOSTNAME=/d' "$DEFCONFIG"
+          printf 'CONFIG_LOCALVERSION="%s"\nCONFIG_DEFAULT_HOSTNAME="%s"\n' "$BRAND" "$BUILD_HOST" >> "$DEFCONFIG"
+          printf '#!/bin/sh\nprintf "%%s" "%s"\n' "$BRAND" > scripts/setlocalversion
+          chmod +x scripts/setlocalversion
+          echo "$BRAND" > localversion
+          echo "CHIMERA_BRAND=$BRAND"       >> "$GITHUB_ENV"
+          echo "KBUILD_HOST=$BUILD_HOST"    >> "$GITHUB_ENV"
+          echo "KBUILD_USER=$BUILD_USER"    >> "$GITHUB_ENV"
+          echo "KBUILD_VERSION=$BUILD_VERSION" >> "$GITHUB_ENV"
+          {
+            echo "BRAND=$BRAND"
+            echo "BUILD_USER=$BUILD_USER"
+            echo "BUILD_HOST=$BUILD_HOST"
+            echo "BUILD_VERSION=$BUILD_VERSION"
+            echo "RUN=${GITHUB_RUN_NUMBER}"
+            echo "UNAME_PREVIEW=Linux version 4.9.337${BRAND} (${BUILD_USER}@${BUILD_HOST}) #${BUILD_VERSION} SMP PREEMPT"
+          } | tee "../$LOG_DIR/branding.env"
+          echo "=== setlocalversion ===" | tee "../$LOG_DIR/scm-dirty.log"
+          cat scripts/setlocalversion       | tee -a "../$LOG_DIR/scm-dirty.log"
+          echo "uname preview: Linux version 4.9.337${BRAND} (${BUILD_USER}@${BUILD_HOST}) #${BUILD_VERSION} SMP PREEMPT"
+
+      - name: SUSFS pre-build sanity check
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          LOG="../$LOG_DIR/susfs-sanity.log"
+          echo "=== SUSFS pre-build sanity — Chimera Mk8e ===" | tee "$LOG"
+          FAIL=0
+          for f in fs/susfs.c fs/sus_su.c include/linux/susfs.h include/linux/susfs_def.h include/linux/sus_su.h; do
+            [[ -f "$f" ]] \
+              && echo "OK: $f ($(wc -l < "$f") lines)" | tee -a "$LOG" \
+              || { echo "FAIL: $f MISSING" | tee -a "$LOG"; FAIL=1; }
+          done
+          VER="$(grep -oP 'SUSFS_VERSION\s+"\K[^"]+' include/linux/susfs.h 2>/dev/null || echo unknown)"
+          echo "SUSFS_VERSION_IN_TREE=$VER (target: $SUSFS_TARGET_VERSION)" | tee -a "$LOG"
+          if grep -q 'CHIMERA_MK8E_SUSFS_PRCTL_BRIDGE' kernel/sys.c 2>/dev/null; then
+            echo "OK: prctl bridge present in kernel/sys.c" | tee -a "$LOG"
+          else
+            echo "WARN: prctl bridge not found in kernel/sys.c" | tee -a "$LOG"
+          fi
+          if grep -q "^# CONFIG_SECURITY_SELINUX_DEVELOP is not set" "$DEFCONFIG"; then
+            echo "OK: SELinux DEVELOP unset — enforcing locked" | tee -a "$LOG"
+          else
+            echo "WARN: CONFIG_SECURITY_SELINUX_DEVELOP may still be set" | tee -a "$LOG"
+          fi
+          echo "=== AVC/SELinux spoof hard-disable verification [Δ21] ===" | tee -a "$LOG"
+          SPOOF_FAIL=0
+          for sym in \
+            CONFIG_KSU_SUSFS_SPOOF_SELINUX \
+            CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOF \
+            CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOFING \
+            CONFIG_KSU_SUSFS_AVC_LOG_SPOOF; do
+            if grep -qE "^${sym}=y" "$DEFCONFIG"; then
+              echo "FATAL [Δ21]: ${sym}=y still present in defconfig — this WILL cause A16 boot panic" | tee -a "$LOG"
+              SPOOF_FAIL=1
+            else
+              echo "OK [Δ21]: ${sym} confirmed not set" | tee -a "$LOG"
+            fi
+          done
+          [[ "$SPOOF_FAIL" -eq 0 ]] \
+            || { echo "ERROR: AVC/SELinux spoof sanity failed — aborting build"; exit 1; }
+          MK="$(cat fs/Makefile)"
+          [[ "$MK" == *"susfs.o"* ]] && echo "OK: fs/Makefile has susfs.o"  | tee -a "$LOG" || { echo "FAIL: fs/Makefile missing susfs.o"  | tee -a "$LOG"; FAIL=1; }
+          [[ "$MK" == *"sus_su.o"* ]] && echo "OK: fs/Makefile has sus_su.o" | tee -a "$LOG" || { echo "FAIL: fs/Makefile missing sus_su.o" | tee -a "$LOG"; FAIL=1; }
+          echo "uname preview: Linux version 4.9.337${BRAND} (${KBUILD_USER}@${KBUILD_HOST}) #${KBUILD_VERSION} SMP PREEMPT" | tee -a "$LOG"
+          [[ "$FAIL" -eq 0 ]] || { echo "ERROR: sanity check failed"; exit 1; }
+          echo "=== Sanity check PASSED ===" | tee -a "$LOG"
+
+      - name: Dry run summary
+        if: '${{ inputs.dry_run == true }}'
+        run: |
+          echo "========================================"
+          echo "  Chimera Mk8e — dry run PASSED"
+          echo "  Target: LOS/AOSP Android 15/16 QPR2 (Evolution X 11.8)"
+          echo "  KSU  : gavdoc38/KernelSU-Next @ ${{ inputs.ksu_commit }}${{ inputs.ksu_ref }} (Exynos-optimized)"
+          echo "  SUSFS:  v${SUSFS_TARGET_VERSION} @ ${{ inputs.susfs_ref }}"
+          echo "  KCFLAGS: -O2 -fcommon -fno-strict-aliasing -Wno-error [Δ9 from Mk7e]"
+          echo "  AVC/SELinux spoof: HARD-DISABLED [Δ11/Δ16/Δ21]"
+          echo "  Packaging: raw Image artifact [Δ-MK8e-3]"
+          echo "  uname preview: Linux version 4.9.337${BRAND} (${BUILD_USER}@${BUILD_HOST}) #${BUILD_VERSION} SMP PREEMPT"
+          echo "========================================"
+          echo "KSU  : ${{ inputs.ksu_repo }} @ ${{ inputs.ksu_ref }}${{ inputs.ksu_commit }}"
+          echo "SUSFS: ${{ inputs.susfs_repo }} @ ${{ inputs.susfs_ref }}"
+          echo "Brand: ${BRAND}  User: ${BUILD_USER}@${BUILD_HOST}"
+          echo "Re-run with dry_run=false to compile and package."
+
+# ── 17b. Fix duplicate dentry decl in namei.c ─────────────────────────────
+      - name: Fix namei.c dentry redefinition (SUSFS/QPR2 merge collision)
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          FILE="fs/namei.c"
+          LINE=2234
+          CONTENT="$(sed -n "${LINE}p" "$FILE")"
+          if [[ "$CONTENT" =~ ^[[:space:]]*struct[[:space:]]+dentry[[:space:]]*\*dentry\;[[:space:]]*$ ]]; then
+            sed -i "${LINE}s|^|// |" "$FILE"
+            echo "OK: commented out redundant bare 'dentry' decl at $FILE:$LINE"
+          else
+            echo "ERROR: $FILE:$LINE content unexpected — refusing to blind-patch"
+            echo "  got: '$CONTENT'"
+            echo "  This likely means the duplicate moved or no longer exists."
+            echo "  Inspect logs/susfs-rejects.log and namei.c manually."
+            exit 1
+          fi
+          sed -n '2230,2242p' "$FILE" | tee -a "../$LOG_DIR/namei-fix.log"
+
+      - name: Build kernel
+        if: '${{ inputs.dry_run == false }}'
+        working-directory: kernel
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/$OUT_DIR"
+          export PATH="$GITHUB_WORKSPACE/aosp-clang/bin:$PATH"
+          export KBUILD_BUILD_USER="$BUILD_USER"
+          export KBUILD_BUILD_HOST="$BUILD_HOST"
+          export KBUILD_BUILD_VERSION="$BUILD_VERSION"
+          CLANG_BIN="$GITHUB_WORKSPACE/aosp-clang/bin/clang"
+          LD_BIN="$GITHUB_WORKSPACE/aosp-clang/bin/ld.lld"
+          AR_BIN="$GITHUB_WORKSPACE/aosp-clang/bin/llvm-ar"
+          NM_BIN="$GITHUB_WORKSPACE/aosp-clang/bin/llvm-nm"
+          OBJCOPY_BIN="$GITHUB_WORKSPACE/aosp-clang/bin/llvm-objcopy"
+          OBJDUMP_BIN="$GITHUB_WORKSPACE/aosp-clang/bin/llvm-objdump"
+          STRIP_BIN="$GITHUB_WORKSPACE/aosp-clang/bin/llvm-strip"
+          echo "=== Toolchain sanity ==="
+          which clang || true
+          "$CLANG_BIN" --version
+          MAKE=(
+            make -j"$(nproc)"
+            O="$GITHUB_WORKSPACE/$OUT_DIR"
+            ARCH=arm64
+            SUBARCH=arm64
+            LLVM=1
+            LLVM_IAS=0
+            CC="$CLANG_BIN"
+            HOSTCC=gcc
+            HOSTCXX=g++
+            CLANG_TRIPLE=aarch64-linux-gnu-
+            CROSS_COMPILE=aarch64-linux-gnu-
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+            LD="$LD_BIN"
+            AR="$AR_BIN"
+            NM="$NM_BIN"
+            OBJCOPY="$OBJCOPY_BIN"
+            OBJDUMP="$OBJDUMP_BIN"
+            STRIP="$STRIP_BIN"
+            LOCALVERSION="$BRAND"
+            KBUILD_BUILD_USER="$BUILD_USER"
+            KBUILD_BUILD_HOST="$BUILD_HOST"
+            KCFLAGS="-O2 -fcommon -fno-strict-aliasing -Wno-error"
+          )
+          echo "=== Applying defconfig ==="
+          "${MAKE[@]}" exynos9810-star2lte_defconfig
+          cp "$GITHUB_WORKSPACE/$OUT_DIR/.config" "$GITHUB_WORKSPACE/$LOG_DIR/final.config"
+          echo "=== Stack protector verification ==="
+          grep -E '^CONFIG_CC_STACKPROTECTOR' "$GITHUB_WORKSPACE/$OUT_DIR/.config" | tee "$GITHUB_WORKSPACE/$LOG_DIR/config-verify.log"
+          if grep -q '^CONFIG_CC_STACKPROTECTOR_NONE=y' "$GITHUB_WORKSPACE/$OUT_DIR/.config"; then
+            echo "OK: stack protector disabled for clang compatibility" \
+              | tee -a "$GITHUB_WORKSPACE/$LOG_DIR/config-verify.log"
+          else
+            echo "ERROR: stack protector mode not NONE" \
+              | tee -a "$GITHUB_WORKSPACE/$LOG_DIR/config-verify.log"
+            exit 1
+          fi
+          echo "=== Post-merge config verification ==="
+          grep -E "CONFIG_KSU|CONFIG_KSU_SUSFS|CONFIG_SECURITY_SELINUX_DEVELOP|LOCALVERSION" "$GITHUB_WORKSPACE/$OUT_DIR/.config" | tee -a "$GITHUB_WORKSPACE/$LOG_DIR/config-verify.log"
+          echo "=== Post-merge AVC/SELinux spoof hard-disable check [Δ21] ==="
+          SPOOF_FAIL=0
+          for sym in \
+            CONFIG_KSU_SUSFS_SPOOF_SELINUX \
+            CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOF \
+            CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOFING \
+            CONFIG_KSU_SUSFS_AVC_LOG_SPOOF; do
+            if grep -qE "^${sym}=y" "$GITHUB_WORKSPACE/$OUT_DIR/.config"; then
+              echo "FATAL [Δ21]: ${sym}=y present in final .config — Kconfig merge re-enabled it" \
+                | tee -a "$GITHUB_WORKSPACE/$LOG_DIR/config-verify.log"
+              SPOOF_FAIL=1
+            else
+              echo "OK [Δ21]: ${sym} not set in final .config" \
+                | tee -a "$GITHUB_WORKSPACE/$LOG_DIR/config-verify.log"
+            fi
+          done
+          [[ "$SPOOF_FAIL" -eq 0 ]] || { echo "ERROR: AVC/SELinux spoof re-enabled by Kconfig merge — aborting"; exit 1; }
+          echo "=== Building Image + DTBs ==="
+          "${MAKE[@]}" Image dtbs 2>&1 | tee build.log
+          IMAGE="$GITHUB_WORKSPACE/$OUT_DIR/arch/arm64/boot/Image"
+          test -f "$IMAGE" || { echo "ERROR: Image not produced — check build.log"; exit 1; }
+          du -h "$IMAGE" | tee "$GITHUB_WORKSPACE/$LOG_DIR/image-size.log"
+          echo "=== uname string verification ==="
+          strings "$IMAGE" | grep -E "Linux version 4\.9\." | head -3 | tee "$GITHUB_WORKSPACE/$LOG_DIR/uname-verify.log" || true
+
+      - name: Diagnostic — print SUSFS and Binder CONFIG values
+        if: '${{ inputs.dry_run == false }}'
+        run: |
+          set -Eeuo pipefail
+          CONFIG_FILE="$GITHUB_WORKSPACE/$OUT_DIR/.config"
+          DIAG_LOG="$GITHUB_WORKSPACE/$LOG_DIR/safeboot-config-verify.log"
+          test -f "$CONFIG_FILE" || { echo "ERROR: $CONFIG_FILE not found"; exit 1; }
+          {
+            echo "════════════════════════════════════════════════════════"
+            echo " Chimera Mk8e A16 QPR2 Safe-Boot — Active CONFIG values"
+            echo " AVC/SELinux spoof enforcement: [Δ11/Δ16/Δ21]"
+            echo "════════════════════════════════════════════════════════"
+            echo ""
+            echo "── SUSFS (CONFIG_KSU / CONFIG_KSU_SUSFS_*) ─────────────────"
+            grep -E '^(CONFIG_KSU|CONFIG_KSU_SUSFS|# CONFIG_KSU_SUSFS)' "$CONFIG_FILE" || true
+            echo ""
+            echo "── AVC / SELinux spoof hard-disable [Δ11/Δ16/Δ21] ─────────"
+            echo "   (all four must show '# ... is not set')"
+            for sym in \
+              CONFIG_KSU_SUSFS_SPOOF_SELINUX \
+              CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOF \
+              CONFIG_KSU_SUSFS_ENABLE_AVC_LOG_SPOOFING \
+              CONFIG_KSU_SUSFS_AVC_LOG_SPOOF; do
+              result="$(grep -E "(^${sym}=|^# ${sym} is not set)" "$CONFIG_FILE" || true)"
+              if [[ -z "$result" ]]; then
+                echo "  ${sym}: absent from .config (symbol not defined in this SUSFS tree — OK)"
+              elif echo "$result" | grep -qE "^${sym}=y"; then
+                echo "  FAIL: ${sym}=y — spoof NOT disabled!"
+              else
+                echo "  OK: ${result}"
+              fi
+            done
+            echo ""
+            echo "── SELinux enforcement ──────────────────────────────────────"
+            grep -E '(CONFIG_SECURITY_SELINUX)' "$CONFIG_FILE" || true
+            echo ""
+            echo "── Binder IPC (CONFIG_ANDROID_BINDER*) ─────────────────────"
+            grep -E '^(CONFIG_ANDROID_BINDER|# CONFIG_ANDROID_BINDER)' "$CONFIG_FILE" || true
+            echo ""
+            echo "── BPF / FUSE / OverlayFS (A16 QPR2 boot-essential) ────────"
+            grep -E '^(CONFIG_BPF_SYSCALL|CONFIG_CGROUP_BPF|CONFIG_NET_CLS_BPF|CONFIG_FUSE_FS|CONFIG_OVERLAY_FS|# CONFIG_BPF_SYSCALL|# CONFIG_CGROUP_BPF|# CONFIG_NET_CLS_BPF|# CONFIG_FUSE_FS|# CONFIG_OVERLAY_FS)' "$CONFIG_FILE" || true
+            echo ""
+            echo "════════════════════════════════════════════════════════"
+          } | tee "$DIAG_LOG"
+
+      # [Δ-MK8e-3] Replaces "Package flashable zip" (AnyKernel3) and the
+      # earlier magiskboot boot.img approach (dropped — no practical way to
+      # host a stock boot.img for the workflow to consume). Final artifact
+      # is just the raw built kernel Image, renamed for traceability.
+      # Inject it into your own dumped boot.img locally with
+      # magiskboot/AIK/mkbootimg as needed.
+      - name: Stage final Image artifact
+        if: '${{ inputs.dry_run == false }}'
+        run: |
+          set -Eeuo pipefail
+          NEW_IMAGE="$GITHUB_WORKSPACE/$OUT_DIR/arch/arm64/boot/Image"
+          test -f "$NEW_IMAGE" || { echo "ERROR: built Image not found at $NEW_IMAGE"; exit 1; }
+          OUT_NAME="chimera-mk8e-AOSPClang21.0-$(date +%Y%m%d-%H%M)-r${GITHUB_RUN_NUMBER}-Image"
+          cp "$NEW_IMAGE" "$GITHUB_WORKSPACE/$OUT_NAME"
+          test -f "$GITHUB_WORKSPACE/$OUT_NAME" || { echo "ERROR: staged Image missing"; exit 1; }
+          echo "BUILT_IMAGE=$OUT_NAME" >> "$LOG_DIR/branding.env"
+          echo "BUILT_IMAGE_PATH=$OUT_NAME" >> "$GITHUB_ENV"
+          echo "OK: final Image staged: $OUT_NAME"
+          du -h "$GITHUB_WORKSPACE/$OUT_NAME"
+          sha256sum "$GITHUB_WORKSPACE/$OUT_NAME" | tee "$LOG_DIR/image-sha256.log"
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: 'chimera-mk8e-logs-${{ github.run_number }}'
+          path: |
+            logs/
+            kernel/build.log
+            kernel-out/.config
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload built Image
+        if: '${{ inputs.dry_run == false }}'
+        uses: actions/upload-artifact@v4
+        with:
+          name: 'chimera-mk8e-AOSPClang21.0-${{ github.run_number }}'
+          path: chimera-mk8e-AOSPClang21.0-*-Image
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Create GitHub Release
+        if: '${{ inputs.do_release == true && inputs.dry_run == false }}'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: 'chimera-mk8e-${{ github.run_number }}'
+          name: >-
+            Project Chimera Mk8e — LOS/AOSP Android 15/16 QPR2 Build #${{ github.run_number }}
+          body: |
+            ## Project Chimera Mk8e — Exynos 9810 / star2lte
+            **Base ROM compatibility:** `LOS/AOSP Android 15/16 QPR2 · Evolution X 11.8`
+            **Kernel Source Base:** `royd-jpg/Project_Chimera @ chimera-mk6l` (unchanged from Mk7e)
+            **Toolchain Engine:** AOSP Clang 21.0 — LLVM=1 retained, `-fcommon` [Δ8/Δ9 from Mk7e]
+            **Packaging:** raw kernel Image — replaces AnyKernel3 zip [Δ-MK8e-3]
+            ### Source Changes vs. Mk7e
+            | Component | Mk7e | Mk8e |
+            |---|---|---|
+            | **KernelSU-Next** | `sidex15/KernelSU-Next @ legacy-susfs-v2` | `gavdoc38/KernelSU-Next @ 754123a` |
+            | **SUSFS target** | `v1.5.5` | `v2.1.0` |
+            | **Packaging** | AnyKernel3 flashable zip | raw `arch/arm64/boot/Image` |
+            | **Branding inputs** | unchanged | unchanged |
+            ### Feature Framework Set
+            | Security / Feature Node | Status Config |
+            |---|---|
+            | **KernelSU-Next Core Engine** | ✅ `gavdoc38/KernelSU-Next @ 754123a` (Exynos-optimized) |
+            | **SUSFS VFS Guard Layer** | ✅ Native Tree Hook v${{ env.SUSFS_TARGET_VERSION }} |
+            | **AVC Log Spoofing** | ❌ Hard-disabled [Δ11/Δ16/Δ21] — all 3 sibling symbols explicitly unset |
+            | **SELinux Identity Spoof (SPOOF_SELINUX)** | ❌ Hard-disabled [Δ16/Δ21] — unconditional unset, no probe guard |
+            | **BPF Syscall + Cgroup BPF + NET_CLS_BPF** | ✅ Enabled — A16 bpfloader / netd |
+            | **FUSE + OverlayFS** | ✅ Enabled — A16 MediaStore + RRO |
+            | **Binder (binder/hwbinder/vndbinder)** | ✅ Enabled — A16 AIDL |
+            | **PSI + MEMCG** | ✅ Enabled — A16 LMKD PSI eviction |
+            | **SUS_MAP / HIDE_MAGISK_EVIL** | ⏭️ Kconfig-gated probe (likely true on v2.1.0) |
+            | **LRU_GEN (MGLRU)** | ⏭️ Source-tree probe — no-op on 4.9 BSP |
+            ### Safe-Boot Diagnostics
+            Post-build CONFIG verification for SUSFS, AVC/SELinux spoof (all four symbols), Binder, and BPF/FUSE/OverlayFS is written to `logs/safeboot-config-verify.log`. The build aborts if any spoof symbol is found set=y after Kconfig merge.
+            ### uname String
+            `Linux version 4.9.337${{ env.BRAND }} (${{ env.BUILD_USER }}@${{ env.BUILD_HOST }})`
+            ### Output
+            This release ships the raw kernel `Image` only — no boot.img, no AK3 zip. Unpack your device's stock/current boot.img with magiskboot/AIK (or your tool of choice), swap in this `Image` as the kernel section, then repack and flash.
+          files: '${{ env.BUILT_IMAGE_PATH }}'
