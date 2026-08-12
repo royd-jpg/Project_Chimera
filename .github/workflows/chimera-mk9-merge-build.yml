@@ -398,6 +398,18 @@ on:
         type: string
         default: "Tue Aug 11 09:53:32 CEST 2026"
 
+      anykernel_repo:
+        description: "AnyKernel3 template repo (owner/repo) — PLACEHOLDER, set to your AK3 fork/branch before running"
+        required: false
+        type: string
+        default: "<ANYKERNEL3_OWNER>/<ANYKERNEL3_REPO>"
+
+      anykernel_ref:
+        description: "AnyKernel3 ref (branch/tag/SHA) — PLACEHOLDER, set to match your device's AK3 branch"
+        required: false
+        type: string
+        default: "<ANYKERNEL3_REF>"
+
 env:
   CHIMERA_REPO: "https://github.com/royd-jpg/Project_Chimera.git"
   CHIMERA_REF: "chimera-mk8"
@@ -405,6 +417,7 @@ env:
   KERNEL_DIR: "kernel"
   OUT_DIR: "kernel-out"
   LOG_DIR: "logs"
+  ANYKERNEL_DIR: "AnyKernel3"
 
   DEFCONFIG: "arch/arm64/configs/exynos9810-star2lte_defconfig"
 
@@ -616,6 +629,34 @@ jobs:
           else
             echo "OK: base_ref matches the live branch tip — no drift"
           fi
+
+      # ── 3c. Checkout AnyKernel3 packaging template ───────────────────────────
+      - name: Checkout AnyKernel3
+        if: ${{ inputs.dry_run != true }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.anykernel_repo }}
+          ref: ${{ inputs.anykernel_ref }}
+          path: ${{ env.ANYKERNEL_DIR }}
+          fetch-depth: 1
+          clean: false
+
+      - name: Validate AnyKernel3 checkout
+        if: ${{ inputs.dry_run != true }}
+        run: |
+          set -Eeuo pipefail
+
+          AK3_DIR="$GITHUB_WORKSPACE/$ANYKERNEL_DIR"
+
+          [[ -f "$AK3_DIR/anykernel.sh" ]] || {
+            echo "FATAL: anykernel.sh not found at $AK3_DIR — anykernel_repo/anykernel_ref inputs" >&2
+            echo "       likely still point at the placeholder defaults. Set them to your" >&2
+            echo "       actual AnyKernel3 fork/branch before running." >&2
+            exit 1
+          }
+
+          echo "OK: AnyKernel3 template present at $AK3_DIR"
+          echo "AK3_DIR=$AK3_DIR" >> "$GITHUB_ENV"
 
       # ── 4. Workspace ─────────────────────────────────────────────────────────
       - name: Prepare workspace directories
@@ -1937,6 +1978,61 @@ jobs:
           echo "SHA256SUMS:"
           cat "$ART_DIR/SHA256SUMS"
 
+      # ── 21c. Package AnyKernel3 flashable ZIP ─────────────────────────────────
+      - name: Package AnyKernel3 flashable ZIP
+        if: ${{ inputs.dry_run != true }}
+        id: package-anykernel
+        run: |
+          set -Eeuo pipefail
+
+          ART_DIR="$GITHUB_WORKSPACE/artifacts"
+          AK3_DIR="$AK3_DIR"
+
+          [[ -d "$AK3_DIR" ]] || {
+            echo "FATAL: AnyKernel3 directory not found at $AK3_DIR" >&2
+            exit 1
+          }
+
+          # Prefer a combined Image.gz-dtb if the build produced one; this
+          # build's make targets (Image vmlinux dtbs) do not currently
+          # generate that file, so this branch is defensive/forward-looking
+          # rather than the expected path on this workflow as configured.
+          COMBINED="$ABS_OUT/arch/arm64/boot/Image.gz-dtb"
+
+          if [[ -f "$COMBINED" ]]; then
+            echo "Found combined Image.gz-dtb — using it instead of separate Image/dtb"
+            cp "$COMBINED" "$AK3_DIR/Image.gz-dtb"
+            echo "ak3_kernel_payload=Image.gz-dtb" >> "$GITHUB_OUTPUT"
+          else
+            [[ -f "$ART_DIR/Image" ]] || {
+              echo "FATAL: $ART_DIR/Image not found — Package Image step must run first" >&2
+              exit 1
+            }
+            cp "$ART_DIR/Image" "$AK3_DIR/Image"
+
+            if [[ -f "$ART_DIR/dtb.img" ]]; then
+              cp "$ART_DIR/dtb.img" "$AK3_DIR/dtb"
+              echo "ak3_kernel_payload=Image + dtb" >> "$GITHUB_OUTPUT"
+            else
+              echo "WARN: $ART_DIR/dtb.img not present — packaging Image only" \
+                | tee -a "$ABS_LOG/anykernel-package.log"
+              echo "ak3_kernel_payload=Image only" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+          ZIP_NAME="${BUILD_TAG}-AnyKernel3.zip"
+          ZIP_PATH="$ART_DIR/$ZIP_NAME"
+
+          ( cd "$AK3_DIR" && zip -r9 "$ZIP_PATH" . -x ".git/*" ".github/*" )
+
+          [[ -s "$ZIP_PATH" ]] || {
+            echo "FATAL: $ZIP_PATH was not created or is empty" >&2
+            exit 1
+          }
+
+          echo "AnyKernel3 zip: $ZIP_PATH ($(stat -c%s "$ZIP_PATH") bytes)"
+          echo "anykernel_zip_path=$ZIP_PATH" >> "$GITHUB_OUTPUT"
+
       # ── 22. Upload Image artifact ─────────────────────────────────────────────
       - name: Upload Image artifact
         if: ${{ inputs.dry_run != true }}
@@ -1966,6 +2062,15 @@ jobs:
           path: |
             ${{ env.ART_DIR }}/manifest.json
             ${{ env.ART_DIR }}/SHA256SUMS
+          if-no-files-found: error
+
+      # ── 23c. Upload AnyKernel3 flashable ZIP artifact ─────────────────────────
+      - name: Upload AnyKernel3 flashable ZIP
+        if: ${{ inputs.dry_run != true }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: chimera-mk9-AnyKernel3-${{ inputs.profile }}-${{ inputs.toolchain }}-${{ github.run_id }}
+          path: ${{ steps.package-anykernel.outputs.anykernel_zip_path }}
           if-no-files-found: error
 
       # ── 24. Release ───────────────────────────────────────────────────────────
@@ -2005,6 +2110,7 @@ jobs:
           files: |
             ${{ steps.package-image.outputs.image_path }}
             ${{ steps.package-image.outputs.dtb_path }}
+            ${{ steps.package-anykernel.outputs.anykernel_zip_path }}
             ${{ env.ART_DIR }}/manifest.json
             ${{ env.ART_DIR }}/SHA256SUMS
 
