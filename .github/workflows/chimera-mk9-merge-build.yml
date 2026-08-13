@@ -453,7 +453,7 @@ jobs:
           esac
 
           case "${{ inputs.toolchain }}" in
-            llvm22|llvm21|llvm20|aosp22|aosp21|aosp20|aosp19|tron19|tron23|zyc_stable) : ;;
+            llvm22|llvm21|llvm20|aosp22|aosp21|aosp20|aosp19|neutron19|neutron23|zyc_stable) : ;;
             *) echo "FATAL: unsupported toolchain '${{ inputs.toolchain }}'" >&2; FAIL=1 ;;
           esac
 
