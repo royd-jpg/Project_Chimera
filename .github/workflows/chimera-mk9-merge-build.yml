@@ -2076,12 +2076,15 @@ jobs:
           # by-name / bootdevice/by-name / platform/*/by-name, rather than
           # hardcoding the UFS controller node id (which is not guaranteed
           # stable across kernel/TWRP builds on this device).
-          block=boot;
-          is_slot_device=0;
-          ramdisk_compression=auto;
-          patch_vbmeta_flag=auto;
-
+          BLOCK=/dev/block/by-name/BOOT
+          IS_SLOT_DEVICE=0
+          RAMDISK_COMPRESSION=auto
+          PATCH_VBMETA_FLAG=auto
+          
           . tools/ak3-core.sh
+          
+          dump_boot
+          write_boot
           AK3SH
 
           chmod +x "$GITHUB_WORKSPACE/anykernel.sh"
