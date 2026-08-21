@@ -400,7 +400,7 @@ on:
         description: "Base ref: full 40-hex commit SHA only (not a branch name — see fix-log item [I]). Default is the current pin of record; the live branch tip is logged for drift but never substituted automatically."
         required: false
         type: string
-        default: "4428629dc94ab9d55eba804dfda846d8563d56e5"
+        default: "7a0e0b5b9098da3d2c6c36cf9d4866358e15ac2f"
 
       ksu_commit:
         description: "KernelSU-Next exact commit SHA (full 40-hex, pin; overrides submodule-pinned commit if different) — must be bumped together with base_ref, see fix-log item [I]"
@@ -430,7 +430,7 @@ on:
         description: "KBUILD_BUILD_USER"
         required: false
         type: string
-        default: "GA"
+        default: "MTRXX_GA"
 
       build_host:
         description: "KBUILD_BUILD_HOST"
@@ -448,7 +448,7 @@ on:
         description: "KBUILD_BUILD_TIMESTAMP (deterministic)"
         required: false
         type: string
-        default: "Fri Aug 14 10:18:07 CEST 2026"
+        default: "Wed Aug 19 03:26:19 UTC 2026 OR Fri Aug 14 10:18:07 CEST 2026"
 
 env:
   CHIMERA_REPO: "https://github.com/royd-jpg/Project_Chimera.git"
