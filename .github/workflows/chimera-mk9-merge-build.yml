@@ -726,7 +726,8 @@ jobs:
       # ── 4b. Resolve KCFLAGS hash / kernel identity string (single source of
       #        truth for build step, post-build verification, manifest,
       #        release body, and anykernel.sh's identity header) ────────────
-      - name: Resolve build flags and identity
+      - name: Generate kernel identity and hash flags
+        if: ${{ inputs.dry_run != true }}
         run: |
           set -Eeuo pipefail
 
@@ -748,16 +749,16 @@ jobs:
             echo "platform=$KERNEL_PLATFORM"
             echo "profile=$PROFILE"
             echo "toolchain=$TOOLCHAIN"
-            echo "kcflags=$KCFLAGS"
-            echo "kbuild_ldflags=$KBUILD_LDFLAGS"
+            echo "kcflags=$CHIMERA_KCFLAGS"
+            echo "kbuild_ldflags=$CHIMERA_KBUILD_LDFLAGS"
             echo "kcflags_sha256=$KCFLAGS_HASH"
             echo "identity=$KERNEL_IDENTITY"
           } > "$ABS_LOG/kernel-identity.txt"
 
           echo "Kernel identity: $KERNEL_IDENTITY"
-          echo "KCFLAGS: $KCFLAGS"
+          echo "KCFLAGS: $CHIMERA_KCFLAGS"
           echo "KCFLAGS SHA-256: $KCFLAGS_HASH"
-
+          
       # ── 5. Validate base ─────────────────────────────────────────────────────
       - name: Preflight — verify base ref and clean worktree
         working-directory: ${{ env.KERNEL_DIR }}
