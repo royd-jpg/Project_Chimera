@@ -458,7 +458,7 @@ env:
   # under CHIMERA_* here; only materialized as literal KCFLAGS=/
   # KBUILD_LDFLAGS= on the single `make Image vmlinux dtbs` command
   # line in step 18.
-  CHIMERA_KCFLAGS: "-O2 -fcommon -fno-strict-aliasing -Wno-error -Wno-error=unused-but-set-global"
+  CHIMERA_KCFLAGS: -O2 -fcommon -fno-strict-aliasing -Wno-error -Wno-error=unused-but-set-global -Wno-unknown-warning-option
   CHIMERA_KBUILD_LDFLAGS: "-fuse-ld=lld"
 
 jobs:
