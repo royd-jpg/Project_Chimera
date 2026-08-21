@@ -1112,11 +1112,11 @@ jobs:
           echo "Chimera overlay started at $(date -u)" > "$LOG"
 
           sed -i \
-            '/^CONFIG_LOCALVERSION=/d;/^CONFIG_DEFAULT_HOSTNAME=/d' \
+            '/^CONFIG_LOCALVERSION=/d;/^CONFIG_DEFAULT_HOSTNAME=/d;/^CONFIG_CC_STACKPROTECTOR_STRONG=/d;/^CONFIG_CC_STACKPROTECTOR=/d' \
             "$DEFCONFIG"
 
           printf \
-            'CONFIG_LOCALVERSION="%s"\nCONFIG_DEFAULT_HOSTNAME="%s"\n' \
+            'CONFIG_LOCALVERSION="%s"\nCONFIG_DEFAULT_HOSTNAME="%s"\n# CONFIG_CC_STACKPROTECTOR_STRONG is not set\nCONFIG_CC_STACKPROTECTOR=y\n' \
             "$BRAND" \
             "$BUILD_HOST" \
             >> "$DEFCONFIG"
