@@ -1991,22 +1991,26 @@ jobs:
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
-
           ACTUAL_RELEASE="$(
             make \
+              --no-print-directory \
               O="$ABS_OUT" \
               ARCH=arm64 \
               CC=clang \
               LLVM=1 \
               LLVM_IAS=1 \
-              kernelrelease
+              kernelrelease \
+              | tail -n1
           )"
-
           [[ -n "$ACTUAL_RELEASE" ]] || {
             echo "FATAL: kernelrelease returned empty output" >&2
             exit 1
           }
-
+          if [[ "$ACTUAL_RELEASE" == *$'\n'* ]]; then
+            echo "FATAL: kernelrelease output still contains embedded newlines — refusing to write to GITHUB_ENV" >&2
+            printf '%s\n' "$ACTUAL_RELEASE" >&2
+            exit 1
+          fi
           echo "ACTUAL_KERNEL_RELEASE=$ACTUAL_RELEASE" >> "$GITHUB_ENV"
           echo "Actual kernel release: $ACTUAL_RELEASE"
 
