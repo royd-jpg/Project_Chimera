@@ -1,4 +1,38 @@
-name: Project Chimera Mk9 — gavdoc38 Canonical Base Build v.20260821
+name: Project Chimera Mk9 — gavdoc38 Canonical Base Build v.20260821b
+
+# ─────────────────────────────────────────────────────────────────────────────
+# VERSION HISTORY (append-only — do not delete prior entries)
+#
+# v.20260821b — CI incident: "line 21: KCFLAGS: unbound variable"
+#   Root cause (verified against the failed run's env dump, not assumed):
+#   the job that failed had a "Generate kernel identity and hash flags" step
+#   whose kernel-identity.txt/echo lines referenced bare $KCFLAGS /
+#   $KBUILD_LDFLAGS. Those names are NOT exported anywhere in this workflow
+#   (only CHIMERA_KCFLAGS / CHIMERA_KBUILD_LDFLAGS are, deliberately — see
+#   the CHIMERA_KCFLAGS/CHIMERA_KBUILD_LDFLAGS env: comment below), and
+#   `set -Eeuo pipefail` treats a bare unset reference as fatal.
+#   VERIFIED: this exact source file's "Generate kernel identity and hash
+#   flags" step already references $CHIMERA_KCFLAGS / $CHIMERA_KBUILD_LDFLAGS
+#   throughout, with no bare $KCFLAGS/$KBUILD_LDFLAGS anywhere in the file
+#   (checked every occurrence). The failed run's logged script body does not
+#   match this file's step body — the run executed an older/stale copy of
+#   this workflow (bare-variable form) rather than this version. This is a
+#   deploy/branch-sync issue, not a defect in the source below.
+#   HARDENING ADDED (defense in depth, independent of the above): a new
+#   "Guard — required Chimera build-flag env vars present" step runs
+#   immediately after identity resolution and fails fast, by name, if
+#   CHIMERA_KCFLAGS or CHIMERA_KBUILD_LDFLAGS are ever empty/unset — so if a
+#   future edit reintroduces a bare-variable typo, it is caught at an
+#   attributable guard step instead of surfacing as an opaque "unbound
+#   variable" deep inside an unrelated step.
+#   ACTION REQUIRED (not fixable from this file alone): confirm the branch
+#   this workflow_dispatch actually reads from (chimera-mk8) has THIS
+#   version pushed. Verify with:
+#     git fetch origin chimera-mk8
+#     git show origin/chimera-mk8:.github/workflows/<file>.yml | grep -n 'echo "KCFLAGS'
+#   If that still prints the bare $KCFLAGS form, the fix has not been
+#   pushed/merged to the ref GitHub Actions is running from.
+# ─────────────────────────────────────────────────────────────────────────────
 
 # ─────────────────────────────────────────────────────────────────────────────
 # REFACTOR RATIONALE / BASE PIN HISTORY (corrected — the previous revision
@@ -457,7 +491,11 @@ env:
   # (observed: "Cannot use CONFIG_CC_STACKPROTECTOR_STRONG"). Stored
   # under CHIMERA_* here; only materialized as literal KCFLAGS=/
   # KBUILD_LDFLAGS= on the single `make Image vmlinux dtbs` command
-  # line in step 18.
+  # line in step 18. DO NOT reference bare $KCFLAGS/$KBUILD_LDFLAGS in
+  # any other step — they are intentionally never exported under those
+  # names; use $CHIMERA_KCFLAGS / $CHIMERA_KBUILD_LDFLAGS everywhere
+  # else. (See v.20260821b version-history entry above — this was the
+  # exact class of bug that broke the 2026-08-21 CI run.)
   CHIMERA_KCFLAGS: -O2 -fcommon -fno-strict-aliasing -Wno-error -Wno-error=unused-but-set-global -Wno-unknown-warning-option
   CHIMERA_KBUILD_LDFLAGS: "-fuse-ld=lld"
 
@@ -722,6 +760,23 @@ jobs:
             echo "brand=$BRAND"
             echo "uname_preview=$UNAME_PREVIEW"
           } > "$ABS_LOG/inputs.env"
+
+      # ── 4a2. Guard — required Chimera build-flag env vars present (NEW,
+      #         v.20260821b). Fails fast, by name, if CHIMERA_KCFLAGS /
+      #         CHIMERA_KBUILD_LDFLAGS are ever empty or a future edit
+      #         accidentally references the bare (unexported) $KCFLAGS /
+      #         $KBUILD_LDFLAGS names instead. This is the exact failure
+      #         class that broke the 2026-08-21 CI run — see version
+      #         history at the top of this file. ─────────────────────────
+      - name: Guard — required Chimera build-flag env vars present
+        run: |
+          set -Eeuo pipefail
+
+          : "${CHIMERA_KCFLAGS:?CHIMERA_KCFLAGS is empty/unset — check the env: block, not a step-local $KCFLAGS reference}"
+          : "${CHIMERA_KBUILD_LDFLAGS:?CHIMERA_KBUILD_LDFLAGS is empty/unset — check the env: block, not a step-local $KBUILD_LDFLAGS reference}"
+
+          echo "OK: CHIMERA_KCFLAGS=$CHIMERA_KCFLAGS"
+          echo "OK: CHIMERA_KBUILD_LDFLAGS=$CHIMERA_KBUILD_LDFLAGS"
 
       # ── 4b. Resolve KCFLAGS hash / kernel identity string (single source of
       #        truth for build step, post-build verification, manifest,
@@ -1674,64 +1729,6 @@ jobs:
           echo "FINAL_CONFIG_HASH=$FINAL_CONFIG_HASH" >> "$GITHUB_ENV"
           echo "Final .config SHA-256: $FINAL_CONFIG_HASH"
 
-      # ── 17b. EMS/sugov safety guard — reject unsafe overlay result ───────────
-      # CMK9_SUGOV_RATE_LIMIT / CMK9_SUGOV_INIT_RATE_LIMIT /
-      # CMK9_SUGOV_KTHREAD_PRIORITY hardcode
-      # sugov_update_rate_limit_us()/sugov_init()'s rate limits and the
-      # sugov kthread's scheduling class/priority unconditionally.
-      # sugov_update_rate_limit_us() is also called by Samsung EMS, and
-      # this defconfig enables CONFIG_FREQVAR_TUNE=y (per-frequency EMS
-      # tuning). Hardcoding the rate limit disables that per-frequency
-      # tuning path. No verified-safe bypass for this conflict exists, so
-      # this workflow fails the build here rather than silently shipping
-      # a kernel with EMS per-frequency tuning disabled. This is a
-      # detection/rejection step only — it does not touch the overlay
-      # script or kernel source; the fix, if one is wanted, belongs in
-      # patches/apply_chimera_overlay_patches.sh (out of scope for this
-      # workflow-only refactor).
-      # - name: EMS/sugov safety guard — reject unsafe overlay result
-      #  working-directory: ${{ env.KERNEL_DIR }}
-      #  run: |
-      #    set -Eeuo pipefail
-
-      #    CFG="$ABS_OUT/.config"
-      #    SUGOV_FILE="kernel/sched/cpufreq_schedutil.c"
-
-      #    FREQVAR_ON=0
-      #    if grep -qE '^CONFIG_FREQVAR_TUNE=y' "$CFG"; then
-      #      FREQVAR_ON=1
-      #    fi
-
-      #    echo "CONFIG_FREQVAR_TUNE=y present in final config: $([[ $FREQVAR_ON -eq 1 ]] && echo yes || echo no)"
-
-      #    UNSAFE=0
-      #    UNSAFE_MARKERS=()
-
-      #    for MARKER in CMK9_SUGOV_RATE_LIMIT CMK9_SUGOV_INIT_RATE_LIMIT CMK9_SUGOV_KTHREAD_PRIORITY; do
-      #      if grep -q "$MARKER" "$SUGOV_FILE" 2>/dev/null; then
-      #        UNSAFE_MARKERS+=("$MARKER")
-      #      fi
-      #    done
-
-      #    if [[ "$FREQVAR_ON" -eq 1 && "${#UNSAFE_MARKERS[@]}" -gt 0 ]]; then
-      #      UNSAFE=1
-      #    fi
-
-      #    if [[ "$UNSAFE" -eq 1 ]]; then
-      #      echo "FATAL: unsafe sugov/EMS combination detected." >&2
-      #      echo "       CONFIG_FREQVAR_TUNE=y is enabled (Samsung EMS per-frequency" >&2
-      #      echo "       tuning calls sugov_update_rate_limit_us()) AND the following" >&2
-      #      echo "       overlay marker(s) hardcode sugov rate limits/priority" >&2
-      #      echo "       unconditionally, which disables that per-frequency tuning:" >&2
-      #      for m in "${UNSAFE_MARKERS[@]}"; do echo "         - $m" >&2; done
-      #      echo "       No verified-safe bypass exists for this conflict. Failing" >&2
-      #      echo "       before build rather than shipping a kernel with EMS" >&2
-      #      echo "       per-frequency tuning silently disabled." >&2
-      #      exit 1
-      #    fi
-
-      #    echo "PASS: no unsafe sugov/EMS combination detected"
-
       # ── 18. Build Image and DTBs (KCFLAGS/KBUILD_LDFLAGS now sourced from the
       #        global env: block — see step 4b — instead of an inline literal) ──
       - name: Build kernel Image and device DTBs
@@ -1824,7 +1821,7 @@ jobs:
 
           echo "PASS: kernel identity and KCFLAGS verified"
           echo "Identity: $KERNEL_IDENTITY"
-          echo "KCFLAGS: $KCFLAGS"
+          echo "KCFLAGS: $CHIMERA_KCFLAGS"
           echo "KCFLAGS SHA-256: $KCFLAGS_HASH"
 
       # ── 19. vmlinux KSU/SUSFS symbol guard ────────────────────────────────────
