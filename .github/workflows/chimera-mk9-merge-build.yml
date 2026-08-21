@@ -1,4 +1,47 @@
-name: Project Chimera Mk9 — gavdoc38 Canonical Base Build v.20260821b
+name: Project Chimera Mk9 — gavdoc38 Canonical Base Build v.20260822a
+
+# ─────────────────────────────────────────────────────────────────────────────
+# VERSION HISTORY (append-only — do not delete prior entries)
+#
+# v.20260822a — CI incident: "unrecognised emulation mode: aarch64linux" at
+#   VDSOL arch/arm64/kernel/vdso/vdso.so.dbg (run failed with exit code 2 at
+#   vdso_prepare, before vmlinux link is ever reached).
+#   Root cause: arch/arm64/kernel/vdso/Makefile's VDSOL rule links
+#   vdso.so.dbg via its own $(CC) invocation and does not reliably inherit
+#   the top-level KBUILD_LDFLAGS make variable on this 4.9.337 tree. Prior
+#   to v.20260821b, -fuse-ld=lld lived in CHIMERA_KCFLAGS, which IS exported
+#   to every clang invocation including this one, so it worked. The
+#   2026-08-21 refactor (see that entry below, item 3) moved -fuse-ld=lld
+#   out of KCFLAGS and into KBUILD_LDFLAGS only, on the reasoning that it's
+#   "a linker flag". That's true for the final vmlinux link (which does
+#   correctly receive KBUILD_LDFLAGS), but the vdso sub-make's link step
+#   does not consume KBUILD_LDFLAGS the same way, so it silently fell back
+#   to whatever `ld` is first on $PATH — the host runner's default
+#   /usr/bin/ld (GNU bfd, x86_64-only emulations: elf_x86_64, elf32_x86_64,
+#   elf_i386, elf_iamcu, i386pep, i386pe) — which cannot emit
+#   aarch64linux and fails immediately.
+#   FIX: -fuse-ld=lld restored to CHIMERA_KCFLAGS (kept in
+#   CHIMERA_KBUILD_LDFLAGS too — harmless duplication, and still correct
+#   for the final vmlinux link). KCFLAGS reaches every clang invocation in
+#   this build, including host tools, vdso, and the main kernel objects,
+#   so this closes the gap unconditionally rather than only for the
+#   top-level make target.
+#   VERIFICATION: re-run with dry_run:false, same profile/toolchain that
+#   failed; confirm "VDSOL arch/arm64/kernel/vdso/vdso.so.dbg" no longer
+#   emits "unrecognised emulation mode" and the build proceeds into normal
+#   object compilation. Step 18b ("Verify build identity and KCFLAGS")
+#   requires no changes — it hashes whatever CHIMERA_KCFLAGS currently is,
+#   not a hardcoded value, so the manifest/identity/hash all pick up the
+#   new flag automatically.
+#   NOT INDEPENDENTLY CONFIRMED: the exact LDFLAGS variable name consumed
+#   by arch/arm64/kernel/vdso/Makefile on the gavdoc38 base was not read
+#   directly as part of this fix (inferred from the failure point in the
+#   log plus the 2026-08-21 changelog entry that introduced the
+#   regression). If this recurs, run
+#     grep -n 'LDFLAGS\|fuse-ld' kernel/arch/arm64/kernel/vdso/Makefile
+#   against the checked-out base to confirm/correct this diagnosis against
+#   the actual Makefile text.
+# ─────────────────────────────────────────────────────────────────────────────
 
 # ─────────────────────────────────────────────────────────────────────────────
 # VERSION HISTORY (append-only — do not delete prior entries)
@@ -92,9 +135,28 @@ name: Project Chimera Mk9 — gavdoc38 Canonical Base Build v.20260821b
 #      and re-verified against the build log after compilation.
 #   3. -fuse-ld=lld was folded into KCFLAGS. It's a linker flag; moved to
 #      KBUILD_LDFLAGS.
+#      *** SEE v.20260822a ABOVE: this specific change (item 3) was a
+#      *** regression — -fuse-ld=lld had to be restored to KCFLAGS because
+#      *** the vdso sub-make's link step does not reliably inherit
+#      *** KBUILD_LDFLAGS on this tree. It is now present in BOTH
+#      *** CHIMERA_KCFLAGS and CHIMERA_KBUILD_LDFLAGS.
 #   4. base_ref documentation corrected (see pin-of-record note above) —
 #      this is a docs fix only, not a repin; the SHA is unchanged from the
 #      prior file's actual input default.
+#   5. (2026-08-21b) "Capture actual kernel release" wrote a multi-line
+#      value into $GITHUB_ENV. `make O=... kernelrelease` recurses via
+#      `$(MAKE) -C $(KBUILD_OUTPUT) ...`, and GNU Make auto-prints
+#      "Entering directory"/"Leaving directory" around any -C-based
+#      recursive invocation unless --no-print-directory is passed. Those
+#      lines were captured into ACTUAL_RELEASE alongside the real release
+#      string, and a plain `KEY=$VALUE` append of a multi-line value is
+#      invalid for the GITHUB_ENV file command — this produced runner
+#      errors "Unable to process file command 'env' successfully" /
+#      "Invalid format '<release>'" and failed the run. Fixed by adding
+#      --no-print-directory, piping through `tail -n1`, and failing fast
+#      with an explicit check if the captured value ever contains a
+#      newline (defense in depth against a future toolchain/Make version
+#      reintroducing stray stdout here).
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ARCHITECTURE CHANGE
@@ -496,7 +558,15 @@ env:
   # names; use $CHIMERA_KCFLAGS / $CHIMERA_KBUILD_LDFLAGS everywhere
   # else. (See v.20260821b version-history entry above — this was the
   # exact class of bug that broke the 2026-08-21 CI run.)
-  CHIMERA_KCFLAGS: -O2 -fcommon -fno-strict-aliasing -Wno-error -Wno-error=unused-but-set-global -Wno-unknown-warning-option
+  #
+  # -fuse-ld=lld is present in BOTH vars, deliberately (see v.20260822a
+  # above): arch/arm64/kernel/vdso/Makefile's VDSOL rule links via its own
+  # $(CC) invocation and does not reliably inherit KBUILD_LDFLAGS on this
+  # 4.9.337 tree, so without it in KCFLAGS too, clang falls back to the
+  # host's default /usr/bin/ld (x86_64-only) and fails vdso_prepare with
+  # "unrecognised emulation mode: aarch64linux". KBUILD_LDFLAGS is kept
+  # for the final vmlinux link, which does consume it correctly.
+  CHIMERA_KCFLAGS: -O2 -fcommon -fno-strict-aliasing -Wno-error -Wno-error=unused-but-set-global -Wno-unknown-warning-option -fuse-ld=lld
   CHIMERA_KBUILD_LDFLAGS: "-fuse-ld=lld"
 
 jobs:
@@ -767,13 +837,29 @@ jobs:
       #         accidentally references the bare (unexported) $KCFLAGS /
       #         $KBUILD_LDFLAGS names instead. This is the exact failure
       #         class that broke the 2026-08-21 CI run — see version
-      #         history at the top of this file. ─────────────────────────
+      #         history at the top of this file. Also asserts -fuse-ld=lld
+      #         is present in KCFLAGS (v.20260822a — see top of file for
+      #         why this must be in KCFLAGS, not just KBUILD_LDFLAGS). ────
       - name: Guard — required Chimera build-flag env vars present
         run: |
           set -Eeuo pipefail
 
           : "${CHIMERA_KCFLAGS:?CHIMERA_KCFLAGS is empty/unset — check the env: block, not a step-local $KCFLAGS reference}"
           : "${CHIMERA_KBUILD_LDFLAGS:?CHIMERA_KBUILD_LDFLAGS is empty/unset — check the env: block, not a step-local $KBUILD_LDFLAGS reference}"
+
+          case " $CHIMERA_KCFLAGS " in
+            *" -fuse-ld=lld "*) : ;;
+            *)
+              echo "FATAL: -fuse-ld=lld missing from CHIMERA_KCFLAGS." >&2
+              echo "       arch/arm64/kernel/vdso/Makefile's VDSOL rule does not" >&2
+              echo "       reliably inherit KBUILD_LDFLAGS on this tree — without" >&2
+              echo "       -fuse-ld=lld in KCFLAGS too, vdso link falls back to the" >&2
+              echo "       host's default ld and fails with 'unrecognised emulation" >&2
+              echo "       mode: aarch64linux'. See v.20260822a in the version" >&2
+              echo "       history at the top of this file." >&2
+              exit 1
+              ;;
+          esac
 
           echo "OK: CHIMERA_KCFLAGS=$CHIMERA_KCFLAGS"
           echo "OK: CHIMERA_KBUILD_LDFLAGS=$CHIMERA_KBUILD_LDFLAGS"
@@ -1985,12 +2071,17 @@ jobs:
             >> "$GITHUB_ENV"
 
       # ── 20a. Capture actual kernel release (post-build ground truth for
-      #         anykernel.sh's identity header and the manifest) ─────────────
+      #         anykernel.sh's identity header and the manifest). Uses
+      #         --no-print-directory + tail -n1 + a newline guard so a
+      #         recursive-make "Entering/Leaving directory" banner can never
+      #         corrupt the $GITHUB_ENV write again — see version-history
+      #         entry 5 for v.20260821b above. ───────────────────────────
       - name: Capture actual kernel release
         if: ${{ inputs.dry_run != true }}
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
+
           ACTUAL_RELEASE="$(
             make \
               --no-print-directory \
@@ -2002,15 +2093,18 @@ jobs:
               kernelrelease \
               | tail -n1
           )"
+
           [[ -n "$ACTUAL_RELEASE" ]] || {
             echo "FATAL: kernelrelease returned empty output" >&2
             exit 1
           }
+
           if [[ "$ACTUAL_RELEASE" == *$'\n'* ]]; then
             echo "FATAL: kernelrelease output still contains embedded newlines — refusing to write to GITHUB_ENV" >&2
             printf '%s\n' "$ACTUAL_RELEASE" >&2
             exit 1
           fi
+
           echo "ACTUAL_KERNEL_RELEASE=$ACTUAL_RELEASE" >> "$GITHUB_ENV"
           echo "Actual kernel release: $ACTUAL_RELEASE"
 
@@ -2058,7 +2152,7 @@ jobs:
           #
 
           properties() { '
-          kernel.string=Chimera Mk9 (${ACTUAL_KERNEL_RELEASE}) — ${PROFILE} — ${TOOLCHAIN} — by AegisDevLabs
+          kernel.string=${UNAME_PREVIEW} ${KERNEL_IDENTITY}} by AegisDevLabs
           do.devicecheck=1
           do.modules=0
           do.systemless=1
