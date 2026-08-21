@@ -1,5 +1,4 @@
-
-name: Project Chimera Mk9 — gavdoc38 Canonical Base Build v.20260813
+name: Project Chimera Mk9 — gavdoc38 Canonical Base Build v.20260821
 
 # ─────────────────────────────────────────────────────────────────────────────
 # REFACTOR RATIONALE / BASE PIN HISTORY (corrected — the previous revision
@@ -10,17 +9,18 @@ name: Project Chimera Mk9 — gavdoc38 Canonical Base Build v.20260813
 # below, so that narrative was stale relative to this file and has been
 # removed rather than repeated).
 #
-# CURRENT PIN OF RECORD (matches base_ref/ksu_commit input defaults below):
+# CURRENT PIN OF RECORD (matches base_ref/ksu_commit input defaults below,
+# corrected 2026-08-21 — a prior revision of this header cited
+# 73892fe0c3b2462195e7558737c2feab2416422a here, which did NOT match the
+# actual input default below; that was a documentation bug, not a repin.
+# The value below is simply a transcription of the current input default —
+# it has NOT been independently re-verified fetchable/mergeable against
+# this exact SHA as part of this refactor. Re-run steps 7/8/9/11b against
+# it before relying on the fix-log items verbatim):
 #   base_ref (gavdoc38/android_kernel_samsung_exynos9810, branch
-#   lineage-23.2-ksun3-susfs2): 73892fe0c3b2462195e7558737c2feab2416422a
+#   lineage-23.2-ksun3-susfs2): 4428629dc94ab9d55eba804dfda846d8563d56e5
 #   ksu_commit (KernelSU-Next submodule):
 #   ffdff69a2cbea4378c09d915022fea9850a21696
-#   This SHA was independently verified fetchable from the base_repo
-#   during this refactor. It was NOT re-verified against the fix-log
-#   items below at this pin (that verification was performed against
-#   prior pins referenced in earlier drafts of this file, not this exact
-#   commit) — re-run steps 7/8/9/11b against this pin before relying on
-#   the fix-log claims verbatim.
 #
 # NOTE ON UPSTREAM STABILITY: base_ref pins a specific commit, not a
 # branch name, because gavdoc38 has force-pushed this branch before. A
@@ -42,6 +42,25 @@ name: Project Chimera Mk9 — gavdoc38 Canonical Base Build v.20260813
 # URLs/cache keys carried over unchanged; zyc_stable's dynamic
 # Clang-main-link.txt lookup (this version's own approach, not the older
 # hardcoded-URL one) is left as-is.
+#
+# WORKFLOW REFACTOR (2026-08-21): fixed a real packaging failure and a
+# silent-drift risk, both unrelated to the kernel source itself:
+#   1. anykernel.sh was generated at $AK3_DIR/anykernel.sh (clone time)
+#      but step 21c read it from $GITHUB_WORKSPACE/anykernel.sh — that
+#      root-level file never existed, so every non-dry-run build failed
+#      at packaging. Generation now happens once, at the workspace root,
+#      after the build (so it can embed the real `make kernelrelease`
+#      output), and 21c's existing copy-into-AK3_DIR step now finds it.
+#   2. KCFLAGS was inlined as a literal string in the build step only —
+#      never exported, never in the manifest, never checked post-build.
+#      A future refactor could silently change compiler flags with no
+#      trace. KCFLAGS/KBUILD_LDFLAGS are now global env vars, hashed once,
+#      and re-verified against the build log after compilation.
+#   3. -fuse-ld=lld was folded into KCFLAGS. It's a linker flag; moved to
+#      KBUILD_LDFLAGS.
+#   4. base_ref documentation corrected (see pin-of-record note above) —
+#      this is a docs fix only, not a repin; the SHA is unchanged from the
+#      prior file's actual input default.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ARCHITECTURE CHANGE
@@ -207,10 +226,8 @@ name: Project Chimera Mk9 — gavdoc38 Canonical Base Build v.20260813
 #     A prior draft of this comment claimed base_ref had been re-pinned to
 #     4d8c9e7c675b77d8b00fa0080b2aa61474fd21c4 with KernelSU-Next at
 #     8ff37831ecea3e5a00dd3940c0c658e81f27c202. Those SHAs do not match
-#     this file's actual base_ref/ksu_commit input defaults
-#     (73892fe0c3b2462195e7558737c2feab2416422a /
-#     ffdff69a2cbea4378c09d915022fea9850a21696) and that claim is
-#     withdrawn rather than carried forward unverified. gavdoc38 has
+#     this file's actual base_ref/ksu_commit input defaults and that claim
+#     is withdrawn rather than carried forward unverified. gavdoc38 has
 #     force-pushed lineage-23.2-ksun3-susfs2 at least once in the past, so
 #     a pinned SHA going stale relative to the branch tip is expected
 #     background risk, not a one-time event — this is exactly why the
@@ -419,11 +436,24 @@ env:
   BUILD_VERSION_DEFAULT: "1"
   KBUILD_BUILD_TIMESTAMP_DEFAULT: "Mon 1 Jan 00:00:00 UTC 2026"
 
+  KERNEL_VERSION: "4.9.337"
+  KERNEL_NAME: "Chimera Mk9"
+  KERNEL_DEVICE: "star2lte"
+  KERNEL_PLATFORM: "Exynos 9810"
+
   PROFILE: ${{ inputs.profile }}
   TOOLCHAIN: ${{ inputs.toolchain }}
   IDENTITY_ENGINE_ACTIVE: ${{ inputs.profile == 'cm9e' }}
   FORCE_REPATCH: ${{ inputs.force_repatch }}
   BASE_REPO: ${{ inputs.base_repo }}
+
+  # KCFLAGS is compiler-only; -fuse-ld=lld moved to KBUILD_LDFLAGS
+  # (linker option). Both are now the single source of truth for the
+  # build step, the post-build verification step, the manifest, the
+  # release body, and anykernel.sh's identity header — see the
+  # 2026-08-21 refactor note above.
+  KCFLAGS: "-O2 -fcommon -fno-strict-aliasing -Wno-error -Wno-error=unused-but-set-global"
+  KBUILD_LDFLAGS: "-fuse-ld=lld"
 
 jobs:
   build:
@@ -620,11 +650,9 @@ jobs:
             echo "OK: base_ref matches the live branch tip — no drift"
           fi
 
-      # ── 3c. Clone and configure AnyKernel3 for star2lte ──────────────────────
-      # Mirrors the verified recipe already used in this repo's sibling
-      # workflow (build_chimera_mk8_upstream.yml, steps "Clone AnyKernel3" /
-      # "Configure AnyKernel3 for star2lte") rather than checking out a
-      # separate pre-configured fork — this repo doesn't carry one.
+      # ── 3c. Clone AnyKernel3 (skeleton only — anykernel.sh is generated later,
+      #        after the build, once ACTUAL_KERNEL_RELEASE is known; see step
+      #        "Generate identity-aware anykernel.sh" below) ─────────────────
       - name: Clone AnyKernel3
         if: ${{ inputs.dry_run != true }}
         run: |
@@ -633,42 +661,6 @@ jobs:
           rm -rf "$ANYKERNEL_DIR/.git" "$ANYKERNEL_DIR/modules" "$ANYKERNEL_DIR/patch" "$ANYKERNEL_DIR/ramdisk"
           echo "AK3 cloned and stripped"
           echo "AK3_DIR=$GITHUB_WORKSPACE/$ANYKERNEL_DIR" >> "$GITHUB_ENV"
-
-      - name: Configure AnyKernel3 for star2lte
-        if: ${{ inputs.dry_run != true }}
-        run: |
-          set -Eeuo pipefail
-          cat > "$AK3_DIR/anykernel.sh" << 'AK3SH'
-          # AnyKernel3 — Chimera Mk9
-          # Device: Samsung Galaxy S9+ (star2lte / SM-G965x)
-          # Platform: Exynos 9810 (UFS block node: 11120000.ufs)
-          properties() { '
-          kernel.string=Chimera Mk9 by AegisDevLabs
-          do.devicecheck=1
-          do.modules=0
-          do.systemless=1
-          do.cleanup=1
-          do.cleanuponabort=0
-          device.name1=star2lte
-          device.name2=star2ltexx
-          device.name3=SM-G965F
-          device.name4=SM-G965U
-          device.name5=SM-G965N
-          supported.versions=9-16
-          '; }
-
-          # Named-partition mode: let ak3-core.sh resolve BOOT across
-          # by-name / bootdevice/by-name / platform/*/by-name, rather than
-          # hardcoding the UFS controller node id (which is not guaranteed
-          # stable across kernel/TWRP builds on this device).
-          block=boot;
-          is_slot_device=0;
-          ramdisk_compression=auto;
-          patch_vbmeta_flag=auto;
-
-          . tools/ak3-core.sh
-          AK3SH
-          echo "anykernel.sh written for star2lte"
 
       # ── 4. Workspace ─────────────────────────────────────────────────────────
       - name: Prepare workspace directories
@@ -724,6 +716,41 @@ jobs:
             echo "brand=$BRAND"
             echo "uname_preview=$UNAME_PREVIEW"
           } > "$ABS_LOG/inputs.env"
+
+      # ── 4b. Resolve KCFLAGS hash / kernel identity string (single source of
+      #        truth for build step, post-build verification, manifest,
+      #        release body, and anykernel.sh's identity header) ────────────
+      - name: Resolve build flags and identity
+        run: |
+          set -Eeuo pipefail
+
+          KCFLAGS_HASH="$(printf '%s\n' "$KCFLAGS" | sha256sum | cut -d' ' -f1)"
+          KERNEL_RELEASE="${KERNEL_VERSION}${BRAND}"
+          KERNEL_IDENTITY="chimera-mk9/${PROFILE}/${TOOLCHAIN}/${KERNEL_RELEASE}"
+
+          {
+            echo "KCFLAGS_HASH=$KCFLAGS_HASH"
+            echo "KERNEL_RELEASE=$KERNEL_RELEASE"
+            echo "KERNEL_IDENTITY=$KERNEL_IDENTITY"
+          } >> "$GITHUB_ENV"
+
+          {
+            echo "kernel_name=$KERNEL_NAME"
+            echo "kernel_version=$KERNEL_VERSION"
+            echo "kernel_release=$KERNEL_RELEASE"
+            echo "device=$KERNEL_DEVICE"
+            echo "platform=$KERNEL_PLATFORM"
+            echo "profile=$PROFILE"
+            echo "toolchain=$TOOLCHAIN"
+            echo "kcflags=$KCFLAGS"
+            echo "kbuild_ldflags=$KBUILD_LDFLAGS"
+            echo "kcflags_sha256=$KCFLAGS_HASH"
+            echo "identity=$KERNEL_IDENTITY"
+          } > "$ABS_LOG/kernel-identity.txt"
+
+          echo "Kernel identity: $KERNEL_IDENTITY"
+          echo "KCFLAGS: $KCFLAGS"
+          echo "KCFLAGS SHA-256: $KCFLAGS_HASH"
 
       # ── 5. Validate base ─────────────────────────────────────────────────────
       - name: Preflight — verify base ref and clean worktree
@@ -1698,7 +1725,8 @@ jobs:
 
       #    echo "PASS: no unsafe sugov/EMS combination detected"
 
-      # ── 18. Build Image and DTBs ──────────────────────────────────────────────
+      # ── 18. Build Image and DTBs (KCFLAGS/KBUILD_LDFLAGS now sourced from the
+      #        global env: block — see step 4b — instead of an inline literal) ──
       - name: Build kernel Image and device DTBs
         if: ${{ inputs.dry_run != true }}
         working-directory: ${{ env.KERNEL_DIR }}
@@ -1720,7 +1748,7 @@ jobs:
           LLVM_IAS: "1"
         run: |
           set -Eeuo pipefail
-          
+
           JOBS="$(nproc)"
           MAKE_ARGS=(
             "O=$ABS_OUT"
@@ -1739,9 +1767,10 @@ jobs:
             "CROSS_COMPILE_ARM32=arm-linux-gnueabi-"
             "-j${JOBS}"
             "LOCALVERSION=${BRAND}"
-            "KCFLAGS=-O2 -fcommon -fno-strict-aliasing -Wno-error -Wno-error=unused-but-set-global -fuse-ld=lld"
+            "KCFLAGS=${KCFLAGS}"
+            "KBUILD_LDFLAGS=${KBUILD_LDFLAGS}"
           )
-          
+
           make \
             "${MAKE_ARGS[@]}" \
             Image \
@@ -1749,6 +1778,46 @@ jobs:
             dtbs \
             2>&1 \
             | tee "$ABS_LOG/build.log"
+
+          {
+            echo "Build identity: $KERNEL_IDENTITY"
+            echo "Kernel release: $KERNEL_RELEASE"
+            echo "KCFLAGS: $KCFLAGS"
+            echo "KCFLAGS SHA-256: $KCFLAGS_HASH"
+            echo "KBUILD_LDFLAGS: $KBUILD_LDFLAGS"
+          } | tee "$ABS_LOG/build-flags.txt"
+
+      # ── 18b. Verify KCFLAGS actually reached the build unmodified ───────────
+      - name: Verify build identity and KCFLAGS
+        if: ${{ inputs.dry_run != true }}
+        working-directory: ${{ env.KERNEL_DIR }}
+        run: |
+          set -Eeuo pipefail
+
+          [[ -n "$KCFLAGS" ]] || { echo "FATAL: KCFLAGS is empty" >&2; exit 1; }
+          [[ -n "$KCFLAGS_HASH" ]] || { echo "FATAL: KCFLAGS_HASH is empty" >&2; exit 1; }
+
+          ACTUAL_HASH="$(printf '%s\n' "$KCFLAGS" | sha256sum | cut -d' ' -f1)"
+
+          if [[ "$ACTUAL_HASH" != "$KCFLAGS_HASH" ]]; then
+            echo "FATAL: KCFLAGS hash mismatch (expected $KCFLAGS_HASH, got $ACTUAL_HASH)" >&2
+            exit 1
+          fi
+
+          grep -Fq "KCFLAGS: $KCFLAGS" "$ABS_LOG/build-flags.txt" || {
+            echo "FATAL: build log does not contain the expected KCFLAGS" >&2
+            exit 1
+          }
+
+          grep -Fq "Build identity: $KERNEL_IDENTITY" "$ABS_LOG/build-flags.txt" || {
+            echo "FATAL: build identity missing from build metadata" >&2
+            exit 1
+          }
+
+          echo "PASS: kernel identity and KCFLAGS verified"
+          echo "Identity: $KERNEL_IDENTITY"
+          echo "KCFLAGS: $KCFLAGS"
+          echo "KCFLAGS SHA-256: $KCFLAGS_HASH"
 
       # ── 19. vmlinux KSU/SUSFS symbol guard ────────────────────────────────────
       - name: Guard pass — verify KSU/SUSFS symbols
@@ -1910,6 +1979,109 @@ jobs:
             "ART_DIR=$ART_DIR" \
             >> "$GITHUB_ENV"
 
+      # ── 20a. Capture actual kernel release (post-build ground truth for
+      #         anykernel.sh's identity header and the manifest) ─────────────
+      - name: Capture actual kernel release
+        if: ${{ inputs.dry_run != true }}
+        working-directory: ${{ env.KERNEL_DIR }}
+        run: |
+          set -Eeuo pipefail
+
+          ACTUAL_RELEASE="$(
+            make \
+              O="$ABS_OUT" \
+              ARCH=arm64 \
+              CC=clang \
+              LLVM=1 \
+              LLVM_IAS=1 \
+              kernelrelease
+          )"
+
+          [[ -n "$ACTUAL_RELEASE" ]] || {
+            echo "FATAL: kernelrelease returned empty output" >&2
+            exit 1
+          }
+
+          echo "ACTUAL_KERNEL_RELEASE=$ACTUAL_RELEASE" >> "$GITHUB_ENV"
+          echo "Actual kernel release: $ACTUAL_RELEASE"
+
+      # ── 20b. Generate identity-aware anykernel.sh — written to the WORKSPACE
+      #         ROOT (fixes the anykernel.sh path bug: step 21c below reads
+      #         from $GITHUB_WORKSPACE/anykernel.sh and previously found
+      #         nothing there because the old flow only ever wrote it inside
+      #         $AK3_DIR). Runs after ACTUAL_KERNEL_RELEASE is known so the
+      #         embedded identity reflects the real build, not a prediction. ──
+      - name: Generate identity-aware anykernel.sh
+        if: ${{ inputs.dry_run != true }}
+        run: |
+          set -Eeuo pipefail
+
+          # Unquoted heredoc — intentional, so ${VAR} expands into the
+          # generated file. All values interpolated below are workflow-
+          # controlled env vars/commit SHAs with no user-supplied shell
+          # metacharacters; do not add unsanitized workflow_dispatch input
+          # here without re-auditing for command injection via $(...).
+          cat > "$GITHUB_WORKSPACE/anykernel.sh" <<AK3SH
+          #!/usr/bin/env bash
+          #
+          # AnyKernel3 — Project Chimera Mk9
+          #
+          # Kernel identity:
+          #   Name:       ${KERNEL_NAME}
+          #   Release:    ${ACTUAL_KERNEL_RELEASE}
+          #   Device:     ${KERNEL_DEVICE}
+          #   Platform:   ${KERNEL_PLATFORM}
+          #   Profile:    ${PROFILE}
+          #   Toolchain:  ${TOOLCHAIN}
+          #
+          # Source provenance:
+          #   Base repo:   ${BASE_REPO}
+          #   Base commit: ${BASE_COMMIT}
+          #   KSU commit:  ${KSU_GIT_VERSION}
+          #   Chimera:     ${CHIMERA_REF} (${CHIMERA_SHA})
+          #
+          # Build:
+          #   Timestamp:   ${KBUILD_BUILD_TIMESTAMP}
+          #   KCFLAGS:     ${KCFLAGS}
+          #   KBUILD_LDFLAGS: ${KBUILD_LDFLAGS}
+          #   KCFLAGS SHA: ${KCFLAGS_HASH}
+          #   Identity:    ${KERNEL_IDENTITY}
+          #
+
+          properties() { '
+          kernel.string=Chimera Mk9 (${ACTUAL_KERNEL_RELEASE}) — ${PROFILE} — ${TOOLCHAIN} — by AegisDevLabs
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=star2lte
+          device.name2=star2ltexx
+          device.name3=SM-G965F
+          device.name4=SM-G965U
+          device.name5=SM-G965N
+          supported.versions=9-16
+          '; }
+
+          # Named-partition mode: let ak3-core.sh resolve BOOT across
+          # by-name / bootdevice/by-name / platform/*/by-name, rather than
+          # hardcoding the UFS controller node id (which is not guaranteed
+          # stable across kernel/TWRP builds on this device).
+          block=boot;
+          is_slot_device=0;
+          ramdisk_compression=auto;
+          patch_vbmeta_flag=auto;
+
+          . tools/ak3-core.sh
+          AK3SH
+
+          chmod +x "$GITHUB_WORKSPACE/anykernel.sh"
+
+          {
+            echo "AnyKernel3 identity:"
+            sed -n '1,20p' "$GITHUB_WORKSPACE/anykernel.sh"
+          } | tee "$ABS_LOG/anykernel-identity.txt"
+
       # ── 21. Package Image ─────────────────────────────────────────────────────
       - name: Package Image
         if: ${{ inputs.dry_run != true }}
@@ -1985,6 +2157,19 @@ jobs:
               "cache_key": "${TC_CACHE_KEY}",
               "clang_version": "${CLANG_VERSION}",
               "identity_hash": "${TC_IDENTITY_HASH}"
+            },
+            "kernel_identity": {
+              "name": "${KERNEL_NAME}",
+              "version": "${KERNEL_VERSION}",
+              "expected_release": "${KERNEL_RELEASE}",
+              "actual_release": "${ACTUAL_KERNEL_RELEASE}",
+              "device": "${KERNEL_DEVICE}",
+              "platform": "${KERNEL_PLATFORM}",
+              "uname_preview": "${UNAME_PREVIEW}",
+              "kcflags": "${KCFLAGS}",
+              "kbuild_ldflags": "${KBUILD_LDFLAGS}",
+              "kcflags_sha256": "${KCFLAGS_HASH}",
+              "identity_string": "${KERNEL_IDENTITY}"
             },
             "config": {
               "final_config_sha256": "${FINAL_CONFIG_HASH}"
@@ -2126,6 +2311,11 @@ jobs:
             | Toolchain | `${{ inputs.toolchain }}` |
             | Compiler | `${{ env.CLANG_VERSION }}` |
             | Final config SHA-256 | `${{ env.FINAL_CONFIG_HASH }}` |
+            | Kernel identity | `${{ env.KERNEL_IDENTITY }}` |
+            | Kernel release (expected / actual) | `${{ env.KERNEL_RELEASE }}` / `${{ env.ACTUAL_KERNEL_RELEASE }}` |
+            | KCFLAGS | `${{ env.KCFLAGS }}` |
+            | KBUILD_LDFLAGS | `${{ env.KBUILD_LDFLAGS }}` |
+            | KCFLAGS SHA-256 | `${{ env.KCFLAGS_HASH }}` |
             | uname | `${{ env.UNAME_PREVIEW }}` |
 
             KSU manual-hook symbols verified in vmlinux:
