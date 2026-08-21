@@ -447,13 +447,19 @@ env:
   FORCE_REPATCH: ${{ inputs.force_repatch }}
   BASE_REPO: ${{ inputs.base_repo }}
 
-  # KCFLAGS is compiler-only; -fuse-ld=lld moved to KBUILD_LDFLAGS
-  # (linker option). Both are now the single source of truth for the
-  # build step, the post-build verification step, the manifest, the
-  # release body, and anykernel.sh's identity header — see the
-  # 2026-08-21 refactor note above.
-  KCFLAGS: "-O2 -fcommon -fno-strict-aliasing -Wno-error -Wno-error=unused-but-set-global"
-  KBUILD_LDFLAGS: "-fuse-ld=lld"
+  # KCFLAGS/KBUILD_LDFLAGS are Kbuild-magic env var names — Kbuild reads
+  # them from the process environment automatically at EVERY invocation,
+  # not just the command line. Storing them under those exact names in
+  # job-level env: (or via $GITHUB_ENV, which has the same broadcast
+  # effect) leaks them into the Kconfig/silentoldconfig/prepare-
+  # compiler-check phase, where the extra flags cause clang's bare
+  # -fstack-protector-strong cc-option probe to report unsupported
+  # (observed: "Cannot use CONFIG_CC_STACKPROTECTOR_STRONG"). Stored
+  # under CHIMERA_* here; only materialized as literal KCFLAGS=/
+  # KBUILD_LDFLAGS= on the single `make Image vmlinux dtbs` command
+  # line in step 18.
+  CHIMERA_KCFLAGS: "-O2 -fcommon -fno-strict-aliasing -Wno-error -Wno-error=unused-but-set-global"
+  CHIMERA_KBUILD_LDFLAGS: "-fuse-ld=lld"
 
 jobs:
   build:
@@ -724,7 +730,7 @@ jobs:
         run: |
           set -Eeuo pipefail
 
-          KCFLAGS_HASH="$(printf '%s\n' "$KCFLAGS" | sha256sum | cut -d' ' -f1)"
+          KCFLAGS_HASH="$(printf '%s\n' "$CHIMERA_KCFLAGS" | sha256sum | cut -d' ' -f1)"
           KERNEL_RELEASE="${KERNEL_VERSION}${BRAND}"
           KERNEL_IDENTITY="chimera-mk9/${PROFILE}/${TOOLCHAIN}/${KERNEL_RELEASE}"
 
@@ -1767,8 +1773,8 @@ jobs:
             "CROSS_COMPILE_ARM32=arm-linux-gnueabi-"
             "-j${JOBS}"
             "LOCALVERSION=${BRAND}"
-            "KCFLAGS=${KCFLAGS}"
-            "KBUILD_LDFLAGS=${KBUILD_LDFLAGS}"
+            "KCFLAGS=${CHIMERA_KCFLAGS}"
+            "KBUILD_LDFLAGS=${CHIMERA_KBUILD_LDFLAGS}"
           )
 
           make \
@@ -1782,10 +1788,11 @@ jobs:
           {
             echo "Build identity: $KERNEL_IDENTITY"
             echo "Kernel release: $KERNEL_RELEASE"
-            echo "KCFLAGS: $KCFLAGS"
+            echo "KCFLAGS: $CHIMERA_KCFLAGS"
             echo "KCFLAGS SHA-256: $KCFLAGS_HASH"
-            echo "KBUILD_LDFLAGS: $KBUILD_LDFLAGS"
+            echo "KBUILD_LDFLAGS: $CHIMERA_KBUILD_LDFLAGS"
           } | tee "$ABS_LOG/build-flags.txt"
+
 
       # ── 18b. Verify KCFLAGS actually reached the build unmodified ───────────
       - name: Verify build identity and KCFLAGS
@@ -1794,17 +1801,17 @@ jobs:
         run: |
           set -Eeuo pipefail
 
-          [[ -n "$KCFLAGS" ]] || { echo "FATAL: KCFLAGS is empty" >&2; exit 1; }
+          [[ -n "$CHIMERA_KCFLAGS" ]] || { echo "FATAL: KCFLAGS is empty" >&2; exit 1; }
           [[ -n "$KCFLAGS_HASH" ]] || { echo "FATAL: KCFLAGS_HASH is empty" >&2; exit 1; }
-
-          ACTUAL_HASH="$(printf '%s\n' "$KCFLAGS" | sha256sum | cut -d' ' -f1)"
-
+          
+          ACTUAL_HASH="$(printf '%s\n' "$CHIMERA_KCFLAGS" | sha256sum | cut -d' ' -f1)"
+          
           if [[ "$ACTUAL_HASH" != "$KCFLAGS_HASH" ]]; then
             echo "FATAL: KCFLAGS hash mismatch (expected $KCFLAGS_HASH, got $ACTUAL_HASH)" >&2
             exit 1
           fi
-
-          grep -Fq "KCFLAGS: $KCFLAGS" "$ABS_LOG/build-flags.txt" || {
+          
+          grep -Fq "KCFLAGS: $CHIMERA_KCFLAGS" "$ABS_LOG/build-flags.txt" || {
             echo "FATAL: build log does not contain the expected KCFLAGS" >&2
             exit 1
           }
@@ -1886,7 +1893,7 @@ jobs:
 
           [[ "$FAIL" -eq 0 ]] || exit 1
 
-      # ── 20. Assemble legacy Samsung dtb.img ──────────────────────────────────
+# ── 20. Assemble legacy Samsung dtb.img ──────────────────────────────────
       - name: Assemble dtb.img from star2lte device DTBs
         if: ${{ inputs.dry_run != true }}
         working-directory: ${{ env.KERNEL_DIR }}
@@ -2042,8 +2049,8 @@ jobs:
           #
           # Build:
           #   Timestamp:   ${KBUILD_BUILD_TIMESTAMP}
-          #   KCFLAGS:     ${KCFLAGS}
-          #   KBUILD_LDFLAGS: ${KBUILD_LDFLAGS}
+          #   KCFLAGS:     ${CHIMERA_KCFLAGS}
+          #   KBUILD_LDFLAGS: ${CHIMERA_KBUILD_LDFLAGS}
           #   KCFLAGS SHA: ${KCFLAGS_HASH}
           #   Identity:    ${KERNEL_IDENTITY}
           #
@@ -2166,8 +2173,8 @@ jobs:
               "device": "${KERNEL_DEVICE}",
               "platform": "${KERNEL_PLATFORM}",
               "uname_preview": "${UNAME_PREVIEW}",
-              "kcflags": "${KCFLAGS}",
-              "kbuild_ldflags": "${KBUILD_LDFLAGS}",
+              "kcflags": "${CHIMERA_KCFLAGS}",
+              "kbuild_ldflags": "${CHIMERA_KBUILD_LDFLAGS}",
               "kcflags_sha256": "${KCFLAGS_HASH}",
               "identity_string": "${KERNEL_IDENTITY}"
             },
@@ -2193,31 +2200,31 @@ jobs:
         id: package-anykernel
         run: |
           set -Eeuo pipefail
-      
+          
           ART_DIR="$GITHUB_WORKSPACE/artifacts"
           AK3_DIR="${AK3_DIR:?AK3_DIR not set}"
-      
+          
           [[ -d "$AK3_DIR" ]] || {
             echo "FATAL: AnyKernel3 directory not found at $AK3_DIR" >&2
             exit 1
           }
-      
+          
           [[ -f "$GITHUB_WORKSPACE/anykernel.sh" ]] || {
             echo "FATAL: anykernel.sh not found at repo root" >&2
             exit 1
           }
-      
+          
           cp "$GITHUB_WORKSPACE/anykernel.sh" "$AK3_DIR/anykernel.sh"
-      
+          
           ZIP_NAME="${BUILD_TAG}-AnyKernel3.zip"
           ZIP_PATH="$ART_DIR/$ZIP_NAME"
-      
+          
           rm -f "$AK3_DIR/Image" "$AK3_DIR/dtb" "$AK3_DIR/Image.gz-dtb" "$ZIP_PATH"
-      
+          
           COMBINED="$ABS_OUT/arch/arm64/boot/Image.gz-dtb"
           SPLIT_IMAGE="$ART_DIR/Image"
           SPLIT_DTB="$ART_DIR/dtb"
-      
+          
           if [[ -f "$COMBINED" ]]; then
             echo "Found combined kernel payload: $COMBINED"
             cp "$COMBINED" "$AK3_DIR/Image.gz-dtb"
@@ -2225,7 +2232,7 @@ jobs:
           elif [[ -f "$SPLIT_IMAGE" ]]; then
             echo "Found split kernel payload: $SPLIT_IMAGE"
             cp "$SPLIT_IMAGE" "$AK3_DIR/Image"
-      
+          
             if [[ -f "$SPLIT_DTB" ]]; then
               cp "$SPLIT_DTB" "$AK3_DIR/dtb"
               echo "ak3_kernel_payload=Image + dtb" >> "$GITHUB_OUTPUT"
@@ -2240,14 +2247,14 @@ jobs:
             echo "  - $SPLIT_IMAGE" >&2
             exit 1
           fi
-      
+          
           ( cd "$AK3_DIR" && zip -r9 "$ZIP_PATH" . -x ".git/*" ".github/*" )
-      
+          
           [[ -s "$ZIP_PATH" ]] || {
             echo "FATAL: $ZIP_PATH was not created or is empty" >&2
             exit 1
           }
-      
+          
           echo "AnyKernel3 zip: $ZIP_PATH ($(stat -c%s "$ZIP_PATH") bytes)"
           echo "anykernel_zip_path=$ZIP_PATH" >> "$GITHUB_OUTPUT"
     
@@ -2313,8 +2320,8 @@ jobs:
             | Final config SHA-256 | `${{ env.FINAL_CONFIG_HASH }}` |
             | Kernel identity | `${{ env.KERNEL_IDENTITY }}` |
             | Kernel release (expected / actual) | `${{ env.KERNEL_RELEASE }}` / `${{ env.ACTUAL_KERNEL_RELEASE }}` |
-            | KCFLAGS | `${{ env.KCFLAGS }}` |
-            | KBUILD_LDFLAGS | `${{ env.KBUILD_LDFLAGS }}` |
+            | KCFLAGS | `${{ env.CHIMERA_KCFLAGS }}` |
+            | KBUILD_LDFLAGS | `${{ env.CHIMERA_KBUILD_LDFLAGS }}` |
             | KCFLAGS SHA-256 | `${{ env.KCFLAGS_HASH }}` |
             | uname | `${{ env.UNAME_PREVIEW }}` |
 
