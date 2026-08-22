@@ -502,10 +502,10 @@ on:
         default: cm9
 
       toolchain:
-        description: "Toolchain: llvm22/llvm21/llvm20/aosp22/aosp21/aosp20/aosp19/neutron19/neutron23/neutron24/zyc_stable"
+        description: "Toolchain: llvm22/llvm21/llvm20/aosp22/aosp21/aosp20/aosp19/neutron19/neutron23/neutron24/zyc_stable/proton"
         required: true
         type: choice
-        options: [llvm22, llvm21, llvm20, aosp22, aosp21, aosp20, aosp19, neutron19, neutron23, neutron24, zyc_stable]
+        options: [llvm22, llvm21, llvm20, aosp22, aosp21, aosp20, aosp19, neutron19, neutron23, neutron24, zyc_stable, proton]
         default: llvm22
 
       dry_run:
@@ -668,7 +668,7 @@ jobs:
             *) echo "FATAL: profile must be 'cm9' or 'cm9e', got '${{ inputs.profile }}'" >&2; FAIL=1 ;;
           esac
           case "${{ inputs.toolchain }}" in
-            llvm22|llvm21|llvm20|aosp22|aosp21|aosp20|aosp19|neutron19|neutron23|neutron24|zyc_stable) : ;;
+            llvm22|llvm21|llvm20|aosp22|aosp21|aosp20|aosp19|neutron19|neutron23|neutron24|zyc_stable|proton) : ;;
             *) echo "FATAL: unsupported toolchain '${{ inputs.toolchain }}'" >&2; FAIL=1 ;;
           esac
           # base_ref / ksu_commit must be exact 40-hex commit SHAs — this
@@ -1509,6 +1509,17 @@ jobs:
                 "https://raw.githubusercontent.com/ZyCromerZ/Clang/refs/heads/19.0.0git-20240705/Clang-main-link.txt" \
                 || true)
               ;;
+            proton)
+              # Proton Clang is not release-tarball distributed — prebuilt
+              # clang/binutils binaries are committed directly to the
+              # `master` branch (verified: bin/clang, llvm-nm, llvm-ar,
+              # llvm-objcopy, llvm-strip, ld.lld all present at that path).
+              # TC_ARCHIVE_FMT=git signals "Download and extract toolchain"
+              # to git-clone instead of aria2c+tar.
+              TC_URL="https://github.com/kdrag0n/proton-clang.git"
+              TC_ARCHIVE_FMT="git"
+              TC_CACHE_KEY="proton-clang-master-ubuntu-24.04-v1"
+              ;;
             *)
               echo \
                 "ERROR: unsupported toolchain '$TOOLCHAIN'" \
@@ -1537,45 +1548,62 @@ jobs:
         if: steps.tc-cache.outputs.cache-hit != 'true'
         run: |
           set -Eeuo pipefail
-          ARCHIVE="/tmp/clang_archive"
-          if [[ -z "$TC_URL" ]]; then
-            echo "FATAL: TC_URL is empty (zyc_stable's dynamic link lookup may have failed upstream)" >&2
-            exit 1
-          fi
-          aria2c -x 16 -s 16 -k 1M -c \
-            --max-tries=5 \
-            --retry-wait=5 \
-            --timeout=60 \
-            --dir="/tmp" \
-            --out="clang_archive" \
-            "$TC_URL"
-          if [[ ! -s "$ARCHIVE" ]]; then
-            echo "FATAL: aria2c failed to download the toolchain archive, or it is empty." >&2
-            exit 1
-          fi
           rm -rf "$ABS_TC"
           mkdir -p "$ABS_TC"
-          case "$TC_ARCHIVE_FMT" in
-            tar.gz|tar)
-              tar -C "$ABS_TC" -xzf "$ARCHIVE"
-              ;;
-            tar.xz)
-              tar -C "$ABS_TC" -xJf "$ARCHIVE"
-              ;;
-            tar.zst)
-              zstd -d "$ARCHIVE" -o /tmp/clang.tar --force
-              tar -C "$ABS_TC" -xf /tmp/clang.tar
-              ;;
-            *)
-              echo "FATAL: unrecognized TC_ARCHIVE_FMT '$TC_ARCHIVE_FMT' — cannot extract" >&2
+
+          if [[ "$TC_ARCHIVE_FMT" == "git" ]]; then
+            # Proton Clang (and any future git-tree-distributed toolchain):
+            # shallow clone is the only supported fetch method — there is
+            # no per-release archive endpoint to aria2c against, since the
+            # prebuilt binaries are committed directly to the branch.
+            # --single-branch avoids pulling unrelated refs; .git is
+            # stripped afterward so it isn't cached/uploaded.
+            [[ -n "$TC_URL" ]] || {
+              echo "FATAL: TC_URL is empty for git-based toolchain fetch" >&2
               exit 1
-              ;;
-          esac
+            }
+            git clone --depth=1 --single-branch "$TC_URL" "$ABS_TC"
+            rm -rf "$ABS_TC/.git"
+          else
+            ARCHIVE="/tmp/clang_archive"
+            if [[ -z "$TC_URL" ]]; then
+              echo "FATAL: TC_URL is empty (zyc_stable's dynamic link lookup may have failed upstream)" >&2
+              exit 1
+            fi
+            aria2c -x 16 -s 16 -k 1M -c \
+              --max-tries=5 \
+              --retry-wait=5 \
+              --timeout=60 \
+              --dir="/tmp" \
+              --out="clang_archive" \
+              "$TC_URL"
+            if [[ ! -s "$ARCHIVE" ]]; then
+              echo "FATAL: aria2c failed to download the toolchain archive, or it is empty." >&2
+              exit 1
+            fi
+            case "$TC_ARCHIVE_FMT" in
+              tar.gz|tar)
+                tar -C "$ABS_TC" -xzf "$ARCHIVE"
+                ;;
+              tar.xz)
+                tar -C "$ABS_TC" -xJf "$ARCHIVE"
+                ;;
+              tar.zst)
+                zstd -d "$ARCHIVE" -o /tmp/clang.tar --force
+                tar -C "$ABS_TC" -xf /tmp/clang.tar
+                ;;
+              *)
+                echo "FATAL: unrecognized TC_ARCHIVE_FMT '$TC_ARCHIVE_FMT' — cannot extract" >&2
+                exit 1
+                ;;
+            esac
+          fi
+
           if [[ -z "$(find "$ABS_TC" -type f -print -quit)" ]]; then
-            echo "FATAL: extraction reported success but $ABS_TC contains no files" >&2
+            echo "FATAL: extraction/clone reported success but $ABS_TC contains no files" >&2
             exit 1
           fi
-          echo "Toolchain archive extracted: $(find "$ABS_TC" -type f | wc -l) file(s)"
+          echo "Toolchain ready: $(find "$ABS_TC" -type f | wc -l) file(s)"
       - name: Configure toolchain PATH
         run: |
           set -Eeuo pipefail
