@@ -1464,6 +1464,15 @@ jobs:
           TC_CACHE_KEY=""
           TC_LLVM_IAS="1"
           TC_USE_FULL_LLVM="true"
+          # Empty by default for every toolchain. Only overridden below for
+          # toolchains that are independently known to need it — currently
+          # just proton (bundled ~2021-era binutils `ld` that predates
+          # glibc RELR/.relr.dyn support on ubuntu-24.04 runners, causing
+          # host-tool link failures in fixdep/resolve_btfids). llvm20-22,
+          # aosp19-22, neutron19/23/24, and zyc_stable have not shown this
+          # failure, so they are deliberately left unmodified rather than
+          # applying the workaround everywhere on spec.
+          TC_HOSTLDFLAGS=""
           case "$TOOLCHAIN" in
             aosp19)
               TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/f60b8b55282f002f594f452ce22dfd6cf1fd7e3c/clang-r596125.tar.gz"
@@ -1527,6 +1536,14 @@ jobs:
               TC_URL="https://github.com/kdrag0n/proton-clang.git"
               TC_ARCHIVE_FMT="git"
               TC_CACHE_KEY="proton-clang-master-ubuntu-24.04-v1"
+              # See TC_HOSTLDFLAGS comment above — forces host-tool
+              # (HOSTCC) linking through this toolchain's own ld.lld
+              # instead of its bundled old GNU ld, which cannot parse
+              # SHT_RELR (.relr.dyn) sections present in the runner's
+              # glibc. Confirmed via a real failed run: fixdep and
+              # tools/bpf/resolve_btfids both died with "unknown type
+              # [0x13] section `.relr.dyn'" / "cannot find libc.so.6".
+              TC_HOSTLDFLAGS="-fuse-ld=lld"
               ;;
             *)
               echo \
@@ -1541,6 +1558,7 @@ jobs:
             echo "TC_CACHE_KEY=$TC_CACHE_KEY"
             echo "TC_LLVM_IAS=$TC_LLVM_IAS"
             echo "TC_USE_FULL_LLVM=$TC_USE_FULL_LLVM"
+            echo "TC_HOSTLDFLAGS=$TC_HOSTLDFLAGS"
           } >> "$GITHUB_ENV"
           echo \
             "TC_CACHE_KEY=$TC_CACHE_KEY" \
@@ -1677,6 +1695,7 @@ jobs:
             CC=clang \
             LLVM=1 \
             LLVM_IAS=1 \
+            HOSTLDFLAGS="$TC_HOSTLDFLAGS" \
             LD=ld.lld \
             AR=llvm-ar \
             NM=llvm-nm \
@@ -1727,6 +1746,7 @@ jobs:
             "CC=clang"
             "LLVM=1"
             "LLVM_IAS=1"
+            "HOSTLDFLAGS=${TC_HOSTLDFLAGS}"
             "LD=ld.lld"
             "AR=llvm-ar"
             "NM=llvm-nm"
@@ -1922,6 +1942,7 @@ jobs:
               CC=clang \
               LLVM=1 \
               LLVM_IAS=1 \
+              HOSTLDFLAGS="$TC_HOSTLDFLAGS" \
               kernelrelease \
               | tail -n1
           )"
