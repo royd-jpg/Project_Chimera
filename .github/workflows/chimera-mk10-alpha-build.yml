@@ -377,18 +377,17 @@ jobs:
           set -Eeuo pipefail
           find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
           echo "Workspace clean: $(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 | wc -l) entries remain"
-      # ── 0c. Prepare workspace directories (moved up from step 4 — see
+      # ── 0c. Export workspace path env vars (moved up from step 4 — see
       #        v.20260824a note at top of file: ABS_LOG/ABS_OUT/ABS_KERNEL/
-      #        ABS_TC must exist in $GITHUB_ENV before ANY step that can fail,
-      #        because the final "Upload build logs" step runs on always()
-      #        and previously globbed from filesystem root when this hadn't
-      #        run yet. Only depends on $GITHUB_WORKSPACE, which is always
-      #        defined. ────────────────────────────────────────────────────
-      - name: Prepare workspace directories
+      #        ABS_TC must exist in $GITHUB_ENV before ANY step that can
+      #        fail, because the final "Upload build logs" step runs on
+      #        always() and previously globbed from filesystem root when
+      #        this hadn't run yet. This step ONLY writes $GITHUB_ENV — no
+      #        mkdir here. Only depends on $GITHUB_WORKSPACE, which is
+      #        always defined. ─────────────────────────────────────────────
+      - name: Export workspace path env vars
         run: |
           set -Eeuo pipefail
-          mkdir -p "$GITHUB_WORKSPACE/$LOG_DIR"
-          mkdir -p "$GITHUB_WORKSPACE/$OUT_DIR"
           echo "ABS_LOG=$GITHUB_WORKSPACE/$LOG_DIR" >> "$GITHUB_ENV"
           echo "ABS_OUT=$GITHUB_WORKSPACE/$OUT_DIR" >> "$GITHUB_ENV"
           echo "ABS_KERNEL=$GITHUB_WORKSPACE/$KERNEL_DIR" >> "$GITHUB_ENV"
@@ -466,6 +465,27 @@ jobs:
           if [[ "$ACTUAL_REF" != "$CHIMERA_REF" && "$ACTUAL_REF" != "DETACHED" ]]; then
             echo "::warning::Checked-out branch '$ACTUAL_REF' does not match the documented CHIMERA_REF '$CHIMERA_REF'. Build will proceed; verify this is intentional (e.g. a feature/PR dispatch) before using do_release=true."
           fi
+      # ── 2b. Create workspace directories (v.20260824b — see fix-log below).
+      #        MUST run here, after "Checkout Project_Chimera", not before:
+      #        actions/checkout with path:"." unconditionally deletes
+      #        existing workspace-root contents before a fresh checkout
+      #        (confirmed by the original failed run's own log line
+      #        "Deleting the contents of '.../Project_Chimera'"). Creating
+      #        $ABS_LOG/$ABS_OUT any earlier meant this checkout step wiped
+      #        them out again immediately, which is exactly what broke
+      #        "Resolve build identity" writing to $ABS_LOG/inputs.env
+      #        ("No such file or directory") in the previous run. The
+      #        gavdoc38 base checkout (step 3) only touches the kernel/
+      #        subdirectory, so it cannot repeat this problem — safe to
+      #        create these dirs now, before it runs. ─────────────────────
+      - name: Create workspace directories
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$ABS_LOG"
+          mkdir -p "$ABS_OUT"
+          echo "OK: created $ABS_LOG"
+          echo "OK: created $ABS_OUT"
+
       - name: Verify required repo-local files
         run: |
           set -Eeuo pipefail
@@ -541,7 +561,8 @@ jobs:
           fi
           echo "NoMount pinned at: $ACTUAL"
       # ── 4. Workspace ─────────────────────────────────────────────────────────
-      # (moved to step 0c — see v.20260824a note at top of file)
+      # (env vars exported in step 0c, directories created in step 2b —
+      # see v.20260824a/b notes at top of file)
       - name: Resolve build identity
         run: |
           set -Eeuo pipefail
