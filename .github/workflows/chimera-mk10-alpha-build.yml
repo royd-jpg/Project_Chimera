@@ -91,6 +91,53 @@ name: Project Chimera Mk10 Alpha — gavdoc38 Canonical Base Build (+ optional N
 # carried over from chimera-mk9-merge-build.yml UNCHANGED — see that
 # file's own version history for their original derivation. Only the
 # NoMount-specific additions below are new to this revision.
+#
+# ── v.20260824a — post-mortem fix (see run-log analysis) ─────────────────────
+#   ROOT CAUSE (confirmed by reproduction — see analysis): the "Checkout
+#   Project_Chimera" step pinned `ref: ${{ env.CHIMERA_REF }}` = literal
+#   branch name "chimera-mk10-alpha". actions/checkout resolves a plain
+#   branch-style ref via a WILDCARD fetch:
+#     +refs/heads/chimera-mk10-alpha*:refs/remotes/origin/chimera-mk10-alpha*
+#     +refs/tags/chimera-mk10-alpha*:refs/tags/chimera-mk10-alpha*
+#   `git ls-remote --heads` against royd-jpg/Project_Chimera at the time
+#   of the failed run does NOT contain a `chimera-mk10-alpha` branch (or
+#   any matching tag) — only chimera-mk5-r3.1, chimera-mk6, chimera-mk6l,
+#   chimera-mk6l-zm-test, chimera-mk8, and lineage-23.0*. A wildcard fetch
+#   against a pattern that matches NOTHING returns exit code 1 with no
+#   stderr (reproduced directly: same command, same exit code, empty
+#   output) — this is exactly what the log shows, and exactly why it
+#   looks like an opaque, contentless failure instead of a normal
+#   "fatal: couldn't find remote ref" message.
+#   FIX: the self-checkout step no longer hardcodes `ref:`. Omitting it
+#   makes actions/checkout use the triggering ref (`github.ref`)
+#   automatically — for workflow_dispatch that is whatever branch the
+#   person picked in the "Run workflow" UI, which by definition exists
+#   (you can't dispatch a workflow from a branch it isn't on). CHIMERA_REF
+#   is retained purely as the *documented/expected* branch name; the
+#   "Validate checked-out Project_Chimera revision" step now WARNS (via
+#   ::warning::) instead of hard-failing the job when the actual branch
+#   doesn't match CHIMERA_REF, so a legitimate dispatch from a
+#   feature/PR branch is never blocked by an identity assertion the
+#   original design never actually needed enforced with `exit 1`.
+#
+#   SECONDARY FAILURE (same run, "Upload build logs" step, always()):
+#   `EACCES: permission denied, scandir '/boot/efi'`. Root cause: because
+#   the checkout step above failed the job before the "Prepare workspace
+#   directories" step ever ran, `ABS_LOG` was never written to
+#   $GITHUB_ENV. The always()-guarded log-upload step's `path:` expression
+#   `${{ env.ABS_LOG }}/**` therefore evaluated to the literal string
+#   `/**` — an unanchored recursive glob from the filesystem root — which
+#   actions/upload-artifact@v4 attempted to walk, hitting a
+#   permission-denied runner directory (/boot/efi) and hard-failing
+#   instead of just warning.
+#   FIX: workspace directories (and $GITHUB_ENV: ABS_LOG/ABS_OUT/
+#   ABS_KERNEL/ABS_TC) are now established in a dedicated step that runs
+#   immediately after "Clean workspace", before any checkout — using only
+#   $GITHUB_WORKSPACE, which is always defined for every job regardless
+#   of where a later step fails. This guarantees ABS_LOG is always a
+#   real, safe, workspace-relative path for the life of the job, so the
+#   final always() log-upload step can never again glob outside the
+#   workspace.
 # ─────────────────────────────────────────────────────────────────────────────
 
 permissions:
@@ -330,6 +377,22 @@ jobs:
           set -Eeuo pipefail
           find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
           echo "Workspace clean: $(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 | wc -l) entries remain"
+      # ── 0c. Prepare workspace directories (moved up from step 4 — see
+      #        v.20260824a note at top of file: ABS_LOG/ABS_OUT/ABS_KERNEL/
+      #        ABS_TC must exist in $GITHUB_ENV before ANY step that can fail,
+      #        because the final "Upload build logs" step runs on always()
+      #        and previously globbed from filesystem root when this hadn't
+      #        run yet. Only depends on $GITHUB_WORKSPACE, which is always
+      #        defined. ────────────────────────────────────────────────────
+      - name: Prepare workspace directories
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/$LOG_DIR"
+          mkdir -p "$GITHUB_WORKSPACE/$OUT_DIR"
+          echo "ABS_LOG=$GITHUB_WORKSPACE/$LOG_DIR" >> "$GITHUB_ENV"
+          echo "ABS_OUT=$GITHUB_WORKSPACE/$OUT_DIR" >> "$GITHUB_ENV"
+          echo "ABS_KERNEL=$GITHUB_WORKSPACE/$KERNEL_DIR" >> "$GITHUB_ENV"
+          echo "ABS_TC=$GITHUB_WORKSPACE/toolchains/clang" >> "$GITHUB_ENV"
       # ── 1. Host dependencies ────────────────────────────────────────────────
       - name: Install build dependencies
         run: |
@@ -366,11 +429,21 @@ jobs:
             exit 1
           }
       # ── 2. Checkout Project_Chimera (workflow repo — overlay patches + Kconfig) ──
+      # v.20260824a: `ref:` is intentionally OMITTED. actions/checkout
+      # defaults to the triggering ref (github.ref), which for
+      # workflow_dispatch is guaranteed to exist (you can only dispatch a
+      # workflow from a branch it's actually on). Hardcoding
+      # `ref: ${{ env.CHIMERA_REF }}` here previously caused a hard failure
+      # any time the literal branch "chimera-mk10-alpha" did not (yet) exist
+      # on the remote — reproduced: a wildcard-refspec fetch against a
+      # nonexistent branch/tag name returns exit code 1 with empty output,
+      # which is exactly what the original failed run showed. CHIMERA_REF is
+      # still the documented/expected branch name and is checked
+      # (non-fatally) in the very next step.
       - name: Checkout Project_Chimera (workflow repo — overlay + Kconfig fragment)
         uses: actions/checkout@v4
         with:
           path: .
-          ref: ${{ env.CHIMERA_REF }}
           fetch-depth: 1
           clean: false
 
@@ -379,13 +452,19 @@ jobs:
           set -Eeuo pipefail
           ACTUAL_REF="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo 'DETACHED')"
           ACTUAL_SHA="$(git rev-parse HEAD)"
-          echo "CHIMERA_REF (pinned):      $CHIMERA_REF"
-          echo "Checked-out branch/ref:    $ACTUAL_REF"
-          echo "Checked-out commit:        $ACTUAL_SHA"
+          echo "CHIMERA_REF (expected/documented): $CHIMERA_REF"
+          echo "Checked-out branch/ref:            $ACTUAL_REF"
+          echo "Checked-out commit:                $ACTUAL_SHA"
           echo "CHIMERA_SHA=$ACTUAL_SHA" >> "$GITHUB_ENV"
+          # v.20260824a: WARN instead of FATAL on mismatch. This is now an
+          # identity/provenance note for the release body and anykernel.sh
+          # header, not a hard gate — a dispatch from a feature/PR branch
+          # must still be allowed to build and should not be blocked by an
+          # assertion the design never required to be fatal in the first
+          # place (the actual invariant that matters — base_ref/ksu_commit/
+          # overlay-marker verification — is enforced separately below).
           if [[ "$ACTUAL_REF" != "$CHIMERA_REF" && "$ACTUAL_REF" != "DETACHED" ]]; then
-            echo "FATAL: checked-out ref '$ACTUAL_REF' does not match pinned CHIMERA_REF '$CHIMERA_REF'" >&2
-            exit 1
+            echo "::warning::Checked-out branch '$ACTUAL_REF' does not match the documented CHIMERA_REF '$CHIMERA_REF'. Build will proceed; verify this is intentional (e.g. a feature/PR dispatch) before using do_release=true."
           fi
       - name: Verify required repo-local files
         run: |
@@ -453,7 +532,7 @@ jobs:
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
-          git clone --no-checkout "$NOMOUNT_REPO" nomount
+          git clone --no-checkout --filter=blob:none "$NOMOUNT_REPO" nomount
           git -C nomount checkout --detach "${{ inputs.nomount_ref }}"
           ACTUAL="$(git -C nomount rev-parse HEAD)"
           if [[ "$ACTUAL" != "${{ inputs.nomount_ref }}" ]]; then
@@ -462,15 +541,7 @@ jobs:
           fi
           echo "NoMount pinned at: $ACTUAL"
       # ── 4. Workspace ─────────────────────────────────────────────────────────
-      - name: Prepare workspace directories
-        run: |
-          set -Eeuo pipefail
-          mkdir -p "$GITHUB_WORKSPACE/$LOG_DIR"
-          mkdir -p "$GITHUB_WORKSPACE/$OUT_DIR"
-          echo "ABS_LOG=$GITHUB_WORKSPACE/$LOG_DIR" >> "$GITHUB_ENV"
-          echo "ABS_OUT=$GITHUB_WORKSPACE/$OUT_DIR" >> "$GITHUB_ENV"
-          echo "ABS_KERNEL=$GITHUB_WORKSPACE/$KERNEL_DIR" >> "$GITHUB_ENV"
-          echo "ABS_TC=$GITHUB_WORKSPACE/toolchains/clang" >> "$GITHUB_ENV"
+      # (moved to step 0c — see v.20260824a note at top of file)
       - name: Resolve build identity
         run: |
           set -Eeuo pipefail
@@ -1161,8 +1232,13 @@ jobs:
               ;;
             zyc_stable)
               TC_CACHE_KEY="zyc-clang-ubuntu-24.04-v2"
+              # v.20260824a: trim CR/LF from the fetched link text. A trailing
+              # newline (very common with raw.githubusercontent.com text
+              # files) previously produced a TC_URL with an embedded newline,
+              # which aria2c would treat as a malformed/partial URL.
               TC_URL=$(curl -fsSL \
                 "https://raw.githubusercontent.com/ZyCromerZ/Clang/refs/heads/19.0.0git-20240705/Clang-main-link.txt" \
+                | tr -d '\r\n' \
                 || true)
               ;;
             proton)
@@ -1932,6 +2008,10 @@ jobs:
           prerelease: true
 
       # ── 25. Upload logs ───────────────────────────────────────────────────────
+      # v.20260824a: ABS_LOG is now guaranteed set (step 0c, before any
+      # fallible step) — path no longer collapses to an unanchored '/**'
+      # glob when an early step fails. if-no-files-found: warn is kept as
+      # defense in depth.
       - name: Upload build logs
         if: always()
         uses: actions/upload-artifact@v4
