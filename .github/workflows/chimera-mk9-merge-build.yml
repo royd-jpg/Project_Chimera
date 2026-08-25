@@ -1475,8 +1475,9 @@ jobs:
           TC_HOSTLDFLAGS=""
           case "$TOOLCHAIN" in
             aosp19)
-              TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/f60b8b55282f002f594f452ce22dfd6cf1fd7e3c/clang-r596125.tar.gz"
-              TC_CACHE_KEY="aosp-clang-19-ubuntu-24.04-v2"
+              # Generates a tarball of the clang-r536225 directory directly from the android-15.0.0_r10 tag
+              TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-15.0.0_r10/clang-r536225.tar.gz"
+              TC_CACHE_KEY="aosp-clang-r536225-ubuntu-24.04-v2"
               ;;
             aosp20)
               TC_URL="https://gitlab.com/kei-space/clang/r547379/-/archive/master/r547379-master.tar.gz"
