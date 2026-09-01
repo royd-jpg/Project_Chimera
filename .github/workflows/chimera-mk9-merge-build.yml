@@ -542,7 +542,7 @@ on:
         description: "KernelSU-Next exact commit SHA (full 40-hex, pin; overrides submodule-pinned commit if different) — must be bumped together with base_ref, see fix-log item [I]"
         required: false
         type: string
-        default: "ffdff69a2cbea4378c09d915022fea9850a21696"
+        default: "93b5cf729382e0faae1d9c684edd0e2906fbc164"
 
       base_branch_hint:
         description: "Branch name to compare base_ref against for drift logging ONLY — never used as the actual checkout ref"
