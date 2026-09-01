@@ -588,7 +588,7 @@ on:
 
 env:
   CHIMERA_REPO: "https://github.com/royd-jpg/Project_Chimera.git"
-  CHIMERA_REF: "chimera-mk8"
+  CHIMERA_REF: "lineage-23.2-ksun3-susfs2"
 
   KERNEL_DIR: "kernel"
   OUT_DIR: "kernel-out"
