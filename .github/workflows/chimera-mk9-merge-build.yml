@@ -1274,186 +1274,7 @@ jobs:
           }
           echo
           echo "PASS: all Chimera overlay markers present"
-      # ── 12. Kconfig fragment normalization ───────────────────────────────────
-      - name: Validate Kconfig fragment
-        run: |
-          set -Eeuo pipefail
-          CFG="$GITHUB_WORKSPACE/chimera-ksu-susfs.cfg"
-          grep -q '^CONFIG_KSU=y$' "$CFG"
-          grep -q '^CONFIG_KSU_MANUAL_HOOK=y$' "$CFG"
-          grep -q '^CONFIG_KSU_SUSFS=y$' "$CFG"
-          # CONFIG_KSU_NON_KPROBE is not a real symbol (verified against
-          # KernelSU-Next kernel/Kconfig — see fix-log [E]); fail if it
-          # ever creeps back into the fragment.
-          if grep -q '^CONFIG_KSU_NON_KPROBE' "$CFG"; then
-            echo "FATAL: CONFIG_KSU_NON_KPROBE is not a valid KernelSU-Next symbol" >&2
-            echo "       Use CONFIG_KSU_MANUAL_HOOK=y instead." >&2
-            exit 1
-          fi
-          cat "$CFG"
-      # ── 13. Merge Kconfig ────────────────────────────────────────────────────
-      - name: Merge Kconfig fragment
-        working-directory: ${{ env.KERNEL_DIR }}
-        run: |
-          set -Eeuo pipefail
-          cp \
-            "$GITHUB_WORKSPACE/chimera-ksu-susfs.cfg" \
-            /tmp/chimera-ksu-susfs.cfg
-          cp \
-            "$GITHUB_WORKSPACE/chimera-device-specific.cfg" \
-            /tmp/chimera-device-specific.cfg
-          make \
-            O="$ABS_OUT" \
-            ARCH=arm64 \
-            CC=clang \
-            LLVM=1 \
-            LLVM_IAS=1 \
-            LD=ld.lld \
-            AR=llvm-ar \
-            NM=llvm-nm \
-            OBJCOPY=llvm-objcopy \
-            OBJDUMP=llvm-objdump \
-            STRIP=llvm-strip \
-            "$(basename "$DEFCONFIG")" \
-            | tee "$ABS_LOG/defconfig-base.log"
-          scripts/kconfig/merge_config.sh \
-            -m \
-            -O "$ABS_OUT" \
-            "$ABS_OUT/.config" \
-            /tmp/chimera-ksu-susfs.cfg \
-            /tmp/chimera-device-specific.cfg \
-            | tee "$ABS_LOG/merge-config.log"
-          make \
-            O="$ABS_OUT" \
-            ARCH=arm64 \
-            CC=clang \
-            LLVM=1 \
-            LLVM_IAS=1 \
-            LD=ld.lld \
-            AR=llvm-ar \
-            NM=llvm-nm \
-            OBJCOPY=llvm-objcopy \
-            OBJDUMP=llvm-objdump \
-            STRIP=llvm-strip \
-            olddefconfig \
-            | tee -a "$ABS_LOG/merge-config.log"
-      # ── 14. Force KernelSU hook mode after Kconfig resolution ─────────────
-      - name: Normalize KernelSU hook mode
-        working-directory: ${{ env.KERNEL_DIR }}
-        run: |
-          set -Eeuo pipefail
-          CFG="$ABS_OUT/.config"
-          echo "Forcing KernelSU manual hook mode"
-          if [[ -x scripts/config ]]; then
-            scripts/config \
-              --file "$CFG" \
-              -e CONFIG_KSU \
-              -e CONFIG_KSU_MANUAL_HOOK \
-              -d CONFIG_KSU_KPROBES_HOOK
-          else
-            echo "scripts/config unavailable, patching .config directly"
-            sed -i \
-              '/^CONFIG_KSU_KPROBES_HOOK=/d' \
-              "$CFG"
-            sed -i \
-              '/^# CONFIG_KSU_KPROBES_HOOK is not set$/d' \
-              "$CFG"
-            echo "CONFIG_KSU_KPROBES_HOOK=n" >> "$CFG"
-            grep -q '^CONFIG_KSU=y$' "$CFG" || \
-              echo "CONFIG_KSU=y" >> "$CFG"
-            grep -q '^CONFIG_KSU_MANUAL_HOOK=y$' "$CFG" || \
-              echo "CONFIG_KSU_MANUAL_HOOK=y" >> "$CFG"
-          fi
-          make \
-            O="$ABS_OUT" \
-            ARCH=arm64 \
-            CC=clang \
-            LLVM=1 \
-            LLVM_IAS=1 \
-            LD=ld.lld \
-            AR=llvm-ar \
-            NM=llvm-nm \
-            OBJCOPY=llvm-objcopy \
-            OBJDUMP=llvm-objdump \
-            STRIP=llvm-strip \
-            olddefconfig \
-            | tee -a "$ABS_LOG/merge-config.log"
-          echo
-          echo "========== Final KernelSU mode =========="
-          grep '^CONFIG_KSU' "$CFG" || true
-          if grep -q '^CONFIG_KSU_KPROBES_HOOK=y$' "$CFG"; then
-            echo "FATAL: CONFIG_KSU_KPROBES_HOOK still enabled"
-            exit 1
-          fi
-          if ! grep -q '^CONFIG_KSU_MANUAL_HOOK=y$' "$CFG"; then
-            echo "FATAL: CONFIG_KSU_MANUAL_HOOK missing"
-            exit 1
-          fi
-          echo "PASS: KernelSU manual hook mode enforced"
-          cp "$CFG" "$ABS_LOG/final.config"
-      # ── 14b. Security/config guard — forbidden Samsung restrictions, required KSU/SUSFS ──
-      - name: Guard pass — verify security restrictions disabled and KSU/SUSFS enabled
-        working-directory: ${{ env.KERNEL_DIR }}
-        run: |
-          set -Eeuo pipefail
-          CFG="$ABS_OUT/.config"
-          FORBIDDEN=(
-            CONFIG_RKP_KDP
-            CONFIG_UH_RKP
-            CONFIG_TIMA
-            CONFIG_TIMA_LKMAUTH
-            CONFIG_FIVE
-            CONFIG_SEC_RESTRICT_ROOTING
-            CONFIG_SEC_RESTRICT_SETUID
-            CONFIG_SECURITY_DEFEX
-            CONFIG_KNOX_KAP
-          )
-          FAIL=0
-          : > "$ABS_LOG/config-guard.log"
-          for sym in "${FORBIDDEN[@]}"; do
-            if grep -qE "^${sym}=y" "$CFG"; then
-              echo "FATAL: $sym=y" | tee -a "$ABS_LOG/config-guard.log"
-              FAIL=1
-            else
-              echo "OK: $sym disabled" | tee -a "$ABS_LOG/config-guard.log"
-            fi
-          done
-          REQUIRED=(
-            CONFIG_KSU
-            CONFIG_KSU_MANUAL_HOOK
-            CONFIG_KSU_SUSFS
-            CONFIG_KSU_SUSFS_SUS_PATH
-            CONFIG_KSU_SUSFS_SUS_MAP
-            CONFIG_KSU_SUSFS_SUS_KSTAT
-            CONFIG_HZ_300
-            # ROLLED BACK (Star Madera sound card) — CONFIG_MFD_MADERA /
-            # CONFIG_MFD_CS47L92 no longer enforced as required here. This
-            # only removes the guard's fail-if-missing check; it does NOT
-            # disable the codec config itself, which is set upstream in
-            # the base defconfig / chimera-device-specific.cfg / the
-            # overlay patch script (none of which this workflow file
-            # controls directly) — roll those back separately if the goal
-            # is to actually disable the codec, not just stop enforcing it.
-            # CONFIG_MFD_MADERA
-            # CONFIG_MFD_CS47L92
-            CONFIG_TCP_CONG_ADVANCED
-            CONFIG_TCP_CONG_BBR
-            CONFIG_TCP_CONG_CUBIC
-            CONFIG_DEFAULT_BBR
-            CONFIG_NET_SCHED
-            CONFIG_NET_SCH_FQ
-            CONFIG_NET_SCH_FQ_CODEL
-          )
-          for sym in "${REQUIRED[@]}"; do
-            if grep -qE "^${sym}=y" "$CFG"; then
-              echo "OK: $sym=y" | tee -a "$ABS_LOG/config-guard.log"
-            else
-              echo "FATAL: $sym is not enabled" | tee -a "$ABS_LOG/config-guard.log"
-              FAIL=1
-            fi
-          done
-          [[ "$FAIL" -eq 0 ]] || exit 1
-      # ── 15. Toolchain resolution ─────────────────────────────────────────────
+      # ── 11c. Toolchain resolution (MOVED — was step 15; must run before Kconfig steps 12-14b, which invoke `make CC=clang`) ─────────────────────────────────────────────
       - name: Resolve toolchain configuration
         id: tc-resolve
         run: |
@@ -1643,7 +1464,7 @@ jobs:
           chmod +x "$ACTUAL_BIN"/* 2>/dev/null || true
           # Expose it globally to all subsequent workflow steps
           echo "$ACTUAL_BIN" >> "$GITHUB_PATH"
-      # ── 15b. Validate compiler binaries/versions, capture real identity ──────
+      # ── 11d. Validate compiler binaries/versions, capture real identity ──────
       - name: Verify Toolchain and capture compiler identity
         run: |
           set -Eeuo pipefail
@@ -1675,6 +1496,185 @@ jobs:
             echo "$LLD_VERSION"
           } > "$ABS_LOG/toolchain-identity.txt"
           test -n "$PATH"
+      # ── 12. Kconfig fragment normalization ───────────────────────────────────
+      - name: Validate Kconfig fragment
+        run: |
+          set -Eeuo pipefail
+          CFG="$GITHUB_WORKSPACE/chimera-ksu-susfs.cfg"
+          grep -q '^CONFIG_KSU=y$' "$CFG"
+          grep -q '^CONFIG_KSU_MANUAL_HOOK=y$' "$CFG"
+          grep -q '^CONFIG_KSU_SUSFS=y$' "$CFG"
+          # CONFIG_KSU_NON_KPROBE is not a real symbol (verified against
+          # KernelSU-Next kernel/Kconfig — see fix-log [E]); fail if it
+          # ever creeps back into the fragment.
+          if grep -q '^CONFIG_KSU_NON_KPROBE' "$CFG"; then
+            echo "FATAL: CONFIG_KSU_NON_KPROBE is not a valid KernelSU-Next symbol" >&2
+            echo "       Use CONFIG_KSU_MANUAL_HOOK=y instead." >&2
+            exit 1
+          fi
+          cat "$CFG"
+      # ── 13. Merge Kconfig ────────────────────────────────────────────────────
+      - name: Merge Kconfig fragment
+        working-directory: ${{ env.KERNEL_DIR }}
+        run: |
+          set -Eeuo pipefail
+          cp \
+            "$GITHUB_WORKSPACE/chimera-ksu-susfs.cfg" \
+            /tmp/chimera-ksu-susfs.cfg
+          cp \
+            "$GITHUB_WORKSPACE/chimera-device-specific.cfg" \
+            /tmp/chimera-device-specific.cfg
+          make \
+            O="$ABS_OUT" \
+            ARCH=arm64 \
+            CC=clang \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            LD=ld.lld \
+            AR=llvm-ar \
+            NM=llvm-nm \
+            OBJCOPY=llvm-objcopy \
+            OBJDUMP=llvm-objdump \
+            STRIP=llvm-strip \
+            "$(basename "$DEFCONFIG")" \
+            | tee "$ABS_LOG/defconfig-base.log"
+          scripts/kconfig/merge_config.sh \
+            -m \
+            -O "$ABS_OUT" \
+            "$ABS_OUT/.config" \
+            /tmp/chimera-ksu-susfs.cfg \
+            /tmp/chimera-device-specific.cfg \
+            | tee "$ABS_LOG/merge-config.log"
+          make \
+            O="$ABS_OUT" \
+            ARCH=arm64 \
+            CC=clang \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            LD=ld.lld \
+            AR=llvm-ar \
+            NM=llvm-nm \
+            OBJCOPY=llvm-objcopy \
+            OBJDUMP=llvm-objdump \
+            STRIP=llvm-strip \
+            olddefconfig \
+            | tee -a "$ABS_LOG/merge-config.log"
+      # ── 14. Force KernelSU hook mode after Kconfig resolution ─────────────
+      - name: Normalize KernelSU hook mode
+        working-directory: ${{ env.KERNEL_DIR }}
+        run: |
+          set -Eeuo pipefail
+          CFG="$ABS_OUT/.config"
+          echo "Forcing KernelSU manual hook mode"
+          if [[ -x scripts/config ]]; then
+            scripts/config \
+              --file "$CFG" \
+              -e CONFIG_KSU \
+              -e CONFIG_KSU_MANUAL_HOOK \
+              -d CONFIG_KSU_KPROBES_HOOK
+          else
+            echo "scripts/config unavailable, patching .config directly"
+            sed -i \
+              '/^CONFIG_KSU_KPROBES_HOOK=/d' \
+              "$CFG"
+            sed -i \
+              '/^# CONFIG_KSU_KPROBES_HOOK is not set$/d' \
+              "$CFG"
+            echo "CONFIG_KSU_KPROBES_HOOK=n" >> "$CFG"
+            grep -q '^CONFIG_KSU=y$' "$CFG" || \
+              echo "CONFIG_KSU=y" >> "$CFG"
+            grep -q '^CONFIG_KSU_MANUAL_HOOK=y$' "$CFG" || \
+              echo "CONFIG_KSU_MANUAL_HOOK=y" >> "$CFG"
+          fi
+          make \
+            O="$ABS_OUT" \
+            ARCH=arm64 \
+            CC=clang \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            LD=ld.lld \
+            AR=llvm-ar \
+            NM=llvm-nm \
+            OBJCOPY=llvm-objcopy \
+            OBJDUMP=llvm-objdump \
+            STRIP=llvm-strip \
+            olddefconfig \
+            | tee -a "$ABS_LOG/merge-config.log"
+          echo
+          echo "========== Final KernelSU mode =========="
+          grep '^CONFIG_KSU' "$CFG" || true
+          if grep -q '^CONFIG_KSU_KPROBES_HOOK=y$' "$CFG"; then
+            echo "FATAL: CONFIG_KSU_KPROBES_HOOK still enabled"
+            exit 1
+          fi
+          if ! grep -q '^CONFIG_KSU_MANUAL_HOOK=y$' "$CFG"; then
+            echo "FATAL: CONFIG_KSU_MANUAL_HOOK missing"
+            exit 1
+          fi
+          echo "PASS: KernelSU manual hook mode enforced"
+          cp "$CFG" "$ABS_LOG/final.config"
+      # ── 14b. Security/config guard — forbidden Samsung restrictions, required KSU/SUSFS ──
+      - name: Guard pass — verify security restrictions disabled and KSU/SUSFS enabled
+        working-directory: ${{ env.KERNEL_DIR }}
+        run: |
+          set -Eeuo pipefail
+          CFG="$ABS_OUT/.config"
+          FORBIDDEN=(
+            CONFIG_RKP_KDP
+            CONFIG_UH_RKP
+            CONFIG_TIMA
+            CONFIG_TIMA_LKMAUTH
+            CONFIG_FIVE
+            CONFIG_SEC_RESTRICT_ROOTING
+            CONFIG_SEC_RESTRICT_SETUID
+            CONFIG_SECURITY_DEFEX
+            CONFIG_KNOX_KAP
+          )
+          FAIL=0
+          : > "$ABS_LOG/config-guard.log"
+          for sym in "${FORBIDDEN[@]}"; do
+            if grep -qE "^${sym}=y" "$CFG"; then
+              echo "FATAL: $sym=y" | tee -a "$ABS_LOG/config-guard.log"
+              FAIL=1
+            else
+              echo "OK: $sym disabled" | tee -a "$ABS_LOG/config-guard.log"
+            fi
+          done
+          REQUIRED=(
+            CONFIG_KSU
+            CONFIG_KSU_MANUAL_HOOK
+            CONFIG_KSU_SUSFS
+            CONFIG_KSU_SUSFS_SUS_PATH
+            CONFIG_KSU_SUSFS_SUS_MAP
+            CONFIG_KSU_SUSFS_SUS_KSTAT
+            CONFIG_HZ_300
+            # ROLLED BACK (Star Madera sound card) — CONFIG_MFD_MADERA /
+            # CONFIG_MFD_CS47L92 no longer enforced as required here. This
+            # only removes the guard's fail-if-missing check; it does NOT
+            # disable the codec config itself, which is set upstream in
+            # the base defconfig / chimera-device-specific.cfg / the
+            # overlay patch script (none of which this workflow file
+            # controls directly) — roll those back separately if the goal
+            # is to actually disable the codec, not just stop enforcing it.
+            # CONFIG_MFD_MADERA
+            # CONFIG_MFD_CS47L92
+            CONFIG_TCP_CONG_ADVANCED
+            CONFIG_TCP_CONG_BBR
+            CONFIG_TCP_CONG_CUBIC
+            CONFIG_DEFAULT_BBR
+            CONFIG_NET_SCHED
+            CONFIG_NET_SCH_FQ
+            CONFIG_NET_SCH_FQ_CODEL
+          )
+          for sym in "${REQUIRED[@]}"; do
+            if grep -qE "^${sym}=y" "$CFG"; then
+              echo "OK: $sym=y" | tee -a "$ABS_LOG/config-guard.log"
+            else
+              echo "FATAL: $sym is not enabled" | tee -a "$ABS_LOG/config-guard.log"
+              FAIL=1
+            fi
+          done
+          [[ "$FAIL" -eq 0 ]] || exit 1
       # ── 16. ccache ───────────────────────────────────────────────────────────
       - name: Set up ccache
         uses: hendrikmuhs/ccache-action@v1.2
@@ -1729,7 +1729,7 @@ jobs:
           KBUILD_BUILD_HOST: ${{ env.BUILD_HOST }}
           KBUILD_BUILD_VERSION: ${{ env.BUILD_VERSION }}
           KBUILD_BUILD_TIMESTAMP: ${{ env.KBUILD_BUILD_TIMESTAMP }}
-          CC: clang
+          CC: ccache clang
           LD: ld.lld
           AR: llvm-ar
           NM: llvm-nm
@@ -1744,7 +1744,7 @@ jobs:
           MAKE_ARGS=(
             "O=$ABS_OUT"
             "ARCH=arm64"
-            "CC=clang"
+            "CC=ccache clang"
             "LLVM=1"
             "LLVM_IAS=1"
             "HOSTLDFLAGS=${TC_HOSTLDFLAGS}"
@@ -2176,7 +2176,16 @@ jobs:
           
           COMBINED="$ABS_OUT/arch/arm64/boot/Image.gz-dtb"
           SPLIT_IMAGE="$ART_DIR/Image"
-          SPLIT_DTB="$ART_DIR/dtb"
+          # Source is dtb.img (built by step 20 "Assemble dtb.img from
+          # star2lte device DTBs") — there is no file literally named
+          # "dtb" anywhere in $ART_DIR. Destination inside the AK3 zip is
+          # still named "dtb" (no extension), which is what
+          # tools/ak3-core.sh's dump_boot/write_boot expects for a
+          # legacy raw-DTB device. Previously this pointed at
+          # "$ART_DIR/dtb", which never existed, so the WARN/Image-only
+          # branch below fired unconditionally and every flashable zip
+          # shipped without a DTB.
+          SPLIT_DTB="$ART_DIR/dtb.img"
           
           if [[ -f "$COMBINED" ]]; then
             echo "Found combined kernel payload: $COMBINED"
