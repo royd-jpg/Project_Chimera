@@ -1,4 +1,94 @@
-name: Project Chimera Mk9 — gavdoc38 Canonical Base Build v.20260822b
+name: Project Chimera Mk9 — gavdoc38 Canonical Base Build v.20260902
+
+# ─────────────────────────────────────────────────────────────────────────────
+# VERSION HISTORY (append-only — do not delete prior entries)
+#
+# v.20260902 — four independent fixes, none touching base_ref/ksu_commit/
+#   verify-step patterns/toolchain matrix. Each verified individually
+#   against either live source or an actual completed run, not assumed.
+#
+#   [1] AK3 flashable zip always shipped without a DTB (unconditional,
+#       every non-dry-run build). Step 20 ("Assemble dtb.img...") writes
+#       $ART_DIR/dtb.img; step 21c's SPLIT_DTB previously pointed at
+#       $ART_DIR/dtb (no extension), which no step ever created. The
+#       `elif [[ -f "$SPLIT_DTB" ]]` check therefore always fell through
+#       to the "WARN...packaging Image only" branch — the zip's `dtb`
+#       entry was never populated.
+#       FIX: SPLIT_DTB now points at the real source file, $ART_DIR/dtb.img;
+#       destination inside the zip is still named `dtb` (what
+#       tools/ak3-core.sh's dump_boot/write_boot expects for this legacy
+#       raw-DTB device).
+#       VERIFIED: run 33556553795 (commit 54fb561c, cm9/llvm20) — the
+#       uploaded chimera-mk9-cm9-llvm20-...-AnyKernel3.zip contains a
+#       `dtb` entry, 301716 bytes, `file` identifies it as a valid
+#       "Device Tree Blob version 17, size=301716, boot CPU=0" — not
+#       empty/corrupt. anykernel.sh's embedded identity header in that
+#       zip confirms it was built from this exact commit.
+#
+#   [2] Kconfig steps (12–14b: "Validate/Merge Kconfig fragment",
+#       "Normalize KernelSU hook mode") invoked `make CC=clang ...`
+#       before the toolchain was ever placed on $PATH — "Configure
+#       toolchain PATH" ran later, under the old step 15 block. clang/
+#       llvm-* are not apt-installed (step 1's package list has no LLVM),
+#       so at steps 13/14 CC=clang resolved to nothing on $PATH. Kbuild's
+#       `conf` tool doesn't hard-fail on a missing $(CC) — $(cc-option,...)
+#       probes in arch/arm64 Kconfig just silently evaluate false — and
+#       step 17's later olddefconfig (run after the real toolchain is on
+#       $PATH) re-derives everything, which is why this never surfaced as
+#       a visible failure. Still fragile: any future edit that trusts the
+#       .config between steps 14 and 17, or drops step 17, inherits a
+#       .config resolved against the wrong/absent compiler.
+#       FIX: moved toolchain resolution/cache/download/PATH-config/verify
+#       (old steps 15/15b) to run immediately after step 11b, renumbered
+#       11c/11d, so every Kconfig-touching step from 12 onward sees the
+#       real target clang in $PATH. No step content changed, only order;
+#       step count unchanged (47 steps before and after).
+#       VERIFIED: YAML re-parses cleanly post-move; run 33556553795 on
+#       this exact reordered file succeeded end-to-end on cm9/llvm20.
+#       NOT INDEPENDENTLY CONFIRMED: whether the pre-fix ordering could
+#       ever have hard-failed make (vs. only silently mis-resolving
+#       cc-option probes) on toolchains other than llvm20 was not
+#       exhaustively tested across all 12 toolchain variants — the reorder
+#       removes the ambiguity rather than relying on the soft-fail
+#       behavior holding.
+#
+#   [3] ccache was configured (hendrikmuhs/ccache-action, CCACHE_MAXSIZE)
+#       but never wired into the actual compiler invocation — the build
+#       step passed CC=clang, not CC="ccache clang", so the action was
+#       priming/saving an empty GH Actions cache on every run with zero
+#       build-time benefit.
+#       FIX: CC=clang -> CC="ccache clang" in both the build step's env:
+#       block and its MAKE_ARGS array.
+#       VERIFICATION STILL OPEN: run 33556553795 was the first build on
+#       this fix (necessarily a cold-cache run — build step took 8m38s).
+#       Confirming an actual hit rate requires a second run on the same
+#       profile/toolchain/base_ref/KCFLAGS and reading that run's "Post
+#       Set up ccache" step (ccache -s output); not yet done as of this
+#       entry. NOTE: the ccache cache key (step "Set up ccache") includes
+#       ${{ github.sha }} — the workflow repo's own commit SHA — which
+#       changes on every push to this file. Iterating on this workflow
+#       between builds will defeat the cache even with identical
+#       toolchain/profile/base_ref; if a second same-profile run still
+#       shows ~0% hits, check that first.
+#
+#   [4] CHIMERA_REF branch rename: the Project_Chimera branch this
+#       workflow self-checks out from was renamed chimera-mk8 ->
+#       lineage-23.2-ksun3-susfs2 (git branch -m + push under the new
+#       name + delete old, done externally — this file cannot rename its
+#       own hosting branch). CHIMERA_REF updated to match; this is the
+#       only functional reference to the old name in the file. All other
+#       "chimera-mk8" occurrences are inside the append-only version-
+#       history comments below/above (commit-diff descriptions from past
+#       entries) and are left untouched, per this section's own
+#       do-not-delete-prior-entries rule.
+#       VERIFIED: `git ls-remote --heads` against royd-jpg/Project_Chimera
+#       shows lineage-23.2-ksun3-susfs2 present and chimera-mk8 absent;
+#       live fetch of this file at that ref shows CHIMERA_REF already
+#       matching. Order dependency noted at fix time: the rename must land
+#       before/together with this CHIMERA_REF edit, or the "Validate
+#       checked-out Project_Chimera revision" step's ref-mismatch check
+#       (line ~750) FATALs on the next run.
+# ─────────────────────────────────────────────────────────────────────────────
 
 # ─────────────────────────────────────────────────────────────────────────────
 # VERSION HISTORY (append-only — do not delete prior entries)
