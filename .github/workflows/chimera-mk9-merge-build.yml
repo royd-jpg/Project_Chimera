@@ -674,7 +674,7 @@ on:
         description: "KBUILD_BUILD_TIMESTAMP"
         required: false
         type: string
-        default: "(MTRXX: Wed Aug 19 03:26:19 UTC 2026 / LOS232: Fri Aug 14 10:18:07 CEST 2026 / EVOXV: Tue Aug 11 10:23:04 UTC 2026 / HLCYN: Tue Aug 18 13:16:25 UTC 2026"
+        default: "(MTRXX: Wed Aug 19 03:26:19 UTC 2026 / LOS232: Fri Aug 14 10:18:07 CEST 2026 / EVOXV: Tue Aug 11 10:23:04 UTC 2026 / EVOXGMS: Tue Aug 11 13:18:57 UTC 2026 / HLCYN: Tue Aug 18 13:16:25 UTC 2026"
 
 env:
   CHIMERA_REPO: "https://github.com/royd-jpg/Project_Chimera.git"
