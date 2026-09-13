@@ -1147,11 +1147,11 @@ jobs:
               TC_ARCHIVE_FMT="tar.zst"
               TC_CACHE_KEY="neutron-clang-30072026-ubuntu-24.04-v2"
               ;;
-            zyc_stable)
-              TC_CACHE_KEY="zyc-clang-ubuntu-24.04-v2"
-              TC_URL=$(curl -fsSL \
-                "https://raw.githubusercontent.com/ZyCromerZ/Clang/refs/heads/19.0.0git-20240705/Clang-main-link.txt" \
-                || true)
+              zyc_stable)
+                TC_CACHE_KEY="zyc-clang-ubuntu-24.04-v3"
+                TC_URL=$(curl -fsSL \
+                  "https://raw.githubusercontent.com/ZyCromerZ/Clang/main/Clang-main-link.txt" \
+                  || true)
               ;;
             proton)
               TC_URL="https://github.com/kdrag0n/proton-clang.git"
