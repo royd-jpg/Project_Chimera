@@ -1,4 +1,120 @@
-name: Project Chimera Mk9 — gavdoc38 Canonical Base Build v.20260902
+name: Project Chimera Mk9 — gavdoc38 Canonical Base Build v.20260914
+
+# ─────────────────────────────────────────────────────────────────────────────
+# VERSION HISTORY (append-only — do not delete prior entries)
+#
+# v.20260914 — external audit: KSU-Next manual-hook wiring was unverified for
+#   3 of 5 hook sites; three toolchain-matrix entries carried unpinned/stale/
+#   silently-frozen risk. No change to base_ref/ksu_commit/kernel identity
+#   generation/packaging logic. All four items verified directly against
+#   live source at the pinned SHAs, not assumed.
+#
+#   [1] Step 19 ("Guard pass — verify KSU/SUSFS symbols") only proved
+#       ksu_handle_*() symbols are LINKED into vmlinux. KernelSU-Next
+#       defines these functions unconditionally inside its own submodule
+#       (kernel/feature/sucompat.c, kernel/runtime/ksud_integration.c), so
+#       they appear in the binary regardless of whether any hooked syscall
+#       path in the BASE kernel actually calls them. A future base_ref
+#       repin that silently drops a #ifdef CONFIG_KSU call site in
+#       fs/exec.c / fs/open.c / fs/stat.c / fs/read_write.c /
+#       drivers/input/input.c would still build, link, and boot — root
+#       grant or file-hiding on that specific path just quietly stops
+#       working, with CI staying green throughout.
+#       FIX: new step "Verify KSU-Next manual hook call sites are wired
+#       into base tree" (renumbered 7b, inserted between steps 7 and 8)
+#       greps each of the five files directly for its call site, not just
+#       the symbol's existence in vmlinux. Step 19's REQUIRED symbol array
+#       also extended with the three hook symbols it was missing entirely
+#       (ksu_handle_stat, ksu_handle_sys_read,
+#       ksu_handle_input_handle_event) — kept as defense-in-depth alongside
+#       7b, not a replacement for it, since symbol-in-vmlinux and
+#       symbol-called-from-hook-site are different guarantees.
+#       VERIFIED: cloned gavdoc38/android_kernel_samsung_exynos9810 at the
+#       exact pinned base_ref (f25719cfa1dbf0de6c394e17ae3749f05e10d287) —
+#       all five call sites present, each behind #ifdef CONFIG_KSU. Cloned
+#       gavdoc38/KernelSU-Next at the exact pinned ksu_commit
+#       (685b4a6ba3d2befdf40b3c67cf096d050c7aa6cb) — ksu_handle_execveat,
+#       ksu_handle_faccessat, ksu_handle_stat defined in
+#       kernel/feature/sucompat.{c,h}; ksu_handle_sys_read and
+#       ksu_handle_input_handle_event (plus their ksu_vfs_read_hook /
+#       ksu_input_hook enable flags) defined in
+#       kernel/runtime/ksud_integration.c. New step 7b re-run against this
+#       exact pin passes 5/5.
+#
+#   [2] `proton` toolchain entry pointed at kdrag0n/proton-clang, whose
+#       default branch's last commit is 2021-05-22 (Clang 13.0.0) — five
+#       major LLVM versions behind this file's own llvm20 entry, with no
+#       activity since. Selectable in the workflow_dispatch dropdown with
+#       no indication of staleness.
+#       FIX: removed from the `toolchain` input's `options:` list and from
+#       its description string. The case-statement branch under "Resolve
+#       toolchain configuration" is left in place (harmless dead code if
+#       unselected) rather than deleted, in case a maintained fork is
+#       adopted under the same key later.
+#       VERIFIED: GitHub API `GET /repos/kdrag0n/proton-clang/commits/master`
+#       returns commit date 2021-05-22T23:33:16Z as the tip.
+#
+#   [3] `aosp20` was the only toolchain-matrix entry NOT pinned to an
+#       immutable ref — every other AOSP entry pins a commit SHA or tag in
+#       its android.googlesource.com archive URL; aosp20 pointed at
+#       gitlab.com/kei-space/clang/r547379/-/archive/**master**/... — a
+#       third-party re-host on a mutable branch that can change contents
+#       without notice, silently breaking reproducibility for that one
+#       toolchain choice.
+#       FIX: inline TODO comment added with the exact command to resolve
+#       and pin the current tip commit. NOT RE-PINNED in this pass —
+#       gitlab.com is not on this workflow-runner's audit sandbox's network
+#       egress allowlist (only github.com and language-package registries
+#       were reachable from there), so a commit SHA could not be
+#       independently resolved as part of this fix. Re-pin manually via:
+#         git ls-remote https://gitlab.com/kei-space/clang/r547379.git master
+#       then point TC_URL at
+#       .../archive/<SHA>/r547379-<SHA>.tar.gz.
+#
+#   [4] `zyc_stable`'s cache key was a static string
+#       ("zyc-clang-ubuntu-24.04-v3") while its TC_URL is resolved
+#       dynamically from ZyCromerZ/Clang's Clang-main-link.txt on every
+#       run. A static key means actions/cache returns the FIRST run's
+#       cached toolchain on every subsequent run, forever, regardless of
+#       what the link file points to afterward — silently defeating the
+#       toolchain's entire "track latest LLVM main" design intent. The
+#       "_stable" suffix in the input name is misleading either way: the
+#       resolved link currently points at Clang-23.0.0git-20260130, an
+#       LLVM-main dev snapshot, not a numbered stable release.
+#       FIX: cache key changed to `zyc-clang-ubuntu-24.04-<sha256(TC_URL)[:16]>`
+#       (falls back to a literal "-lookup-failed" suffix if the curl to
+#       Clang-main-link.txt fails, so a lookup failure can't collide with
+#       or accidentally reuse a previously-cached real toolchain). Cache
+#       now self-busts whenever upstream updates the link file.
+#       VERIFIED: live curl of
+#       https://raw.githubusercontent.com/ZyCromerZ/Clang/main/Clang-main-link.txt
+#       at fix time returned a URL for Clang-23.0.0git-20260130.
+#
+#   NOT IN SCOPE FOR THIS PASS (checked, no defect found):
+#     - No forced-compiler-bump requirement was found tying this vendor
+#       4.9 BSP kernel's toolchain to LineageOS 24's platform-side AOSP
+#       Clang version — GKI-style compiler pinning applies to
+#       android-kernel/common, not this out-of-tree fork, and LineageOS 24
+#       (Android 17) has no star2lte device tree yet (lineage-24.0 branch
+#       only began receiving commits June 2026) against which to check a
+#       concrete minimum. Left unchanged pending either a stated minimum
+#       Clang version from a specific KSU-Next/SUSFS commit, or an actual
+#       LOS 24 star2lte BoardConfig to diff against.
+#     - CONFIG_KPROBES=y / CONFIG_OVERLAY_FS=y already unconditionally set
+#       in the base defconfig (not the merge fragment) — confirmed present
+#       at the pinned base_ref; CONFIG_KSU=y correctly lives in
+#       chimera-ksu-susfs.cfg by design (validated by existing step 12).
+#       No change.
+#     - actions/checkout@v4, actions/cache@v4, actions/upload-artifact@v4,
+#       softprops/action-gh-release@v2 are all current, non-deprecated
+#       action versions. No change.
+#     - Confirmed (informational only, no functional bug): this Makefile
+#       has no `ifdef LLVM` block (pre-5.6 ClangBuiltLinux style, tool
+#       selection driven entirely by the explicit CC=/LD=/AR=/... overrides
+#       already passed on every make invocation) — LLVM=1/LLVM_IAS=1 are
+#       inert on this tree. Left as-is; documented here so a future editor
+#       doesn't expect LLVM_IAS to toggle the integrated assembler here.
+# ─────────────────────────────────────────────────────────────────────────────
 
 # ─────────────────────────────────────────────────────────────────────────────
 # VERSION HISTORY (append-only — do not delete prior entries)
@@ -354,10 +470,10 @@ on:
         default: cm9
 
       toolchain:
-        description: "Toolchain: llvm22/llvm21/llvm20/aosp22/aosp21/aosp20/aosp19/neutron19/neutron23/neutron24/zyc_stable/proton"
+        description: "Toolchain: llvm22/llvm21/llvm20/aosp22/aosp21/aosp20/aosp19/neutron19/neutron23/neutron24/zyc_stable (proton removed — unmaintained since 2021-05-22, frozen at Clang 13.0.0)"
         required: true
         type: choice
-        options: [llvm22, llvm21, llvm20, aosp22, aosp21, aosp20, aosp19, neutron19, neutron23, neutron24, zyc_stable, proton]
+        options: [llvm22, llvm21, llvm20, aosp22, aosp21, aosp20, aosp19, neutron19, neutron23, neutron24, zyc_stable]
         default: llvm22
 
       dry_run:
@@ -909,6 +1025,41 @@ jobs:
           }
           echo
           echo "PASS: all canonical KSU-Next backports verified present from base — no hand patches required"
+      # ── 7b. Verify KSU-Next manual-hook call sites are actually wired ───────
+      # step 19 only proves ksu_handle_*() symbols are LINKED into vmlinux —
+      # KernelSU-Next defines them unconditionally inside its own submodule,
+      # so they appear in the binary even if no hooked syscall path ever
+      # calls them. CONFIG_KSU_MANUAL_HOOK=y (enforced in step 14) requires
+      # the call sites below to exist in the BASE kernel tree itself. This
+      # step checks the call sites directly so a future base_ref repin that
+      # silently drops a hook fails loud here instead of producing a kernel
+      # that boots and links fine but grants root/hides files inconsistently.
+      - name: Verify KSU-Next manual hook call sites are wired into base tree
+        working-directory: ${{ env.KERNEL_DIR }}
+        run: |
+          set -Eeuo pipefail
+          FAIL=0
+          check() {
+            local desc="$1" pattern="$2" file="$3"
+            if grep -qE "$pattern" "$file" 2>/dev/null; then
+              echo "OK:    $desc"
+            else
+              echo "FATAL: $desc — call site not found in $file"
+              FAIL=1
+            fi
+          }
+          check "fs/exec.c calls ksu_handle_execveat()"            'ksu_handle_execveat\(' fs/exec.c
+          check "fs/open.c calls ksu_handle_faccessat()"           'ksu_handle_faccessat\(' fs/open.c
+          check "fs/stat.c calls ksu_handle_stat()"                'ksu_handle_stat\(' fs/stat.c
+          check "fs/read_write.c calls ksu_handle_sys_read()"      'ksu_handle_sys_read\(' fs/read_write.c
+          check "drivers/input/input.c calls ksu_handle_input_handle_event()" 'ksu_handle_input_handle_event\(' drivers/input/input.c
+          [[ "$FAIL" -eq 0 ]] || {
+            echo
+            echo "One or more KSU-Next manual-hook call sites expected from base_ref=${{ inputs.base_ref }} were not found in the base tree." >&2
+            exit 1
+          }
+          echo
+          echo "PASS: all manual-hook call sites present in base tree"
       # ── 8. Verify LSM-based setresuid path ───────────────────────────────────
       - name: Verify KSU-Next LSM task_fix_setuid hook (no kernel/sys.c patch used)
         working-directory: ${{ env.KERNEL_DIR }}
@@ -1107,6 +1258,15 @@ jobs:
               TC_CACHE_KEY="aosp-clang-r536225-ubuntu-24.04-v2"
               ;;
             aosp20)
+              # UNPINNED MIRROR: every other entry in this matrix pins an
+              # immutable commit/tag. This one points at kei-space's gitlab
+              # `master` branch, which can move without notice (it is a
+              # third-party re-host, not an android.googlesource.com archive
+              # like aosp19/21/22 below). TODO: resolve the current tip
+              # commit and pin the archive URL to that SHA, e.g.:
+              #   git ls-remote https://gitlab.com/kei-space/clang/r547379.git master
+              #   https://gitlab.com/kei-space/clang/r547379/-/archive/<SHA>/r547379-<SHA>.tar.gz
+              # until then, treat aosp20 builds as non-reproducible.
               TC_URL="https://gitlab.com/kei-space/clang/r547379/-/archive/master/r547379-master.tar.gz"
               TC_CACHE_KEY="aosp-clang-r547379-ubuntu-24.04-v2"
               ;;
@@ -1149,10 +1309,21 @@ jobs:
               TC_CACHE_KEY="neutron-clang-30072026-ubuntu-24.04-v2"
               ;;
               zyc_stable)
-                TC_CACHE_KEY="zyc-clang-ubuntu-24.04-v3"
                 TC_URL=$(curl -fsSL \
                   "https://raw.githubusercontent.com/ZyCromerZ/Clang/main/Clang-main-link.txt" \
                   || true)
+                # Cache key derived FROM the resolved URL (not a static
+                # "-v3" suffix). zyc's link file is a moving target — a
+                # static key means the cache silently freezes on whatever
+                # snapshot was fetched on the FIRST run and never picks up
+                # a newer upstream build without a manual key bump. Hashing
+                # TC_URL makes the cache bust automatically whenever
+                # upstream updates Clang-main-link.txt.
+                if [[ -n "$TC_URL" ]]; then
+                  TC_CACHE_KEY="zyc-clang-ubuntu-24.04-$(printf '%s' "$TC_URL" | sha256sum | cut -c1-16)"
+                else
+                  TC_CACHE_KEY="zyc-clang-ubuntu-24.04-lookup-failed"
+                fi
               ;;
             proton)
               TC_URL="https://github.com/kdrag0n/proton-clang.git"
@@ -1599,6 +1770,9 @@ jobs:
           REQUIRED=(
             ksu_handle_execveat
             ksu_handle_faccessat
+            ksu_handle_stat
+            ksu_handle_sys_read
+            ksu_handle_input_handle_event
             ksu_handle_setresuid
             ksu_handle_sys_reboot
             ksu_lsm_hook_init
