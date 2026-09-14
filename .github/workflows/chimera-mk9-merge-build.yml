@@ -1944,7 +1944,7 @@ jobs:
           device.name3=SM-G965F
           device.name4=SM-G965U
           device.name5=SM-G965N
-          supported.versions=9-16
+          supported.versions=9-17
           '; }
           BLOCK=/dev/block/by-name/BOOT
           IS_SLOT_DEVICE=0
