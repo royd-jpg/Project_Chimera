@@ -1,17 +1,3 @@
-Key changes:
-
-- Fixed the **`merge_config.sh` invocation** so the generated defconfig `.config` is actually used as the base.
-- Moved all user-supplied dispatch values into step `env:` variables instead of interpolating them directly into shell source.
-- Added early validation for defconfig names, custom identity fields, KSU/SUSFS repository/ref inputs, and mutually incompatible options.
-- Made `mrproper` and the SELinux prerequisite build **fail closed** instead of masking errors.
-- Removed the accidental modification of the tracked defconfig; build identity is applied only to the runner-local `.config`.
-- Hardened KSU/SUSFS integration checks and made missing files/refs fail with actionable diagnostics.
-- Kept push/PR builds forcibly **stock**, regardless of dispatch-only integration settings.
-- Preserved the Mk9 runner-only KSU/SUSFS/Chimera-overlay model and the six manual-hook verification checks.
-- Made manifest generation JSON-safe instead of embedding arbitrary shell/input strings directly into JSON.
-- Kept artifact naming and release selection tied to the same `build` outputs, with release publishing restricted to `workflow_dispatch`.
-
-```yaml
 # KernelSU-Next + SUSFS integration for Exynos 9810 (lineage-24.0) — Mk9 model.
 #
 # Mk9 model:
@@ -1703,4 +1689,3 @@ jobs:
           files: release-assets/*
           draft: true
           prerelease: true
-```
