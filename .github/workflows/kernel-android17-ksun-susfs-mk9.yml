@@ -390,11 +390,24 @@ jobs:
             fi
           done
 
-          clang_major="$(clang --version | sed -nE 's/^clang version ([0-9]+).*/\1/p' | head -n1)"
-          [[ -n "$clang_major" ]]
+          # FIX: was anchored to '^clang version', which only matches vanilla LLVM
+          # builds. Branded toolchains prefix the line — Neutron prints
+          # "Neutron clang version 19.0.0git ...", AOSP prints
+          # "Android (...) clang version 17.0.2 ...". The anchor never matched
+          # those, clang_major came back empty, and the bare `[[ -n ... ]]` below
+          # failed under `set -e` with NO error message at all (confirmed by
+          # reproducing this exact Neutron release locally). Match "clang version"
+          # anywhere in the line, and fail loudly instead of silently if it's not
+          # found so this doesn't regress unnoticed again.
+          clang_version_line="$(clang --version | head -n1)"
+          clang_major="$(sed -nE 's/.*clang version ([0-9]+)\..*/\1/p' <<< "$clang_version_line")"
+          if [[ -z "$clang_major" ]]; then
+            echo "::error::Could not parse a clang major version from: $clang_version_line"
+            exit 1
+          fi
 
           echo "CLANG_LABEL=clang$clang_major" >> "$GITHUB_ENV"
-          echo "CLANG_VERSION=$(clang --version | head -n1)" >> "$GITHUB_ENV"
+          echo "CLANG_VERSION=$clang_version_line" >> "$GITHUB_ENV"
 
           mkdir -p artifacts
           {
