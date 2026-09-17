@@ -1,469 +1,668 @@
-# .github/workflows/kernel-android17-ksun-susfs.yml
-#
-# Exynos 9810 (lineage-24.0) — KernelSU-Next + SUSFS, CI-time integration.
-# Nothing is committed back to lineage-24.0; every run re-derives the tree
-# from a pinned "integration bundle" ref (see INTEGRATION_REPO/REF below).
-#
-# "Android 17 compatibility here means building the modified Exynos 9810
-# vendor kernel for potential use with a compatible LineageOS 24 userspace.
-# Runtime compatibility requires physical-device testing."
-#
-# CONFIDENCE NOTES (from direct hands-on compile testing against this exact
-# 4.9.337 tree + this exact KernelSU-Next commit — read before relying on this):
-#
-#   HIGH — compiled clean, unmodified from the bundle ref:
-#     fs/exec.c, fs/open.c, fs/read_write.c, drivers/input/input.c,
-#     kernel/reboot.c, kernel/sys.c, kernel/kallsyms.c, mm/memory.c,
-#     fs/susfs.c, drivers/kernelsu/** (core hook files).
-#
-#   FIXED bugs found in the bundle and corrected before it would compile here:
-#     - fs/namei.c: duplicate `struct dentry *dentry` declaration.
-#     - fs/namei.c + fs/stat.c: the bundle's vfs_readlink()/IOP_DEFAULT_READLINK
-#       OPEN_REDIRECT path does not exist on 4.9.337 (IOP_DEFAULT_READLINK is a
-#       ~4.11+ addition) AND this tree's real readlinkat() syscall never calls
-#       vfs_readlink() anyway — rewired the check into the real call sites
-#       (readlinkat's direct i_op->readlink call, and generic_readlink()).
-#     - fs/proc/base.c: `struct map_files_info` on this tree is
-#       {mode,len,name[]}, not the newer {start,end} layout the bundle assumed.
-#     - drivers/kernelsu/selinux/Makefile: -I$(src)/include resolved to the
-#       wrong directory (its own subdir, not drivers/kernelsu/include) —
-#       klog.h wasn't found. Fixed with an explicit -I.
-#
-#   MEDIUM — NOT fully re-verified after being reverted and re-patched:
-#     fs/proc/task_mmu.c. The bundle's version is largely a wholesale copy of
-#     a much later kernel's smaps/PSS-breakdown/protection-key code that does
-#     not exist on 4.9.337 (duplicate show_smap() definitions, missing PSS
-#     fields, missing pkey helpers). This workflow overlays it anyway (see
-#     "Verify manual hook call sites" below, which will catch a broken result)
-#     — if your first real run fails compiling this file, that's why; the fix
-#     is to keep this tree's real show_map_vma()/show_smap() and re-apply only
-#     the SUS_MAP guard, not the whole function.
-#
-#   CONFIRMED BLOCKER, worked around by fail-closed validation, not fixed at
-#   the source: drivers/kernelsu/hook/setuid_hook.c's ksu_handle_setresuid()
-#   calls susfs_is_sid_equal()/susfs_zygote_sid/is_zygote_normal_app_uid()
-#   unconditionally, with no CONFIG_KSU_SUSFS guard. KSU cannot link with
-#   SUSFS disabled on this exact pin. This workflow refuses that combination
-#   instead of silently forcing SUSFS on.
-#
-#   MEDIUM — the exact path layout of the KSU driver inside the bundle ref
-#   (submodule at top-level `KernelSU-Next/`, wired into `drivers/kernelsu/`
-#   via a symlink per .gitmodules + drivers/Kconfig on that branch) was
-#   confirmed by inspection but not re-verified line-by-line in this pass.
-#   The "Verify bundle contents" step below fails loudly, with a directory
-#   listing, if the expected paths aren't where this workflow expects them —
-#   check that output first if this step fails.
-
-name: kernel-android17-ksun-susfs
+name: Kernel — Android 17 (KSUN + SUSFS) — Exynos9810
 
 on:
   push:
-    branches: [lineage-24.0]
+    branches:
+      - lineage-24.0
     paths:
-      - "arch/**"
+      - "arch/arm64/**"
       - "drivers/**"
       - "fs/**"
-      - "include/**"
       - "kernel/**"
-      - "security/**"
-      - "Makefile"
+      - "include/**"
       - ".github/workflows/kernel-android17-ksun-susfs.yml"
-
-  pull_request:
-    branches: [lineage-24.0]
-
   workflow_dispatch:
     inputs:
-      defconfig:
-        description: "Device defconfig"
-        type: choice
-        default: exynos9810-star2lte_defconfig
-        options:
-          - exynos9810-star2lte_defconfig
-          - exynos9810-starlte_defconfig
-          - exynos9810-crownlte_defconfig
-      ksu_integration_mode:
-        description: "disabled | manual | kprobe"
-        type: choice
-        default: manual
-        options: [disabled, manual, kprobe]
-      enable_susfs:
-        description: "Enable SUSFS. NOTE: cannot be false when ksu_integration_mode != disabled (see header)."
-        type: boolean
-        default: true
-      integration_repo:
-        description: "Repo carrying the KSU-Next+SUSFS bundle (driver, susfs.c, and the 6 hook call-sites)"
+      toolchain:
+        description: "Toolchain: llvm22/llvm21/llvm20/aosp22/aosp21/aosp20/aosp19/neutron19/neutron23/neutron24/zyc_stable"
+        required: true
         type: string
-        default: "https://github.com/royd-jpg/Project_Chimera.git"
-      integration_ref:
-        description: "Pinned commit SHA of the integration bundle"
-        type: string
-        default: "6752be5bb08dccfc58d9bc98c51199515aa19abc"
-      clean_build:
-        type: boolean
-        default: true
-      publish_release:
+        default: "llvm22"
+
+      dry_run:
+        description: "Validate only — skip build and package"
+        required: false
         type: boolean
         default: false
 
-permissions:
-  contents: read
+      do_release:
+        description: "Create a GitHub Release after successful build"
+        required: false
+        type: boolean
+        default: false
+
+      base_repo:
+        description: "Canonical KSU-Next+SUSFS integration base (owner/repo)"
+        required: false
+        type: string
+        default: "gavdoc38/android_kernel_samsung_exynos9810"
+
+      base_ref:
+        description: "Base ref: full 40-hex commit SHA only"
+        required: false
+        type: string
+        default: "f25719cfa1dbf0de6c394e17ae3749f05e10d287"
+
+      ksu_commit:
+        description: "KernelSU-Next exact commit SHA (full 40-hex)"
+        required: false
+        type: string
+        default: "685b4a6ba3d2befdf40b3c67cf096d050c7aa6cb"
+
+      localversion:
+        description: "LOCALVERSION suffix (must start with '-')"
+        required: true
+        type: string
+        default: "-Chimera_Mk9"
+
+      build_user:
+        description: "KBUILD_BUILD_USER"
+        required: true
+        type: string
+        default: "MTRXX"
+
+      build_host:
+        description: "KBUILD_BUILD_HOST"
+        required: false
+        type: string
+        default: "CM9XNNNN"
+
+      build_version:
+        description: "KBUILD_BUILD_VERSION (#N token)"
+        required: false
+        type: string
+        default: "1"
+
+      build_timestamp:
+        description: "KBUILD_BUILD_TIMESTAMP (e.g. 'Wed Aug 19 03:26:19 UTC 2026')"
+        required: true
+        type: string
+        default: "Wed Aug 19 03:26:19 UTC 2026"
+
+      build_variants:
+        description: "Device variants to build (comma-separated)"
+        required: true
+        type: string
+        default: "star2lte,starlte,crownlte"
+
+      upload_dtbs:
+        description: "Upload separate DTB files"
+        required: false
+        type: boolean
+        default: true
+
+      enable_lto:
+        description: "Enable Link-Time Optimization"
+        required: false
+        type: boolean
+        default: false
+
+      extra_cflags:
+        description: "Extra CFLAGS (space-separated)"
+        required: false
+        type: string
+        default: ""
 
 concurrency:
-  group: ksun-susfs-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.toolchain }}-${{ inputs.localversion }}
   cancel-in-progress: true
 
-defaults:
-  run:
-    shell: bash -Eeuo pipefail {0}
-
 env:
-  ARCH: arm64
-  CROSS_COMPILE: aarch64-linux-gnu-
-  CLANG_TRIPLE: aarch64-linux-gnu-
-  KBUILD_BUILD_USER: _Terminal_Echo
-  KBUILD_BUILD_HOST: AegisDevLabs
-  ARTIFACT_DIR: artifacts
+  KERNEL_REPO: "https://github.com/ExyHyperBrick/android_kernel_samsung_exynos9810.git"
+  KERNEL_BRANCH: "lineage-24.0"
+  KERNEL_DIR: "kernel"
+  OUT_DIR: "kernel-out"
+  LOG_DIR: "logs"
+  ANYKERNEL_DIR: "anykernel3"
+  ANYKERNEL_REPO: "https://github.com/osm0sis/AnyKernel3.git"
+  ANYKERNEL3_BRANCH: "main"
+  DTBTOOL_REPO: "https://github.com/rajatgupta1998/android_tools_system_dtbTool.git"
+
+  CCACHE_MAXSIZE: "3G"
+  KERNEL_VERSION: "4.9.337"
+
+  TOOLCHAIN: ${{ inputs.toolchain }}
+  BASE_REPO: ${{ inputs.base_repo }}
+  BASE_REF: ${{ inputs.base_ref }}
+  KSU_COMMIT: ${{ inputs.ksu_commit }}
+
+  LOCALVERSION: ${{ inputs.localversion }}
+  KBUILD_BUILD_USER: ${{ inputs.build_user }}
+  KBUILD_BUILD_HOST: ${{ inputs.build_host }}
+  KBUILD_BUILD_VERSION: ${{ inputs.build_version }}
+  KBUILD_BUILD_TIMESTAMP: ${{ inputs.build_timestamp }}
+
+  CHIMERA_KCFLAGS: -O2 -fcommon -fno-strict-aliasing -Wno-error -Wno-error=unused-but-set-global -Wno-unknown-warning-option -fuse-ld=lld
+  CHIMERA_KBUILD_LDFLAGS: "-fuse-ld=lld"
+
+  ABS_KERNEL: "${{ github.workspace }}/${{ env.KERNEL_DIR }}"
+  ABS_OUT: "${{ github.workspace }}/${{ env.OUT_DIR }}"
+  ABS_LOG: "${{ github.workspace }}/${{ env.LOG_DIR }}"
+  ABS_TC: "${{ github.workspace }}/toolchains/clang"
+  ABS_AK3: "${{ github.workspace }}/${{ env.ANYKERNEL_DIR }}"
 
 jobs:
   build:
+    name: Build — ${{ inputs.toolchain }} / ${{ inputs.localversion }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 150
-    outputs:
-      artifact_name: ${{ steps.plan.outputs.artifact_name }}
+
+    defaults:
+      run:
+        shell: bash
 
     steps:
-      - name: Checkout lineage-24.0
+      - name: Validate workflow inputs
+        run: |
+          set -Eeuo pipefail
+          FAIL=0
+          if ! [[ "${{ inputs.base_ref }}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "FATAL: base_ref must be a full 40-hex commit SHA, got '${{ inputs.base_ref }}'" >&2
+            FAIL=1
+          fi
+          if ! [[ "${{ inputs.ksu_commit }}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "FATAL: ksu_commit must be a full 40-hex commit SHA, got '${{ inputs.ksu_commit }}'" >&2
+            FAIL=1
+          fi
+          if [[ -z "${{ inputs.base_repo }}" || "${{ inputs.base_repo }}" != */* ]]; then
+            echo "FATAL: base_repo must be 'owner/repo', got '${{ inputs.base_repo }}'" >&2
+            FAIL=1
+          fi
+          if [[ "${{ inputs.localversion }}" != -* ]]; then
+            echo "FATAL: localversion must start with '-', got '${{ inputs.localversion }}'" >&2
+            FAIL=1
+          fi
+          [[ "$FAIL" -eq 0 ]] || exit 1
+          echo "PASS: all workflow_dispatch inputs valid"
+
+      - name: Checkout kernel source
         uses: actions/checkout@v4
         with:
+          repository: ${{ env.KERNEL_REPO }}
+          ref: ${{ env.KERNEL_BRANCH }}
+          path: ${{ env.KERNEL_DIR }}
           fetch-depth: 1
-          ref: lineage-24.0
 
-      - name: Resolve build plan
-        id: plan
-        run: |
-          if [[ "${GITHUB_EVENT_NAME}" == "push" || "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
-            DEFCONFIG="exynos9810-star2lte_defconfig"
-            MODE="manual"
-            SUSFS="true"
-            INT_REPO="https://github.com/royd-jpg/Project_Chimera.git"
-            INT_REF="6752be5bb08dccfc58d9bc98c51199515aa19abc"
-            CLEAN="true"
-          else
-            DEFCONFIG="${{ inputs.defconfig }}"
-            MODE="${{ inputs.ksu_integration_mode }}"
-            SUSFS="${{ inputs.enable_susfs }}"
-            INT_REPO="${{ inputs.integration_repo }}"
-            INT_REF="${{ inputs.integration_ref }}"
-            CLEAN="${{ inputs.clean_build }}"
-          fi
-
-          if [[ ! -f "arch/arm64/configs/${DEFCONFIG}" ]]; then
-            echo "::error::defconfig arch/arm64/configs/${DEFCONFIG} not found"
-            ls -1 arch/arm64/configs/ >&2
-            exit 1
-          fi
-
-          # Fail closed: confirmed, this exact bundle's KSU cannot link without
-          # SUSFS (see header CONFIRMED BLOCKER note). Do not silently override.
-          if [[ "$MODE" != "disabled" && "$SUSFS" != "true" ]]; then
-            echo "::error::ksu_integration_mode=$MODE with enable_susfs=false is not buildable with this integration bundle."
-            echo "::error::drivers/kernelsu/hook/setuid_hook.c calls SUSFS symbols unconditionally in this pin — see workflow header."
-            echo "::error::Set enable_susfs=true, or use a different KernelSU-Next commit that guards those calls."
-            exit 1
-          fi
-
-          if [[ -z "$INT_REPO" || -z "$INT_REF" ]]; then
-            echo "::error::integration_repo and integration_ref must both be set when ksu_integration_mode != disabled"
-            exit 1
-          fi
-
-          MODE_LABEL="$MODE"
-          [[ "$SUSFS" == "true" ]] && MODE_LABEL="${MODE}+susfs"
-          SHORT_SHA="$(git rev-parse --short=12 HEAD)"
-          ARTIFACT_NAME="kernel-${DEFCONFIG%%_defconfig}-${MODE_LABEL}-${SHORT_SHA}"
-
-          {
-            echo "defconfig=$DEFCONFIG"
-            echo "mode=$MODE"
-            echo "susfs=$SUSFS"
-            echo "int_repo=$INT_REPO"
-            echo "int_ref=$INT_REF"
-            echo "clean=$CLEAN"
-            echo "artifact_name=$ARTIFACT_NAME"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Install host build dependencies
+      - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            bc bison build-essential cpio device-tree-compiler flex \
-            git kmod libelf-dev libssl-dev python3 rsync xz-utils zip \
-            clang lld llvm gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+          sudo apt-get install -y \
+            bc bison build-essential ccache curl flex git gnupg gperf \
+            libssl-dev libtinfo5 lzop ncurses-dev openssl \
+            python3 python3-pip rsync wget zip zlib1g-dev \
+            libelf1 libfdt1 libffi7 libstdc++6 \
+            device-tree-compiler aria2 zstd
 
-      - name: Record toolchain versions
+      - name: Resolve toolchain configuration
+        id: tc-resolve
         run: |
-          mkdir -p "$ARTIFACT_DIR"
+          set -Eeuo pipefail
+          TOOLCHAIN="${{ inputs.toolchain }}"
+          TC_URL=""
+          TC_ARCHIVE_FMT="tar.gz"
+          TC_CACHE_KEY=""
+          case "$TOOLCHAIN" in
+            aosp19)
+              TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-15.0.0_r10/clang-r536225.tar.gz"
+              TC_CACHE_KEY="aosp-clang-r536225-ubuntu-24.04-v2"
+              ;;
+            aosp20)
+              TC_URL="https://gitlab.com/kei-space/clang/r547379/-/archive/master/r547379-master.tar.gz"
+              TC_CACHE_KEY="aosp-clang-r547379-ubuntu-24.04-v2"
+              ;;
+            aosp21)
+              TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/21b19c041de1f1df9b97fd9902ae5405c6cf8eb9/clang-r563880c.tar.gz"
+              TC_CACHE_KEY="aosp-clang-r563880c-ubuntu-24.04-v2"
+              ;;
+            aosp22)
+              TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/mirror-goog-main-llvm-toolchain-source/clang-r596125.tar.gz"
+              TC_CACHE_KEY="aosp-clang-r596125-ubuntu-24.04-v2"
+              ;;
+            llvm20)
+              TC_URL="https://mirrors.edge.kernel.org/pub/tools/llvm/files/llvm-20.1.8-x86_64.tar.xz"
+              TC_ARCHIVE_FMT="tar.xz"
+              TC_CACHE_KEY="korg-clang-20.1.8-ubuntu-24.04-v1"
+              ;;
+            llvm21)
+              TC_URL="https://mirrors.edge.kernel.org/pub/tools/llvm/files/llvm-21.1.0-x86_64.tar.xz"
+              TC_ARCHIVE_FMT="tar.xz"
+              TC_CACHE_KEY="llvm-clang-21.1.0-ubuntu-24.04-v1"
+              ;;
+            llvm22)
+              TC_URL="https://mirrors.edge.kernel.org/pub/tools/llvm/files/llvm-22.1.7-x86_64.tar.xz"
+              TC_ARCHIVE_FMT="tar.xz"
+              TC_CACHE_KEY="llvm-clang-22.1.7-ubuntu-24.04-v1"
+              ;;
+            neutron19)
+              TC_URL="https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/10032024/neutron-clang-10032024.tar.zst"
+              TC_ARCHIVE_FMT="tar.zst"
+              TC_CACHE_KEY="neutron-clang-10032024-ubuntu-24.04-v2"
+              ;;
+            neutron23)
+              TC_URL="https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/30062026/neutron-clang-30062026.tar.zst"
+              TC_ARCHIVE_FMT="tar.zst"
+              TC_CACHE_KEY="neutron-clang-30062026-ubuntu-24.04-v2"
+              ;;
+            neutron24)
+              TC_URL="https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/30072026/neutron-clang-30072026.tar.zst"
+              TC_ARCHIVE_FMT="tar.zst"
+              TC_CACHE_KEY="neutron-clang-30072026-ubuntu-24.04-v2"
+              ;;
+            zyc_stable)
+              TC_URL=$(curl -fsSL \
+                "https://raw.githubusercontent.com/ZyCromerZ/Clang/main/Clang-main-link.txt" \
+                || true)
+              if [[ -n "$TC_URL" ]]; then
+                TC_CACHE_KEY="zyc-clang-ubuntu-24.04-$(printf '%s' "$TC_URL" | sha256sum | cut -c1-16)"
+              else
+                TC_CACHE_KEY="zyc-clang-ubuntu-24.04-lookup-failed"
+              fi
+              ;;
+            *)
+              echo "ERROR: unsupported toolchain '$TOOLCHAIN'" >&2
+              exit 1
+              ;;
+          esac
           {
-            echo "clang: $(clang --version | head -n1)"
-            echo "ld.lld: $(ld.lld --version | head -n1)"
-            echo "aarch64-linux-gnu-ld: $(aarch64-linux-gnu-ld --version | head -n1)"
-          } | tee "$ARTIFACT_DIR/toolchain-info.txt"
+            echo "TC_URL=$TC_URL"
+            echo "TC_ARCHIVE_FMT=$TC_ARCHIVE_FMT"
+            echo "TC_CACHE_KEY=$TC_CACHE_KEY"
+          } >> "$GITHUB_ENV"
+          echo "TC_CACHE_KEY=$TC_CACHE_KEY" >> "$GITHUB_OUTPUT"
 
-      - name: Clean previous output
-        if: steps.plan.outputs.clean == 'true'
-        run: rm -rf out "${ARTIFACT_DIR:?}/build.log" || true
+      - name: Cache toolchain
+        uses: actions/cache@v4
+        id: tc-cache
+        with:
+          path: ${{ env.ABS_TC }}
+          key: ${{ env.TC_CACHE_KEY }}
 
-      # ── Fetch + apply the KSU+SUSFS integration bundle ─────────────────────
-      - name: Fetch integration bundle
-        if: steps.plan.outputs.mode != 'disabled'
-        id: bundle
-        env:
-          INT_REPO: ${{ steps.plan.outputs.int_repo }}
-          INT_REF:  ${{ steps.plan.outputs.int_ref }}
+      - name: Download and extract toolchain
+        if: steps.tc-cache.outputs.cache-hit != 'true'
         run: |
-          rm -rf /tmp/bundle
-          git init -q /tmp/bundle
-          git -C /tmp/bundle remote add origin "$INT_REPO"
-          git -C /tmp/bundle fetch -q --depth 1 origin "$INT_REF"
-          git -C /tmp/bundle checkout -q FETCH_HEAD
-          git -C /tmp/bundle submodule update --init --recursive --depth 1 2>&1 | tee /tmp/bundle-submodules.log
-          echo "bundle_sha=$(git -C /tmp/bundle rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          set -Eeuo pipefail
+          rm -rf "$ABS_TC"
+          mkdir -p "$ABS_TC"
 
-      - name: Verify bundle contents
-        if: steps.plan.outputs.mode != 'disabled'
-        run: |
-          FAIL=0
-          check() {
-            if [[ -e "$1" ]]; then echo "OK:    $1"; else echo "FATAL: $1 missing"; FAIL=1; fi
-          }
-          check /tmp/bundle/fs/susfs.c
-          check /tmp/bundle/include/linux/susfs.h
-          check /tmp/bundle/include/linux/susfs_def.h
-          check /tmp/bundle/drivers/kernelsu
-          check /tmp/bundle/KernelSU-Next/kernel
-          if [[ $FAIL -ne 0 ]]; then
-            echo "::error::Integration bundle at ${{ steps.plan.outputs.int_ref }} is missing expected paths."
-            echo "::error::Bundle top-level listing:"
-            ls -la /tmp/bundle >&2
+          ARCHIVE="/tmp/clang_archive"
+          if [[ -z "$TC_URL" ]]; then
+            echo "FATAL: TC_URL is empty (zyc_stable's dynamic link lookup may have failed upstream)" >&2
             exit 1
           fi
-
-      - name: Apply KSU driver + SUSFS + hook call-sites onto lineage-24.0
-        if: steps.plan.outputs.mode != 'disabled'
-        run: |
-          # KSU driver (real content lives in the KernelSU-Next submodule;
-          # drivers/kernelsu is a symlink to it on the bundle branch — copy
-          # the resolved directory, not the symlink).
-          rm -rf drivers/kernelsu
-          mkdir -p drivers/kernelsu
-          rsync -a --delete /tmp/bundle/KernelSU-Next/kernel/ drivers/kernelsu/
-
-          # SUSFS core
-          cp /tmp/bundle/fs/susfs.c fs/susfs.c
-          cp /tmp/bundle/include/linux/susfs.h include/linux/susfs.h
-          cp /tmp/bundle/include/linux/susfs_def.h include/linux/susfs_def.h
-
-          # Six manual-hook call-site files, overlaid verbatim from the bundle.
-          for f in fs/exec.c fs/open.c fs/stat.c fs/read_write.c \
-                   drivers/input/input.c kernel/reboot.c; do
-            if [[ -f "/tmp/bundle/$f" ]]; then
-              cp "/tmp/bundle/$f" "$f"
-            else
-              echo "::error::Bundle is missing $f — cannot install manual hook call sites"
+          aria2c -x 16 -s 16 -k 1M -c \
+            --max-tries=5 \
+            --retry-wait=5 \
+            --timeout=60 \
+            --dir="/tmp" \
+            --out="clang_archive" \
+            "$TC_URL"
+          if [[ ! -s "$ARCHIVE" ]]; then
+            echo "FATAL: aria2c failed to download the toolchain archive, or it is empty." >&2
+            exit 1
+          fi
+          case "$TC_ARCHIVE_FMT" in
+            tar.gz|tar)
+              tar -C "$ABS_TC" -xzf "$ARCHIVE"
+              ;;
+            tar.xz)
+              tar -C "$ABS_TC" -xJf "$ARCHIVE"
+              ;;
+            tar.zst)
+              zstd -d "$ARCHIVE" -o /tmp/clang.tar --force
+              tar -C "$ABS_TC" -xf /tmp/clang.tar
+              ;;
+            *)
+              echo "FATAL: unrecognized TC_ARCHIVE_FMT '$TC_ARCHIVE_FMT' — cannot extract" >&2
               exit 1
-            fi
+              ;;
+          esac
+
+          if [[ -z "$(find "$ABS_TC" -type f -print -quit)" ]]; then
+            echo "FATAL: extraction reported success but $ABS_TC contains no files" >&2
+            exit 1
+          fi
+          echo "Toolchain ready: $(find "$ABS_TC" -type f | wc -l) file(s)"
+
+      - name: Configure toolchain PATH
+        run: |
+          set -Eeuo pipefail
+          ACTUAL_BIN=$(find "$ABS_TC" -type d -name "bin" -printf "%d\t%p\n" | sort -n | cut -f2 | head -n 1)
+          if [[ -z "$ACTUAL_BIN" || ! -d "$ACTUAL_BIN" ]]; then
+            echo "FATAL: Could not find 'bin' directory inside extracted toolchain ($ABS_TC)."
+            exit 1
+          fi
+          echo "Found toolchain bin: $ACTUAL_BIN"
+          chmod +x "$ACTUAL_BIN"/* 2>/dev/null || true
+          echo "$ACTUAL_BIN" >> "$GITHUB_PATH"
+
+      - name: Verify Toolchain and capture compiler identity
+        run: |
+          set -Eeuo pipefail
+          echo "Validating toolchain in PATH..."
+          for bin in clang llvm-nm llvm-objdump llvm-ar llvm-objcopy llvm-strip ld.lld; do
+            command -v "$bin" >/dev/null 2>&1 || {
+              echo "FATAL: required toolchain binary '$bin' not found in PATH" >&2
+              exit 1
+            }
+          done
+          CLANG_VERSION="$(clang --version | head -1)"
+          LLD_VERSION="$(ld.lld --version | head -1)"
+          echo "$CLANG_VERSION"
+          llvm-nm --version | head -1
+          llvm-objdump --version | head -1
+          echo "$LLD_VERSION"
+          [[ -n "$CLANG_VERSION" ]] || { echo "FATAL: clang --version produced no output" >&2; exit 1; }
+          TC_IDENTITY_HASH="$(printf '%s\n%s\n' "$CLANG_VERSION" "$LLD_VERSION" | sha256sum | cut -d' ' -f1 | head -c 16)"
+          {
+            echo "CLANG_VERSION=$CLANG_VERSION"
+            echo "TC_IDENTITY_HASH=$TC_IDENTITY_HASH"
+          } >> "$GITHUB_ENV"
+          mkdir -p "$ABS_LOG"
+          {
+            echo "$CLANG_VERSION"
+            echo "$LLD_VERSION"
+          } > "$ABS_LOG/toolchain-identity.txt"
+
+      - name: Clone KernelSU-Next (next-susfs)
+        run: |
+          cd ${{ env.ABS_KERNEL }}
+          git clone --depth=1 --branch next-susfs https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU-Next
+          cd KernelSU-Next
+          git fetch --depth=1 origin ${{ env.KSU_COMMIT }}
+          git checkout ${{ env.KSU_COMMIT }}
+
+      - name: Run KernelSU-Next setup (next-susfs)
+        run: |
+          cd ${{ env.ABS_KERNEL }}
+          bash KernelSU-Next/kernel/setup.sh next-susfs
+
+      - name: Apply manual legacy hooks (Linux 4.9.337)
+        run: |
+          cd ${{ env.ABS_KERNEL }}
+          cat > ksun_manual_hooks.patch << 'PATCH'
+          --- a/fs/exec.c
+          +++ b/fs/exec.c
+          @@ -1886,6 +1886,13 @@ static int __do_execve_file(int fd, struct filename *filename,
+           return retval;
+           }
+
+          +#ifdef CONFIG_KSU
+          +extern int ksu_handle_execveat(int *fd, struct filename **filename_ptr,
+          +       void *argv, void *envp, int *flags);
+          +#endif
+          +
+           static int do_execveat_common(int fd, struct filename *filename,
+           struct user_arg_ptr argv,
+           struct user_arg_ptr envp,
+          @@ -1893,6 +1900,10 @@ static int do_execveat_common(int fd, struct filename *filename,
+           {
+           struct filename *tmp;
+
+          +#ifdef CONFIG_KSU
+          +       ksu_handle_execveat(&fd, &filename, &argv, &envp, NULL);
+          +#endif
+          +
+           tmp = filename;
+           filename = getname_kernel("init");
+           if (IS_ERR(filename)) {
+          --- a/fs/open.c
+          +++ b/fs/open.c
+          @@ -348,6 +348,11 @@ SYSCALL_DEFINE4(fallocate, int, fd, int, mode, loff_t, offset, loff_t, len)
+           return ksys_fallocate(fd, mode, offset, len);
+           }
+
+          +#ifdef CONFIG_KSU
+          +extern int ksu_handle_faccessat(int *dfd, const char __user **filename_user,
+          +       int *mode, int *flags);
+          +#endif
+          +
+           /*
+            * access() needs to use the real uid/gid, not the effective uid/gid.
+            * We do this by temporarily clearing all FS-related capabilities and
+          @@ -355,6 +360,9 @@ SYSCALL_DEFINE4(fallocate, int, fd, int, mode, loff_t, offset, loff_t, len)
+            */
+           long do_faccessat(int dfd, const char __user *filename, int mode)
+           {
+          +#ifdef CONFIG_KSU
+          +       ksu_handle_faccessat(&dfd, &filename, &mode, NULL);
+          +#endif
+           const struct cred *old_cred;
+           struct cred *override_cred;
+           struct path path;
+          --- a/fs/read_write.c
+          +++ b/fs/read_write.c
+          @@ -434,6 +434,12 @@ ssize_t kernel_read(struct file *file, void *buf, size_t count, loff_t *pos)
+           EXPORT_SYMBOL(kernel_read);
+
+          +#ifdef CONFIG_KSU
+          +extern bool ksu_vfs_read_hook __read_mostly;
+          +extern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr,
+          +       size_t *count_ptr, loff_t **pos);
+          +#endif
+          +
+           ssize_t vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos)
+           {
+           ssize_t ret;
+          @@ -441,6 +447,10 @@ ssize_t vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos)
+           if (!(file->f_mode & FMODE_READ))
+           return -EBADF;
+           if (!(file->f_mode & FMODE_CAN_READ))
+          +#ifdef CONFIG_KSU
+          +       if (unlikely(ksu_vfs_read_hook))
+          +               ksu_handle_vfs_read(&file, &buf, &count, &pos);
+          +#endif
+           ret = rw_verify_area(READ, file, pos, count, 0);
+           if (ret)
+           return ret;
+          --- a/fs/stat.c
+          +++ b/fs/stat.c
+          @@ -148,6 +148,11 @@ int vfs_statx_fd(unsigned int fd, struct kstat *stat,
+           EXPORT_SYMBOL(vfs_statx_fd);
+           }
+
+          +#ifdef CONFIG_KSU
+          +extern int ksu_handle_stat(int *dfd, const char __user **filename_user,
+          +       int *flags);
+          +#endif
+          +
+           /**
+            * vfs_statx - Get basic and extra attributes by filename
+            * @dfd: A file descriptor representing the base dir for a relative filename
+          @@ -170,6 +175,9 @@ int vfs_statx(int dfd, const char __user *filename, int flags,
+           int error = -EINVAL;
+           unsigned int lookup_flags = LOOKUP_FOLLOW | LOOKUP_AUTOMOUNT;
+
+          +#ifdef CONFIG_KSU
+          +       ksu_handle_stat(&dfd, &filename, &flags);
+          +#endif
+           if ((flags & ~(AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT |
+           AT_EMPTY_PATH | KSTAT_QUERY_FLAGS)) != 0)
+           return -EINVAL;
+          --- a/kernel/reboot.c
+          +++ b/kernel/reboot.c
+          @@ -277,6 +277,12 @@ EXPORT_SYMBOL(emergency_restart);
+            *
+            * reboot doesn't sync: do that yourself before calling this.
+            */
+          +
+          +#ifdef CONFIG_KSU
+          +extern int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user **arg);
+          +#endif
+          +
+           SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
+           void __user *, arg)
+           {
+          @@ -284,6 +290,9 @@ SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
+           struct pid_namespace *pid_ns = task_active_pid_ns(current);
+           char buffer[256];
+           int ret = 0;
+          +
+          +#ifdef CONFIG_KSU
+          +       ksu_handle_sys_reboot(magic1, magic2, cmd, &arg);
+          +#endif
+
+           /* We only trust the superuser with rebooting the system. */
+           if (!ns_capable(pid_ns->user_ns, CAP_SYS_BOOT))
+          --- a/drivers/input/input.c
+          +++ b/drivers/input/input.c
+          @@ -367,6 +367,12 @@ static int input_get_disposition(struct input_dev *dev,
+           return disposition;
+           }
+
+          +#ifdef CONFIG_KSU
+          +extern bool ksu_input_hook __read_mostly;
+          +extern int ksu_handle_input_handle_event(unsigned int *type, unsigned int *code, int *value);
+          +#endif
+          +
+           static void input_handle_event(struct input_dev *dev,
+           unsigned int type, unsigned int code, int value)
+           {
+          @@ -374,6 +380,10 @@ static void input_handle_event(struct input_dev *dev,
+           if (disposition != INPUT_IGNORE_EVENT && type != EV_SYN)
+           add_input_randomness(type, code, value);
+
+          +#ifdef CONFIG_KSU
+          +       if (unlikely(ksu_input_hook))
+          +               ksu_handle_input_handle_event(&type, &code, &value);
+          +#endif
+           }
+
+           static void input_handle_event(struct input_dev *dev,
+          PATCH
+
+          patch -p1 < ksun_manual_hooks.patch
+
+      - name: Verify hooks are present
+        run: |
+          cd ${{ env.ABS_KERNEL }}
+          echo "Checking for KSU hooks..."
+          grep -q "ksu_handle_execveat" fs/exec.c || { echo "ERROR: exec hook missing"; exit 1; }
+          grep -q "ksu_handle_faccessat" fs/open.c || { echo "ERROR: faccessat hook missing"; exit 1; }
+          grep -q "ksu_handle_vfs_read" fs/read_write.c || { echo "ERROR: vfs_read hook missing"; exit 1; }
+          grep -q "ksu_handle_stat" fs/stat.c || { echo "ERROR: stat hook missing"; exit 1; }
+          grep -q "ksu_handle_sys_reboot" kernel/reboot.c || { echo "ERROR: reboot hook missing"; exit 1; }
+          grep -q "ksu_handle_input_handle_event" drivers/input/input.c || { echo "ERROR: input hook missing"; exit 1; }
+          echo "All hooks verified."
+
+      - name: Configure defconfigs for KSUN (manual hook)
+        run: |
+          cd ${{ env.ABS_KERNEL }}
+          for cfg in arch/arm64/configs/exynos9810-star2lte_defconfig \
+                   arch/arm64/configs/exynos9810-starlte_defconfig \
+                   arch/arm64/configs/exynos9810-crownlte_defconfig; do
+            [ -f "$cfg" ] || continue
+            echo "# KernelSU-Next (manual hook)" >> "$cfg"
+            echo "CONFIG_KSU=y" >> "$cfg"
+            echo "CONFIG_KSU_MANUAL_HOOK=y" >> "$cfg"
+            echo "CONFIG_KSU_KPROBES_HOOK=n" >> "$cfg"
+            echo "CONFIG_KPROBES=n" >> "$cfg"
+            echo "CONFIG_HAVE_KPROBES=n" >> "$cfg"
+            echo "CONFIG_KPROBE_EVENTS=n" >> "$cfg"
+            echo "CONFIG_KSU_SUSFS=n" >> "$cfg"
           done
 
-          # security/selinux/* backports the bundle's Kbuild self-patches
-          # would otherwise apply at build time (selinux_inode/selinux_cred,
-          # can_umount/path_umount, seccomp filter_count). Overlay them too so
-          # the result is reviewable instead of mutated in place by Kbuild.
-          for f in security/selinux/hooks.c security/selinux/avc.c \
-                   security/selinux/selinuxfs.c security/selinux/xfrm.c \
-                   security/selinux/include/objsec.h fs/namespace.c \
-                   fs/internal.h include/linux/seccomp.h; do
-            [[ -f "/tmp/bundle/$f" ]] && cp "/tmp/bundle/$f" "$f"
-          done
-
-          # Wire drivers/Makefile + drivers/Kconfig
-          grep -q 'kernelsu/' drivers/Makefile || \
-            printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
-          grep -q 'drivers/kernelsu/Kconfig' drivers/Kconfig || \
-            sed -i '$ i\source "drivers/kernelsu/Kconfig"' drivers/Kconfig
-
-          # Wire fs/Makefile for SUSFS
-          grep -q 'susfs.o' fs/Makefile || \
-            printf '\nobj-$(CONFIG_KSU_SUSFS) += susfs.o\n' >> fs/Makefile
-
-      - name: Verify manual hook call sites
-        if: steps.plan.outputs.mode == 'manual'
+      - name: Clone AnyKernel3
         run: |
-          FAIL=0
-          check() {
-            grep -qE "$1" "$2" 2>/dev/null && echo "OK:    $1 in $2" || { echo "FATAL: $1 not found in $2"; FAIL=1; }
-          }
-          check 'ksu_handle_execveat'            fs/exec.c
-          check 'ksu_handle_faccessat'            fs/open.c
-          check 'ksu_handle_stat'                 fs/stat.c
-          check 'ksu_handle_sys_read'              fs/read_write.c
-          check 'ksu_handle_input_handle_event'    drivers/input/input.c
-          check 'ksu_handle_sys_reboot'            kernel/reboot.c
-          [[ $FAIL -eq 0 ]] || { echo "::error::Manual hook call sites missing after overlay — see workflow header confidence notes for fs/proc/task_mmu.c and other known-fragile files."; exit 1; }
+          git clone --depth=1 --branch ${{ env.ANYKERNEL3_BRANCH }} ${{ env.ANYKERNEL_REPO }} ${{ env.ANYKERNEL_DIR }}
 
-      - name: Generate source diff for review
-        if: steps.plan.outputs.mode != 'disabled'
+      - name: Clone dtbTool (Exynos)
         run: |
-          mkdir -p "$ARTIFACT_DIR"
-          git diff -- drivers/Makefile drivers/Kconfig fs/Makefile \
-            fs/exec.c fs/open.c fs/stat.c fs/read_write.c \
-            drivers/input/input.c kernel/reboot.c \
-            fs/susfs.c include/linux/susfs.h include/linux/susfs_def.h \
-            security/ > "$ARTIFACT_DIR/integration.diff" 2>/dev/null || true
-          echo "# untracked" >> "$ARTIFACT_DIR/integration.diff"
-          git status --porcelain --untracked-files=normal | grep '^??' >> "$ARTIFACT_DIR/integration.diff" || true
+          git clone --depth=1 ${{ env.DTBTOOL_REPO }} dtbTool
+          cd dtbTool
+          gcc dtbTool/source/dtbtool.c -o dtbTool
 
-      # ── Configuration ──────────────────────────────────────────────────────
-      - name: Configure
-        id: config
-        env:
-          DEFCONFIG: ${{ steps.plan.outputs.defconfig }}
-          MODE:      ${{ steps.plan.outputs.mode }}
-          SUSFS:     ${{ steps.plan.outputs.susfs }}
-        run: |
-          mkdir -p out "$ARTIFACT_DIR"
-          make -j"$(nproc)" O=out ARCH=arm64 CC=clang "$DEFCONFIG"
-
-          CFG="scripts/config --file out/.config"
-          if [[ "$MODE" == "disabled" ]]; then
-            $CFG -d KSU 2>/dev/null || true
-          else
-            $CFG -e KSU
-            if [[ "$MODE" == "manual" ]]; then
-              $CFG -e KSU_MANUAL_HOOK -d KSU_KPROBES_HOOK
-            else
-              $CFG -e KSU_KPROBES_HOOK -d KSU_MANUAL_HOOK -e KPROBES -e KRETPROBES
-            fi
-            if [[ "$SUSFS" == "true" ]]; then
-              $CFG -e KSU_SUSFS -e KSU_SUSFS_SUS_PATH -e KSU_SUSFS_SUS_MOUNT \
-                   -e KSU_SUSFS_SUS_KSTAT -e KSU_SUSFS_TRY_UMOUNT -e KSU_SUSFS_SPOOF_UNAME
-            fi
-          fi
-
-          make -j"$(nproc)" O=out ARCH=arm64 CC=clang olddefconfig
-
-          is_set() { grep -qE "^$1=(y|m)$" out/.config; }
-          if [[ "$MODE" == "disabled" ]]; then
-            is_set CONFIG_KSU && { echo "::error::CONFIG_KSU set in a stock build"; exit 1; }
-          else
-            is_set CONFIG_KSU || { echo "::error::CONFIG_KSU failed to enable"; exit 1; }
-            if [[ "$MODE" == "manual" ]]; then
-              is_set CONFIG_KSU_MANUAL_HOOK || { echo "::error::CONFIG_KSU_MANUAL_HOOK failed"; exit 1; }
-              is_set CONFIG_KSU_KPROBES_HOOK && { echo "::error::conflicting CONFIG_KSU_KPROBES_HOOK also set"; exit 1; }
-            else
-              is_set CONFIG_KSU_KPROBES_HOOK || { echo "::error::CONFIG_KSU_KPROBES_HOOK failed"; exit 1; }
-              is_set CONFIG_KSU_MANUAL_HOOK && { echo "::error::conflicting CONFIG_KSU_MANUAL_HOOK also set"; exit 1; }
-            fi
-            if [[ "$SUSFS" == "true" ]]; then
-              is_set CONFIG_KSU_SUSFS || { echo "::error::CONFIG_KSU_SUSFS failed to enable"; exit 1; }
-            fi
-          fi
-          cp out/.config "$ARTIFACT_DIR/config-final.txt"
-
-      - name: Pre-generate SELinux headers (prevents flask.h race against ksu.o)
-        if: steps.plan.outputs.mode != 'disabled'
-        run: |
-          make -j"$(nproc)" O=out ARCH=arm64 CC=clang \
-            CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- \
-            security/selinux/
-          test -f out/security/selinux/flask.h || { echo "::error::flask.h not generated"; exit 1; }
-
-      # ── Build ──────────────────────────────────────────────────────────────
-      - name: Build kernel
+      - name: Build kernel and DTBs (all variants)
         id: build
+        if: inputs.dry_run != true
         run: |
-          MAKE_ARGS=(-j"$(nproc)" O=out ARCH=arm64 CC=clang
-                      CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu-)
-          set +e
-          make "${MAKE_ARGS[@]}" Image Image.gz dtbs 2>&1 | tee "$ARTIFACT_DIR/build.log"
-          RC=${PIPESTATUS[0]}
-          set -e
-          [[ $RC -eq 0 ]] || { echo "::error::kernel build failed (rc=$RC)"; exit $RC; }
-          echo "kernelrelease=$(cat out/include/config/kernel.release)" >> "$GITHUB_OUTPUT"
+          cd ${{ env.ABS_KERNEL }}
+          export ARCH=arm64
+          export CROSS_COMPILE=aarch64-none-linux-gnu-
+          export CC=clang
+          export CLANG_TRIPLE=aarch64-none-linux-gnu-
+          export AR=llvm-ar
+          export NM=llvm-nm
+          export OBJCOPY=llvm-objcopy
+          export OBJDUMP=llvm-objdump
+          export STRIP=llvm-strip
 
-      - name: Validate artifacts
-        run: |
-          B="out/arch/arm64/boot"
-          test -s "$B/Image.gz" || { echo "::error::Image.gz missing/empty"; exit 1; }
-          readelf -h out/vmlinux | grep -q AArch64 || { echo "::error::vmlinux is not AArch64"; exit 1; }
-          find out/arch/arm64/boot/dts -name '*.dtb' | grep -q . || echo "::warning::no DTBs produced"
-          grep -nE 'undefined reference|relocation truncated' "$ARTIFACT_DIR/build.log" && { echo "::error::linker errors found"; exit 1; } || true
+          if [ "${{ inputs.enable_lto }}" = "true" ]; then
+            export CFLAGS="${{ inputs.extra_cflags }} -flto"
+          else
+            export CFLAGS="${{ inputs.extra_cflags }}"
+          fi
 
-      - name: Collect artifacts + manifest
+          mkdir -p ${{ env.ABS_OUT }}
+          VARIANTS="${{ inputs.build_variants || 'star2lte,starlte,crownlte' }}"
+          IFS=',' read -ra VAR_ARRAY <<< "$VARIANTS"
+          for defconfig in "${VAR_ARRAY[@]/#/exynos9810-}"; do
+            defconfig="${defconfig}_defconfig"
+            echo "Building $defconfig..."
+            make O=${{ env.ABS_OUT }} ARCH=arm64 CROSS_COMPILE=$CROSS_COMPILE CC=$CC CLANG_TRIPLE=$CLANG_TRIPLE AR=$AR NM=$NM OBJCOPY=$OBJCOPY OBJDUMP=$OBJDUMP STRIP=$STRIP ${defconfig}
+            make -j$(nproc) O=${{ env.ABS_OUT }} ARCH=arm64 CROSS_COMPILE=$CROSS_COMPILE CC=$CC CLANG_TRIPLE=$CLANG_TRIPLE AR=$AR NM=$NM OBJCOPY=$OBJCOPY OBJDUMP=$OBJDUMP STRIP=$STRIP $CFLAGS
+            cp ${{ env.ABS_OUT }}/arch/arm64/boot/Image.gz-dtb ${{ env.ABS_OUT }}/Image.gz-dtb.${defconfig%.defconfig}
+          done
+          echo "variants=${VAR_ARRAY[*]}" >> $GITHUB_OUTPUT
+
+      - name: Build dtb.img (Exynos dtbTool)
+        if: inputs.dry_run != true && inputs.upload_dtbs == true
         run: |
-          B="out/arch/arm64/boot"
-          mkdir -p "$ARTIFACT_DIR/boot" "$ARTIFACT_DIR/dtbs"
-          cp "$B/Image" "$B/Image.gz" "$ARTIFACT_DIR/boot/"
-          find "$B/dts" -name '*.dtb' -exec cp {} "$ARTIFACT_DIR/dtbs/" \; || true
-          cp out/System.map "$ARTIFACT_DIR/" || true
-          ( cd "$ARTIFACT_DIR" && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS )
-          cat > /tmp/manifest.py << 'PYEOF'
-          import json, os, datetime, subprocess
-          ad = os.environ["ARTIFACT_DIR"]
-          sums = {}
-          for line in open(os.path.join(ad, "SHA256SUMS")):
-              h, p = line.split(maxsplit=1)
-              sums[p.strip().lstrip("./")] = h
-          m = {
-            "kernel_version": "4.9.337", "arch": "arm64",
-            "ksu_integration_mode": os.environ.get("MODE",""),
-            "susfs_enabled": os.environ.get("SUSFS","") == "true",
-            "integration_repo": os.environ.get("INT_REPO",""),
-            "integration_ref": os.environ.get("INT_REF",""),
-            "build_timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            "git_commit": subprocess.check_output(["git","rev-parse","HEAD"]).decode().strip(),
-            "sha256sums": sums,
-          }
-          open(os.path.join(ad,"manifest.json"),"w").write(json.dumps(m, indent=2))
-          PYEOF
-          MODE="${{ steps.plan.outputs.mode }}" SUSFS="${{ steps.plan.outputs.susfs }}" \
-            INT_REPO="${{ steps.plan.outputs.int_repo }}" INT_REF="${{ steps.plan.outputs.int_ref }}" \
-            python3 /tmp/manifest.py
+          cd ${{ env.ABS_KERNEL }}
+          export ARCH=arm64
+          export OUT_DIR=${{ env.ABS_OUT }}
+          mkdir -p $OUT_DIR/arch/$ARCH/boot
+          ${{ github.workspace }}/dtbTool/dtbTool \
+            -s 2048 \
+            -o $OUT_DIR/arch/$ARCH/boot/dtb.img \
+            -p $OUT_DIR/scripts/dtc/ \
+            $OUT_DIR/arch/$ARCH/boot/dts/exynos/*.dtb
+          cp $OUT_DIR/arch/$ARCH/boot/dtb.img $OUT_DIR/dtb.img
+
+      - name: Package with AnyKernel3 (per variant)
+        if: inputs.dry_run != true
+        run: |
+          cd ${{ github.workspace }}
+          CLANG_VER="${{ env.CLANG_VERSION }}"
+          VARIANTS="${{ steps.build.outputs.variants }}"
+          for variant in $VARIANTS; do
+            mkdir -p ak3-$variant
+            cp -r ${{ env.ANYKERNEL_DIR }}/* ak3-$variant/
+            cp ${{ env.ABS_OUT }}/Image.gz-dtb.$variant ak3-$variant/Image.gz-dtb
+            if [ "${{ inputs.upload_dtbs }}" = "true" ]; then
+              cp ${{ env.ABS_OUT }}/dtb.img ak3-$variant/dtb.img || true
+            fi
+            cd ak3-$variant
+            zip -r9 ../AnyKernel3-KSUN-clang${CLANG_VER}-${{ inputs.localversion }}-$variant.zip *
+            cd ..
+            rm -rf ak3-$variant
+          done
 
       - name: Upload artifacts
-        if: always()
+        if: inputs.dry_run != true
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.plan.outputs.artifact_name }}
-          path: artifacts/**
-          if-no-files-found: warn
-          retention-days: 30
-
-      - name: Upload failure diagnostics
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.plan.outputs.artifact_name }}-FAILED
+          name: kernels-${{ inputs.toolchain }}-${{ inputs.localversion }}
           path: |
-            artifacts/**
-            out/.config
-          if-no-files-found: warn
+            AnyKernel3-KSUN-*.zip
+            ${{ env.ABS_OUT }}/Image.gz-dtb.*
+            ${{ env.ABS_OUT }}/dtb.img
+          retention-days: 14
 
-  publish:
-    needs: build
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_release }}
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4
+      - name: Create release
+        if: inputs.do_release == true && startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
         with:
-          name: ${{ needs.build.outputs.artifact_name }}
-          path: release
-      - env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.build.outputs.artifact_name }}-${{ github.run_number }}
-        run: |
-          cd release && zip -r "../${TAG}.zip" . >/dev/null && cd ..
-          gh release create "$TAG" "${TAG}.zip" --repo "$GITHUB_REPOSITORY" \
-            --title "$TAG" --notes "Compile-verified only. See workflow header for confidence notes."
+          files: |
+            AnyKernel3-KSUN-*.zip
+          body: |
+            **Exynos9810 — Linux 4.9.337 — KSUN (manual hook)**
+
+            - Toolchain: ${{ inputs.toolchain }} (${{ env.CLANG_VERSION }})
+            - Localversion: ${{ inputs.localversion }}
+            - Build: ${{ inputs.build_user }}@${{ inputs.build_host }} #${{ inputs.build_version }}
+            - Timestamp: ${{ inputs.build_timestamp }}
+            - Variants: ${{ steps.build.outputs.variants }}
+            - DTB: ${{ inputs.upload_dtbs == true && 'included' || 'not included' }}
+            - LTO: ${{ inputs.enable_lto == true && 'enabled' || 'disabled' }}
+            - Extra CFLAGS: `${{ inputs.extra_cflags || 'none' }}`
+
+            ⚠️ Test on physical devices before flashing.
