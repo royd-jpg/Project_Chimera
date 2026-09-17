@@ -132,13 +132,6 @@ env:
   KBUILD_BUILD_VERSION: ${{ inputs.build_version }}
   KBUILD_BUILD_TIMESTAMP: ${{ inputs.build_timestamp }}
 
-  ABS_KERNEL: "${{ github.workspace }}/${{ env.KERNEL_DIR }}"
-  ABS_OUT: "${{ github.workspace }}/${{ env.OUT_DIR }}"
-  ABS_LOG: "${{ github.workspace }}/${{ env.LOG_DIR }}"
-  ABS_TC: "${{ github.workspace }}/toolchains/clang"
-  ABS_AK3: "${{ github.workspace }}/${{ env.ANYKERNEL_DIR }}"
-  ABS_DTBCOMP: "${{ github.workspace }}/dtbTool"
-
 jobs:
   build:
     name: Build — ${{ inputs.toolchain }} / ${{ inputs.localversion }}
@@ -296,7 +289,7 @@ jobs:
         uses: actions/cache@v4
         id: tc-cache
         with:
-          path: "${{ env.ABS_TC }}"
+          path: toolchains/clang
           key: "${{ env.TC_CACHE_KEY }}"
           restore-keys: |
             ${{ env.TC_CACHE_KEY }}
@@ -306,8 +299,8 @@ jobs:
         run: |
           set -euo pipefail
           echo "::group::Downloading toolchain"
-          rm -rf "${{ env.ABS_TC }}"
-          mkdir -p "${{ env.ABS_TC }}"
+          rm -rf toolchains/clang
+          mkdir -p toolchains/clang
 
           ARCHIVE="/tmp/clang_archive"
           if [[ -z "${{ env.TC_URL }}" ]]; then
@@ -330,14 +323,14 @@ jobs:
 
           case "${{ env.TC_ARCHIVE_FMT }}" in
             tar.gz|tar)
-              tar -C "${{ env.ABS_TC }}" -xzf "$ARCHIVE" --strip-components=1
+              tar -C toolchains/clang -xzf "$ARCHIVE" --strip-components=1
               ;;
             tar.xz)
-              tar -C "${{ env.ABS_TC }}" -xJf "$ARCHIVE" --strip-components=1
+              tar -C toolchains/clang -xJf "$ARCHIVE" --strip-components=1
               ;;
             tar.zst)
               zstd -d "$ARCHIVE" -o /tmp/clang.tar --force
-              tar -C "${{ env.ABS_TC }}" -xf /tmp/clang.tar --strip-components=1
+              tar -C toolchains/clang -xf /tmp/clang.tar --strip-components=1
               ;;
             *)
               echo "::error::Unrecognized TC_ARCHIVE_FMT '${{ env.TC_ARCHIVE_FMT }}'"
@@ -345,20 +338,20 @@ jobs:
               ;;
           esac
 
-          if [[ -z "$(find "${{ env.ABS_TC }}" -type f -print -quit)" ]]; then
-            echo "::error::Extraction succeeded but ${{ env.ABS_TC }} is empty"
+          if [[ -z "$(find toolchains/clang -type f -print -quit)" ]]; then
+            echo "::error::Extraction succeeded but toolchains/clang is empty"
             exit 1
           fi
-          echo "Toolchain extracted: $(find "${{ env.ABS_TC }}" -type f | wc -l) file(s)"
+          echo "Toolchain extracted: $(find toolchains/clang -type f | wc -l) file(s)"
           echo "::endgroup::"
 
       - name: Configure toolchain PATH
         run: |
           set -euo pipefail
           echo "::group::Configuring toolchain PATH"
-          ACTUAL_BIN=$(find "${{ env.ABS_TC }}" -type d -name "bin" -printf "%d\t%p\n" | sort -n | cut -f2 | head -n 1)
+          ACTUAL_BIN=$(find toolchains/clang -type d -name "bin" -printf "%d\t%p\n" | sort -n | cut -f2 | head -n 1)
           if [[ -z "$ACTUAL_BIN" || ! -d "$ACTUAL_BIN" ]]; then
-            echo "::error::Could not find 'bin' directory in ${{ env.ABS_TC }}"
+            echo "::error::Could not find 'bin' directory in toolchains/clang"
             exit 1
           fi
           echo "Found toolchain bin: $ACTUAL_BIN"
@@ -391,18 +384,18 @@ jobs:
           echo "CLANG_VERSION=$CLANG_VERSION" >> "$GITHUB_ENV"
           echo "TC_IDENTITY_HASH=$TC_IDENTITY_HASH" >> "$GITHUB_ENV"
 
-          mkdir -p "${{ env.ABS_LOG }}"
+          mkdir -p logs
           {
             echo "$CLANG_VERSION"
             echo "$LLD_VERSION"
-          } > "${{ env.ABS_LOG }}/toolchain-identity.txt"
+          } > logs/toolchain-identity.txt
           echo "::endgroup::"
 
       - name: Clone KernelSU-Next (next-susfs)
         run: |
           set -euo pipefail
           echo "::group::Cloning KernelSU-Next"
-          cd "${{ env.ABS_KERNEL }}"
+          cd kernel
           git clone --depth=1 --branch next-susfs https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU-Next
           cd KernelSU-Next
           git fetch --depth=1 origin "${{ env.KSU_COMMIT }}"
@@ -413,7 +406,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "::group::Running KernelSU-Next setup"
-          cd "${{ env.ABS_KERNEL }}"
+          cd kernel
           bash KernelSU-Next/kernel/setup.sh next-susfs
           echo "::endgroup::"
 
@@ -421,7 +414,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "::group::Applying manual legacy hooks"
-          cd "${{ env.ABS_KERNEL }}"
+          cd kernel
           cat > ksun_manual_hooks.patch << 'PATCH'
           --- a/fs/exec.c
           +++ b/fs/exec.c
@@ -580,7 +573,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "::group::Verifying KSU hooks"
-          cd "${{ env.ABS_KERNEL }}"
+          cd kernel
           HOOKS_OK=0
           grep -q "ksu_handle_execveat" fs/exec.c || { echo "::error::exec hook missing" >&2; HOOKS_OK=1; }
           grep -q "ksu_handle_faccessat" fs/open.c || { echo "::error::faccessat hook missing" >&2; HOOKS_OK=1; }
@@ -599,7 +592,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "::group::Configuring defconfigs"
-          cd "${{ env.ABS_KERNEL }}"
+          cd kernel
           for cfg in arch/arm64/configs/exynos9810-star2lte_defconfig \
                    arch/arm64/configs/exynos9810-starlte_defconfig \
                    arch/arm64/configs/exynos9810-crownlte_defconfig; do
@@ -624,7 +617,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "::group::Cloning AnyKernel3"
-          git clone --depth=1 --branch "${{ env.ANYKERNEL3_BRANCH }}" "${{ env.ANYKERNEL_REPO }}" "${{ env.ANYKERNEL_DIR }}"
+          git clone --depth=1 --branch "${{ env.ANYKERNEL3_BRANCH }}" "${{ env.ANYKERNEL_REPO }}" anykernel3
           echo "::endgroup::"
 
       - name: Clone dtbTool (Exynos)
@@ -634,8 +627,8 @@ jobs:
           git clone --depth=1 "${{ env.DTBTOOL_REPO }}" dtbTool
           cd dtbTool
           gcc dtbTool/source/dtbtool.c -o dtbTool
-          mv dtbTool "${{ env.ABS_DTBCOMP }}"
-          chmod +x "${{ env.ABS_DTBCOMP }}"
+          mv dtbTool dtbTool-bin
+          chmod +x dtbTool-bin
           cd ..
           rm -rf dtbTool
           echo "::endgroup::"
@@ -646,7 +639,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "::group::Building kernel"
-          cd "${{ env.ABS_KERNEL }}"
+          cd kernel
           export ARCH=arm64
           export CROSS_COMPILE=aarch64-none-linux-gnu-
           export CC=clang
@@ -663,14 +656,14 @@ jobs:
             export CFLAGS="${{ inputs.extra_cflags }}"
           fi
 
-          mkdir -p "${{ env.ABS_OUT }}"
+          mkdir -p kernel-out
           IFS=',' read -ra VAR_ARRAY <<< "${{ inputs.build_variants }}"
           for defconfig in "${VAR_ARRAY[@]/#/exynos9810-}"; do
             defconfig="${defconfig}_defconfig"
             echo "Building $defconfig..."
-            make O="${{ env.ABS_OUT }}" ARCH=arm64 CROSS_COMPILE="$CROSS_COMPILE" CC="$CC" CLANG_TRIPLE="$CLANG_TRIPLE" AR="$AR" NM="$NM" OBJCOPY="$OBJCOPY" OBJDUMP="$OBJDUMP" STRIP="$STRIP" "$defconfig"
-            make -j"$(nproc)" O="${{ env.ABS_OUT }}" ARCH=arm64 CROSS_COMPILE="$CROSS_COMPILE" CC="$CC" CLANG_TRIPLE="$CLANG_TRIPLE" AR="$AR" NM="$NM" OBJCOPY="$OBJCOPY" OBJDUMP="$OBJDUMP" STRIP="$STRIP" $CFLAGS
-            cp "${{ env.ABS_OUT }}/arch/arm64/boot/Image.gz-dtb" "${{ env.ABS_OUT }}/Image.gz-dtb.${defconfig%.defconfig}"
+            make O=kernel-out ARCH=arm64 CROSS_COMPILE="$CROSS_COMPILE" CC="$CC" CLANG_TRIPLE="$CLANG_TRIPLE" AR="$AR" NM="$NM" OBJCOPY="$OBJCOPY" OBJDUMP="$OBJDUMP" STRIP="$STRIP" "$defconfig"
+            make -j"$(nproc)" O=kernel-out ARCH=arm64 CROSS_COMPILE="$CROSS_COMPILE" CC="$CC" CLANG_TRIPLE="$CLANG_TRIPLE" AR="$AR" NM="$NM" OBJCOPY="$OBJCOPY" OBJDUMP="$OBJDUMP" STRIP="$STRIP" $CFLAGS
+            cp kernel-out/arch/arm64/boot/Image.gz-dtb "kernel-out/Image.gz-dtb.${defconfig%.defconfig}"
           done
           echo "variants=${VAR_ARRAY[*]}" >> "$GITHUB_OUTPUT"
           echo "::endgroup::"
@@ -680,11 +673,11 @@ jobs:
         run: |
           set -euo pipefail
           echo "::group::Building dtb.img"
-          cd "${{ env.ABS_KERNEL }}"
+          cd kernel
           export ARCH=arm64
-          export OUT_DIR="${{ env.ABS_OUT }}"
+          export OUT_DIR=kernel-out
           mkdir -p "$OUT_DIR/arch/$ARCH/boot"
-          DTBTOOL="${{ env.ABS_DTBCOMP }}"
+          DTBTOOL="./dtbTool-bin"
           if [[ ! -x "$DTBTOOL" ]]; then
             echo "::error::dtbTool not found at $DTBTOOL"
             exit 1
@@ -704,15 +697,14 @@ jobs:
         run: |
           set -euo pipefail
           echo "::group::Packaging AnyKernel3 ZIPs"
-          cd "${{ github.workspace }}"
           CLANG_VER="${{ env.CLANG_VERSION }}"
           IFS=',' read -ra VAR_ARRAY <<< "${{ inputs.build_variants }}"
           for variant in "${VAR_ARRAY[@]}"; do
             mkdir -p "ak3-$variant"
-            cp -r "${{ env.ANYKERNEL_DIR }}"/* "ak3-$variant/"
-            cp "${{ env.ABS_OUT }}/Image.gz-dtb.$variant" "ak3-$variant/Image.gz-dtb"
+            cp -r anykernel3/* "ak3-$variant/"
+            cp "kernel-out/Image.gz-dtb.$variant" "ak3-$variant/Image.gz-dtb"
             if [[ "${{ inputs.upload_dtbs }}" == "true" ]]; then
-              cp "${{ env.ABS_OUT }}/dtb.img" "ak3-$variant/dtb.img" 2>/dev/null || true
+              cp "kernel-out/dtb.img" "ak3-$variant/dtb.img" 2>/dev/null || true
             fi
             cd "ak3-$variant"
             zip -r9 "../AnyKernel3-KSUN-clang${CLANG_VER}-${{ inputs.localversion }}-$variant.zip" .
@@ -728,8 +720,8 @@ jobs:
           name: kernels-${{ inputs.toolchain }}-${{ inputs.localversion }}
           path: |
             AnyKernel3-KSUN-*.zip
-            ${{ env.ABS_OUT }}/Image.gz-dtb.*
-            ${{ env.ABS_OUT }}/dtb.img
+            kernel-out/Image.gz-dtb.*
+            kernel-out/dtb.img
           retention-days: 14
           if-no-files-found: warn
 
