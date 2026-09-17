@@ -263,12 +263,17 @@ jobs:
 
           echo "::endgroup::"
 
+      # FIX: the cache key now includes the resolved TC_URL. zyc_stable resolves a
+      # rolling "latest" link at runtime; previously the key was static per-toolchain,
+      # so once cached, every future run silently reused the first-ever downloaded
+      # build and never picked up upstream updates. Pinned toolchains (llvm22, aosp21,
+      # etc.) are unaffected since their TC_URL never changes between runs.
       - name: Restore toolchain cache
         uses: actions/cache@v6
         id: toolchain-cache
         with:
           path: toolchains/clang
-          key: toolchain-${{ inputs.toolchain || 'llvm22' }}-ubuntu-24.04-v3
+          key: toolchain-${{ inputs.toolchain || 'llvm22' }}-ubuntu-24.04-v3-${{ env.TC_URL }}
 
       - name: Download and extract toolchain
         if: steps.toolchain-cache.outputs.cache-hit != 'true'
@@ -319,13 +324,21 @@ jobs:
           #   <root>/bin/clang
           #   bin/clang
           #   nested/wrapper/<root>/bin/clang
-          clang_bin="$(find /tmp/clang-stage -type f -path '*/bin/clang' -print -quit)"
+          #
+          # FIX: kernel.org publishes "slim" LLVM toolchains built with the LLVM
+          # multicall driver (LLVM_TOOL_LLVM_DRIVER_BUILD). In that layout, bin/clang
+          # (and most other tool names) are SYMLINKS to a single shared "llvm" binary,
+          # not regular files. `-type f` alone never matches them, so this always
+          # returned empty for llvm20/llvm21/llvm22 even on a perfectly good download.
+          # Match both regular files and symlinks.
+          clang_bin="$(find /tmp/clang-stage \( -type f -o -type l \) -path '*/bin/clang' -print -quit)"
           if [[ -z "$clang_bin" ]]; then
             echo "::error::clang was not found in extracted archive"
             echo "::group::Archive contents"
-            find /tmp/clang-stage -maxdepth 5 -type f \
-              \( -name clang -o -name ld.lld -o -name llvm-ar \) \
-              -print | sort | head -n 200
+            # FIX: dump full type+path listing (not just a name filter with -type f)
+            # so a future failure is actually self-diagnosing instead of printing
+            # an empty group, as it did before.
+            find /tmp/clang-stage -maxdepth 6 -printf '%y %p\n' | sort | head -n 200
             echo "::endgroup::"
             exit 1
           fi
@@ -334,6 +347,8 @@ jobs:
 
           # Keep the complete toolchain root intact. This is important for
           # Neutron, where bin/, lib/, and supporting files belong together.
+          # rsync -a preserves symlinks (-l is implied by -a), so the multicall
+          # symlinks stay intact and resolvable after this copy.
           rm -rf toolchains/clang
           mkdir -p toolchains/clang
           rsync -a "$toolchain_root"/ toolchains/clang/
@@ -342,8 +357,10 @@ jobs:
           test -x toolchains/clang/bin/ld.lld
 
           # Make all bundled LLVM tools executable when the archive preserved
-          # them as non-executable files.
-          find toolchains/clang/bin -maxdepth 1 -type f -exec chmod +x {} +
+          # them as non-executable files. FIX: include symlinks here too — chmod
+          # on a symlink is a harmless no-op/pass-through to its target on Linux,
+          # so widening this is safe and keeps it consistent with the lookup above.
+          find toolchains/clang/bin -maxdepth 1 \( -type f -o -type l \) -exec chmod +x {} +
 
           echo "Resolved toolchain root: $toolchain_root"
           echo "::endgroup::"
@@ -356,7 +373,7 @@ jobs:
           toolchain_bin="$PWD/toolchains/clang/bin"
           if [[ ! -x "$toolchain_bin/clang" ]]; then
             echo "::error::clang is missing from $toolchain_bin"
-            find toolchains/clang -maxdepth 4 -type f \
+            find toolchains/clang -maxdepth 4 \( -type f -o -type l \) \
               \( -name clang -o -name ld.lld -o -name llvm-ar \) \
               -print | sort | head -n 200
             exit 1
@@ -473,7 +490,6 @@ jobs:
           set -euo pipefail
           echo "::group::Build kernel variants"
 
-          export PATH="$(dirname "$(find toolchains/clang -type f -path '*/bin/clang' -print -quit)"):$PATH"
           export CROSS_COMPILE=aarch64-linux-gnu-
           export CC=clang
           export LD=ld.lld
@@ -483,6 +499,14 @@ jobs:
           export OBJDUMP=llvm-objdump
           export STRIP=llvm-strip
           export KCFLAGS="$EXTRA_CFLAGS"
+          # FIX: this Makefile does `CLANG_TRIPLE ?= $(CROSS_COMPILE)`, but the make
+          # invocation below passes CLANG_TRIPLE on the command line. A command-line
+          # make variable always wins over `?=` in the Makefile, and $CLANG_TRIPLE was
+          # never set anywhere in this workflow, so it was silently expanding to an
+          # empty string — disabling `--target=aarch64-linux-gnu` in CLANG_FLAGS.
+          # Set it explicitly instead of relying on the Makefile default being able
+          # to take effect.
+          export CLANG_TRIPLE="$CROSS_COMPILE"
 
           IFS=',' read -r -a variants <<< "$BUILD_VARIANTS"
           built_variants=()
