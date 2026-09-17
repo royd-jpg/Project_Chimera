@@ -119,8 +119,10 @@ jobs:
 
     steps:
       - name: Checkout Project_Chimera
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
+          repository: royd-jpg/Project_Chimera
+          ref: lineage-24.0
           fetch-depth: 1
           submodules: recursive
 
@@ -593,7 +595,6 @@ jobs:
               zip -r9 "../$zip_name" .
             )
 
-            mv "packages/$zip_name" "packages/$zip_name"
             rm -rf "$staging_dir"
           done
 
