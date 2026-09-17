@@ -8,108 +8,109 @@ on:
       - "arch/arm64/**"
       - "drivers/**"
       - "fs/**"
-      - "kernel/**"
       - "include/**"
+      - "kernel/**"
+      - "security/**"
+      - ".github/workflows/kernel-android17-ksun-susfs.yml"
+  pull_request:
+    branches:
+      - lineage-24.0
+    paths:
+      - "arch/arm64/**"
+      - "drivers/**"
+      - "fs/**"
+      - "include/**"
+      - "kernel/**"
+      - "security/**"
       - ".github/workflows/kernel-android17-ksun-susfs.yml"
   workflow_dispatch:
     inputs:
       toolchain:
-        description: "Toolchain: llvm22/llvm21/llvm20/aosp22/aosp21/aosp20/aosp19/neutron19/neutron23/neutron24/zyc_stable"
-        required: true
+        description: "llvm22, llvm21, llvm20, aosp22, aosp21, aosp20, aosp19, neutron19, neutron23, neutron24, or zyc_stable"
         type: string
-        default: "llvm22"
-
-      dry_run:
-        description: "Validate only — skip build and package"
-        required: false
-        type: boolean
-        default: false
-
-      do_release:
-        description: "Create a GitHub Release after successful build"
-        required: false
-        type: boolean
-        default: false
-
+        required: true
+        default: llvm22
       localversion:
-        description: "LOCALVERSION suffix (must start with '-')"
-        required: true
+        description: "Kernel localversion; must start with '-'"
         type: string
+        required: true
         default: "-Chimera_Mk9"
-
       build_user:
         description: "KBUILD_BUILD_USER"
-        required: true
         type: string
-        default: "MTRXX"
-
+        required: true
+        default: MTRXX
       build_host:
         description: "KBUILD_BUILD_HOST"
-        required: false
         type: string
-        default: "CM9XNNNN"
-
+        required: true
+        default: CM9XNNNN
       build_version:
-        description: "KBUILD_BUILD_VERSION (#N token)"
-        required: false
+        description: "KBUILD_BUILD_VERSION"
         type: string
+        required: true
         default: "1"
-
       build_timestamp:
-        description: "KBUILD_BUILD_TIMESTAMP (e.g. 'Wed Aug 19 03:26:19 UTC 2026')"
-        required: true
+        description: "KBUILD_BUILD_TIMESTAMP"
         type: string
+        required: true
         default: "Wed Aug 19 03:26:19 UTC 2026"
-
       build_variants:
-        description: "Device variants to build (comma-separated: star2lte,starlte,crownlte)"
-        required: true
+        description: "Comma-separated: star2lte,starlte,crownlte"
         type: string
+        required: true
         default: "star2lte,starlte,crownlte"
-
       upload_dtbs:
-        description: "Upload separate DTB files"
-        required: false
+        description: "Build and upload per-variant DTB images"
         type: boolean
+        required: true
         default: true
-
       enable_lto:
-        description: "Enable Link-Time Optimization"
-        required: false
+        description: "Enable CONFIG_LTO_CLANG when supported by the tree"
         type: boolean
+        required: true
+        default: false
+      extra_cflags:
+        description: "Additional KCFLAGS"
+        type: string
+        required: false
+        default: ""
+      dry_run:
+        description: "Validate setup and configuration only"
+        type: boolean
+        required: true
+        default: false
+      do_release:
+        description: "Create a GitHub release after a successful manual build"
+        type: boolean
+        required: true
         default: false
 
-      extra_cflags:
-        description: "Extra KCFLAGS (space-separated)"
-        required: false
-        type: string
-        default: ""
+permissions:
+  contents: write
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.toolchain }}-${{ inputs.localversion }}
+  group: kernel-exynos9810-${{ github.workflow }}-${{ github.ref }}-${{ inputs.toolchain || 'llvm22' }}
   cancel-in-progress: true
 
 env:
-  KERNEL_DIR: "."
-  OUT_DIR: "kernel-out"
-  LOG_DIR: "logs"
-  ANYKERNEL_DIR: "anykernel3"
-  ANYKERNEL_REPO: "https://github.com/osm0sis/AnyKernel3.git"
-  ANYKERNEL3_BRANCH: "main"
-  DTBTOOL_REPO: "https://github.com/rajatgupta1998/android_tools_system_dtbTool.git"
-
-  CCACHE_MAXSIZE: "3G"
-  KERNEL_VERSION: "4.9.337"
-
-  LOCALVERSION: ${{ inputs.localversion }}
-  KBUILD_BUILD_USER: ${{ inputs.build_user }}
-  KBUILD_BUILD_HOST: ${{ inputs.build_host }}
-  KBUILD_BUILD_VERSION: ${{ inputs.build_version }}
-  KBUILD_BUILD_TIMESTAMP: ${{ inputs.build_timestamp }}
+  ARCH: arm64
+  CCACHE_MAXSIZE: 3G
+  KERNEL_VERSION: 4.9.337
+  KBUILD_BUILD_USER: ${{ inputs.build_user || 'MTRXX' }}
+  KBUILD_BUILD_HOST: ${{ inputs.build_host || 'CM9XNNNN' }}
+  KBUILD_BUILD_VERSION: ${{ inputs.build_version || '1' }}
+  KBUILD_BUILD_TIMESTAMP: ${{ inputs.build_timestamp || 'Wed Aug 19 03:26:19 UTC 2026' }}
+  LOCALVERSION: ${{ inputs.localversion || '-Chimera_Mk9' }}
+  BUILD_VARIANTS: ${{ inputs.build_variants || 'star2lte,starlte,crownlte' }}
+  TOOLCHAIN: ${{ inputs.toolchain || 'llvm22' }}
+  EXTRA_CFLAGS: ${{ inputs.extra_cflags || '' }}
+  ENABLE_LTO: ${{ inputs.enable_lto || false }}
+  UPLOAD_DTBS: ${{ inputs.upload_dtbs || false }}
 
 jobs:
   build:
-    name: Build — ${{ inputs.toolchain }} / ${{ inputs.localversion }}
+    name: Build — ${{ inputs.toolchain || 'llvm22' }}
     runs-on: ubuntu-24.04
 
     defaults:
@@ -117,453 +118,536 @@ jobs:
         shell: bash
 
     steps:
-      - name: Validate workflow inputs
+      - name: Checkout Project_Chimera
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: recursive
+
+      - name: Validate inputs
         run: |
           set -euo pipefail
-          echo "::group::Validating workflow inputs"
-          FAIL=0
+          echo "::group::Validate inputs"
 
-          if [[ "${{ inputs.localversion }}" != -* ]]; then
-            echo "::error::localversion must start with '-', got '${{ inputs.localversion }}'"
-            FAIL=1
+          fail=0
+
+          if [[ "$LOCALVERSION" != -* ]]; then
+            echo "::error::localversion must start with '-': $LOCALVERSION"
+            fail=1
           fi
 
-          if [[ -z "${{ inputs.build_timestamp }}" ]]; then
-            echo "::error::build_timestamp must not be empty"
-            FAIL=1
+          for value_name in KBUILD_BUILD_USER KBUILD_BUILD_HOST KBUILD_BUILD_VERSION KBUILD_BUILD_TIMESTAMP BUILD_VARIANTS TOOLCHAIN; do
+            if [[ -z "${!value_name}" ]]; then
+              echo "::error::$value_name must not be empty"
+              fail=1
+            fi
+          done
+
+          case "$TOOLCHAIN" in
+            llvm22|llvm21|llvm20|aosp22|aosp21|aosp20|aosp19|neutron19|neutron23|neutron24|zyc_stable)
+              ;;
+            *)
+              echo "::error::Unsupported toolchain: $TOOLCHAIN"
+              fail=1
+              ;;
+          esac
+
+          IFS=',' read -r -a variants <<< "$BUILD_VARIANTS"
+          if [[ "${#variants[@]}" -eq 0 ]]; then
+            echo "::error::No build variants supplied"
+            fail=1
           fi
 
-          if [[ -z "${{ inputs.build_variants }}" ]]; then
-            echo "::error::build_variants must not be empty"
-            FAIL=1
-          fi
-
-          IFS=',' read -ra VARS_CHECK <<< "${{ inputs.build_variants }}"
-          for v in "${VARS_CHECK[@]}"; do
-            case "$v" in
-              star2lte|starlte|crownlte) ;;
+          declare -A seen=()
+          for variant in "${variants[@]}"; do
+            variant="${variant//[[:space:]]/}"
+            case "$variant" in
+              star2lte|starlte|crownlte)
+                ;;
               *)
-                echo "::error::Unknown build variant '$v' (allowed: star2lte, starlte, crownlte)"
-                FAIL=1
+                echo "::error::Unsupported variant: $variant"
+                fail=1
                 ;;
             esac
+
+            if [[ -n "${seen[$variant]:-}" ]]; then
+              echo "::error::Duplicate variant: $variant"
+              fail=1
+            fi
+            seen["$variant"]=1
           done
 
           echo "::endgroup::"
-          if [[ "$FAIL" -ne 0 ]]; then
-            echo "::error::Input validation failed"
-            exit 1
-          fi
-          echo "PASS: all workflow_dispatch inputs valid"
+          [[ "$fail" -eq 0 ]]
 
-      - name: Checkout kernel source (Project_Chimera)
-        uses: actions/checkout@v4
-        with:
-          path: "."
-          fetch-depth: 1
-
-      - name: Guard against unsupported Linux 4.9 IDA APIs
+      - name: Install dependencies
         run: |
           set -euo pipefail
-          echo "::group::Checking fs/namespace.c for post-4.9 IDA APIs"
-          # ida_alloc()/ida_alloc_min()/ida_free() do not exist in Linux 4.9's IDA
-          # layer (only ida_simple_get/ida_pre_get/ida_get_new*/ida_remove). If a
-          # KSU/SUSFS patch introduced these, the build fails deep into compilation
-          # with -Werror,-Wimplicit-function-declaration. Fail fast here instead.
-          if [[ -f fs/namespace.c ]] && grep -nE '\bida_(alloc|alloc_min|free)\b' fs/namespace.c; then
-            echo "::error::fs/namespace.c uses IDA APIs unavailable in Linux ${KERNEL_VERSION} (ida_alloc/ida_alloc_min/ida_free). Backport to ida_get_new()/ida_get_new_above()/ida_remove() before building."
-            exit 1
-          fi
-          echo "PASS: no unsupported IDA APIs found in fs/namespace.c"
-          echo "::endgroup::"
+          echo "::group::Install dependencies"
 
-      - name: Install build dependencies
-        run: |
-          set -euo pipefail
-          echo "::group::Installing build dependencies"
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            bc bison build-essential ccache curl flex git gnupg gperf \
-            libssl-dev libtinfo5 lzop ncurses-dev openssl \
-            python3 python3-pip rsync wget zip zlib1g-dev \
-            libelf1 libfdt1 libffi7 libstdc++6 \
-            device-tree-compiler aria2 zstd
-          echo "::endgroup::"
+            aria2 bc bison build-essential ccache device-tree-compiler \
+            flex gcc-aarch64-linux-gnu git libelf-dev libncurses-dev \
+            libssl-dev lzop python3 rsync wget zip zlib1g-dev zstd \
+            binutils-aarch64-linux-gnu
 
-      - name: Cache ccache directory
-        uses: actions/cache@v4
-        with:
-          path: ~/.ccache
-          key: ccache-${{ inputs.toolchain }}-${{ github.ref_name }}
-          restore-keys: |
-            ccache-${{ inputs.toolchain }}-
+          echo "::endgroup::"
 
       - name: Configure ccache
         run: |
           set -euo pipefail
-          echo "::group::Configuring ccache"
-          mkdir -p ~/.ccache
-          ccache -M "${CCACHE_MAXSIZE}"
+          echo "::group::Configure ccache"
+
+          ccache -M "$CCACHE_MAXSIZE"
           ccache -z
           echo "/usr/lib/ccache" >> "$GITHUB_PATH"
-          echo "USE_CCACHE=1" >> "$GITHUB_ENV"
+
           echo "::endgroup::"
 
-      - name: Resolve toolchain configuration
-        id: tc-resolve
+      - name: Resolve toolchain
         run: |
           set -euo pipefail
-          echo "::group::Resolving toolchain configuration"
-          TOOLCHAIN="${{ inputs.toolchain }}"
-          TC_URL=""
-          TC_ARCHIVE_FMT="tar.gz"
-          TC_CACHE_KEY=""
+          echo "::group::Resolve toolchain"
 
           case "$TOOLCHAIN" in
             aosp19)
-              TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-15.0.0_r10/clang-r536225.tar.gz"
-              TC_CACHE_KEY="aosp-clang-r536225-ubuntu-24.04-v2"
+              echo "TC_URL=https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-15.0.0_r10/clang-r536225.tar.gz" >> "$GITHUB_ENV"
+              echo "TC_ARCHIVE=tar.gz" >> "$GITHUB_ENV"
               ;;
             aosp20)
-              TC_URL="https://gitlab.com/kei-space/clang/r547379/-/archive/master/r547379-master.tar.gz"
-              TC_CACHE_KEY="aosp-clang-r547379-ubuntu-24.04-v2"
+              echo "TC_URL=https://gitlab.com/kei-space/clang/r547379/-/archive/master/r547379-master.tar.gz" >> "$GITHUB_ENV"
+              echo "TC_ARCHIVE=tar.gz" >> "$GITHUB_ENV"
               ;;
             aosp21)
-              TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/21b19c041de1f1df9b97fd9902ae5405c6cf8eb9/clang-r563880c.tar.gz"
-              TC_CACHE_KEY="aosp-clang-r563880c-ubuntu-24.04-v2"
+              echo "TC_URL=https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/21b19c041de1f1df9b97fd9902ae5405c6cf8eb9/clang-r563880c.tar.gz" >> "$GITHUB_ENV"
+              echo "TC_ARCHIVE=tar.gz" >> "$GITHUB_ENV"
               ;;
             aosp22)
-              TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/mirror-goog-main-llvm-toolchain-source/clang-r596125.tar.gz"
-              TC_CACHE_KEY="aosp-clang-r596125-ubuntu-24.04-v2"
+              echo "TC_URL=https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/mirror-goog-main-llvm-toolchain-source/clang-r596125.tar.gz" >> "$GITHUB_ENV"
+              echo "TC_ARCHIVE=tar.gz" >> "$GITHUB_ENV"
               ;;
             llvm20)
-              TC_URL="https://mirrors.edge.kernel.org/pub/tools/llvm/files/llvm-20.1.8-x86_64.tar.xz"
-              TC_ARCHIVE_FMT="tar.xz"
-              TC_CACHE_KEY="korg-clang-20.1.8-ubuntu-24.04-v1"
+              echo "TC_URL=https://mirrors.edge.kernel.org/pub/tools/llvm/files/llvm-20.1.8-x86_64.tar.xz" >> "$GITHUB_ENV"
+              echo "TC_ARCHIVE=tar.xz" >> "$GITHUB_ENV"
               ;;
             llvm21)
-              TC_URL="https://mirrors.edge.kernel.org/pub/tools/llvm/files/llvm-21.1.0-x86_64.tar.xz"
-              TC_ARCHIVE_FMT="tar.xz"
-              TC_CACHE_KEY="llvm-clang-21.1.0-ubuntu-24.04-v1"
+              echo "TC_URL=https://mirrors.edge.kernel.org/pub/tools/llvm/files/llvm-21.1.0-x86_64.tar.xz" >> "$GITHUB_ENV"
+              echo "TC_ARCHIVE=tar.xz" >> "$GITHUB_ENV"
               ;;
             llvm22)
-              TC_URL="https://mirrors.edge.kernel.org/pub/tools/llvm/files/llvm-22.1.7-x86_64.tar.xz"
-              TC_ARCHIVE_FMT="tar.xz"
-              TC_CACHE_KEY="llvm-clang-22.1.7-ubuntu-24.04-v1"
+              echo "TC_URL=https://mirrors.edge.kernel.org/pub/tools/llvm/files/llvm-22.1.7-x86_64.tar.xz" >> "$GITHUB_ENV"
+              echo "TC_ARCHIVE=tar.xz" >> "$GITHUB_ENV"
               ;;
             neutron19)
-              TC_URL="https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/10032024/neutron-clang-10032024.tar.zst"
-              TC_ARCHIVE_FMT="tar.zst"
-              TC_CACHE_KEY="neutron-clang-10032024-ubuntu-24.04-v2"
+              echo "TC_URL=https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/10032024/neutron-clang-10032024.tar.zst" >> "$GITHUB_ENV"
+              echo "TC_ARCHIVE=tar.zst" >> "$GITHUB_ENV"
               ;;
             neutron23)
-              TC_URL="https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/30062026/neutron-clang-30062026.tar.zst"
-              TC_ARCHIVE_FMT="tar.zst"
-              TC_CACHE_KEY="neutron-clang-30062026-ubuntu-24.04-v2"
+              echo "TC_URL=https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/30062026/neutron-clang-30062026.tar.zst" >> "$GITHUB_ENV"
+              echo "TC_ARCHIVE=tar.zst" >> "$GITHUB_ENV"
               ;;
             neutron24)
-              TC_URL="https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/30072026/neutron-clang-30072026.tar.zst"
-              TC_ARCHIVE_FMT="tar.zst"
-              TC_CACHE_KEY="neutron-clang-30072026-ubuntu-24.04-v2"
+              echo "TC_URL=https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/30072026/neutron-clang-30072026.tar.zst" >> "$GITHUB_ENV"
+              echo "TC_ARCHIVE=tar.zst" >> "$GITHUB_ENV"
               ;;
             zyc_stable)
-              TC_URL=$(curl -fsSL "https://raw.githubusercontent.com/ZyCromerZ/Clang/main/Clang-main-link.txt" 2>/dev/null || true)
-              if [[ -n "$TC_URL" ]]; then
-                TC_CACHE_KEY="zyc-clang-ubuntu-24.04-$(printf '%s' "$TC_URL" | sha256sum | cut -c1-16)"
-              else
-                TC_CACHE_KEY="zyc-clang-ubuntu-24.04-lookup-failed"
-                echo "::warning::zyc_stable URL lookup failed, cache key will not be unique"
-              fi
-              ;;
-            *)
-              echo "::error::Unsupported toolchain '$TOOLCHAIN'"
-              exit 1
+              zyc_url="$(curl -fsSL https://raw.githubusercontent.com/ZyCromerZ/Clang/main/Clang-main-link.txt)"
+              [[ -n "$zyc_url" ]]
+              echo "TC_URL=$zyc_url" >> "$GITHUB_ENV"
+              echo "TC_ARCHIVE=tar.zst" >> "$GITHUB_ENV"
               ;;
           esac
 
-          echo "TC_URL=$TC_URL" >> "$GITHUB_ENV"
-          echo "TC_ARCHIVE_FMT=$TC_ARCHIVE_FMT" >> "$GITHUB_ENV"
-          echo "TC_CACHE_KEY=$TC_CACHE_KEY" >> "$GITHUB_ENV"
-          echo "TC_CACHE_KEY=$TC_CACHE_KEY" >> "$GITHUB_OUTPUT"
-          echo "Toolchain resolved: $TOOLCHAIN -> $TC_CACHE_KEY"
           echo "::endgroup::"
 
-      - name: Cache toolchain
+      - name: Restore toolchain cache
         uses: actions/cache@v4
-        id: tc-cache
+        id: toolchain-cache
         with:
           path: toolchains/clang
-          key: "${{ env.TC_CACHE_KEY }}"
-          restore-keys: |
-            ${{ env.TC_CACHE_KEY }}
+          key: toolchain-${{ inputs.toolchain || 'llvm22' }}-ubuntu-24.04-v1
 
       - name: Download and extract toolchain
-        if: steps.tc-cache.outputs.cache-hit != 'true'
+        if: steps.toolchain-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
-          echo "::group::Downloading toolchain"
-          rm -rf toolchains/clang
+          echo "::group::Download and extract toolchain"
+
+          rm -rf toolchains/clang /tmp/clang-archive /tmp/clang.tar
           mkdir -p toolchains/clang
 
-          ARCHIVE="/tmp/clang_archive"
-          if [[ -z "${{ env.TC_URL }}" ]]; then
-            echo "::error::TC_URL is empty (zyc_stable lookup may have failed)"
-            exit 1
-          fi
-
-          aria2c -x 16 -s 16 -k 1M -c \
+          aria2c \
+            --allow-overwrite=true \
+            --continue=true \
+            --dir=/tmp \
+            --file-allocation=none \
             --max-tries=5 \
+            --min-split-size=1M \
+            --out=clang-archive \
             --retry-wait=5 \
-            --timeout=60 \
-            --dir="/tmp" \
-            --out="clang_archive" \
-            "${{ env.TC_URL }}"
+            --split=16 \
+            "$TC_URL"
 
-          if [[ ! -s "$ARCHIVE" ]]; then
-            echo "::error::aria2c download failed or archive is empty"
-            exit 1
-          fi
-
-          case "${{ env.TC_ARCHIVE_FMT }}" in
-            tar.gz|tar)
-              tar -C toolchains/clang -xzf "$ARCHIVE" --strip-components=1
+          case "$TC_ARCHIVE" in
+            tar.gz)
+              tar -xzf /tmp/clang-archive -C toolchains/clang --strip-components=1
               ;;
             tar.xz)
-              tar -C toolchains/clang -xJf "$ARCHIVE" --strip-components=1
+              tar -xJf /tmp/clang-archive -C toolchains/clang --strip-components=1
               ;;
             tar.zst)
-              zstd -d "$ARCHIVE" -o /tmp/clang.tar --force
-              tar -C toolchains/clang -xf /tmp/clang.tar --strip-components=1
+              zstd --decompress --force --output=/tmp/clang.tar /tmp/clang-archive
+              tar -xf /tmp/clang.tar -C toolchains/clang --strip-components=1
               ;;
             *)
-              echo "::error::Unrecognized TC_ARCHIVE_FMT '${{ env.TC_ARCHIVE_FMT }}'"
+              echo "::error::Unknown toolchain archive type: $TC_ARCHIVE"
               exit 1
               ;;
           esac
 
-          if [[ -z "$(find toolchains/clang -type f -print -quit)" ]]; then
-            echo "::error::Extraction succeeded but toolchains/clang is empty"
-            exit 1
-          fi
-          echo "Toolchain extracted: $(find toolchains/clang -type f | wc -l) file(s)"
+          test -d toolchains/clang
+          test -n "$(find toolchains/clang -type f -print -quit)"
+
           echo "::endgroup::"
 
-      - name: Configure toolchain PATH
+      - name: Configure and verify toolchain
         run: |
           set -euo pipefail
-          echo "::group::Configuring toolchain PATH"
-          ACTUAL_BIN=$(find toolchains/clang -type d -name "bin" -printf "%d\t%p\n" | sort -n | cut -f2 | head -n 1)
-          if [[ -z "$ACTUAL_BIN" || ! -d "$ACTUAL_BIN" ]]; then
-            echo "::error::Could not find 'bin' directory in toolchains/clang"
+          echo "::group::Configure and verify toolchain"
+
+          clang_bin="$(find toolchains/clang -type f -path '*/bin/clang' -print -quit)"
+          if [[ -z "$clang_bin" ]]; then
+            echo "::error::clang was not found in the extracted toolchain"
             exit 1
           fi
-          echo "Found toolchain bin: $ACTUAL_BIN"
-          chmod +x "$ACTUAL_BIN"/* 2>/dev/null || true
-          echo "$ACTUAL_BIN" >> "$GITHUB_PATH"
-          echo "::endgroup::"
 
-      - name: Verify toolchain and capture compiler identity
-        run: |
-          set -euo pipefail
-          echo "::group::Verifying toolchain binaries"
-          for bin in clang llvm-nm llvm-objdump llvm-ar llvm-objcopy llvm-strip ld.lld; do
-            if ! command -v "$bin" >/dev/null 2>&1; then
-              echo "::error::Required toolchain binary '$bin' not found in PATH"
-              exit 1
-            fi
+          toolchain_bin="$(dirname "$clang_bin")"
+          chmod +x "$toolchain_bin"/* || true
+          echo "$toolchain_bin" >> "$GITHUB_PATH"
+
+          export PATH="$toolchain_bin:$PATH"
+
+          for binary in clang ld.lld llvm-ar llvm-nm llvm-objcopy llvm-objdump llvm-strip; do
+            command -v "$binary" >/dev/null
           done
 
-          CLANG_VERSION="$(clang --version | head -1)"
-          LLD_VERSION="$(ld.lld --version | head -1)"
-          echo "Clang: $CLANG_VERSION"
-          echo "LLD:  $LLD_VERSION"
+          clang_major="$(clang --version | sed -nE 's/^clang version ([0-9]+).*/\1/p' | head -n1)"
+          [[ -n "$clang_major" ]]
 
-          if [[ -z "$CLANG_VERSION" ]]; then
-            echo "::error::clang --version produced no output"
-            exit 1
-          fi
+          echo "CLANG_LABEL=clang$clang_major" >> "$GITHUB_ENV"
+          echo "CLANG_VERSION=$(clang --version | head -n1)" >> "$GITHUB_ENV"
 
-          TC_IDENTITY_HASH="$(printf '%s\n%s\n' "$CLANG_VERSION" "$LLD_VERSION" | sha256sum | cut -d' ' -f1 | head -c 16)"
-          echo "CLANG_VERSION=$CLANG_VERSION" >> "$GITHUB_ENV"
-          echo "TC_IDENTITY_HASH=$TC_IDENTITY_HASH" >> "$GITHUB_ENV"
-
-          mkdir -p logs
+          mkdir -p artifacts
           {
-            echo "$CLANG_VERSION"
-            echo "$LLD_VERSION"
-          } > logs/toolchain-identity.txt
+            echo "Kernel: Linux $KERNEL_VERSION"
+            echo "Toolchain: $(clang --version | head -n1)"
+            echo "Linker: $(ld.lld --version | head -n1)"
+            echo "Commit: $(git rev-parse HEAD)"
+          } > artifacts/toolchain.txt
+
           echo "::endgroup::"
 
-      - name: Configure defconfigs for KSUN (manual hook)
+      - name: Configure KSUN and SUSFS defconfigs
         run: |
           set -euo pipefail
-          echo "::group::Configuring defconfigs"
-          for cfg in arch/arm64/configs/exynos9810-star2lte_defconfig \
-                   arch/arm64/configs/exynos9810-starlte_defconfig \
-                   arch/arm64/configs/exynos9810-crownlte_defconfig; do
-            if [[ ! -f "$cfg" ]]; then
-              echo "::warning::$cfg not found, skipping"
-              continue
-            fi
-            if grep -q '^CONFIG_KSU=y' "$cfg" 2>/dev/null; then
-              echo "$cfg already has KSU config, skipping append"
-              continue
-            fi
-            {
-              echo "# KernelSU-Next (manual hook)"
-              echo "CONFIG_KSU=y"
-              echo "CONFIG_KSU_MANUAL_HOOK=y"
-              echo "CONFIG_KSU_KPROBES_HOOK=n"
-              echo "CONFIG_KPROBES=n"
-              echo "CONFIG_HAVE_KPROBES=n"
-              echo "CONFIG_KPROBE_EVENTS=n"
-              echo "CONFIG_KSU_SUSFS=n"
-            } >> "$cfg"
+          echo "::group::Configure KSUN and SUSFS defconfigs"
+
+          configs=(
+            arch/arm64/configs/exynos9810-star2lte_defconfig
+            arch/arm64/configs/exynos9810-starlte_defconfig
+            arch/arm64/configs/exynos9810-crownlte_defconfig
+          )
+
+          symbols=(
+            KSU
+            KSU_MANUAL_HOOK
+            KSU_KPROBES_HOOK
+            KSU_SUSFS
+            KSU_SUSFS_SUS_PATH
+            KSU_SUSFS_SUS_MOUNT
+            KSU_SUSFS_SUS_KSTAT
+            KSU_SUSFS_TRY_UMOUNT
+            KSU_SUSFS_SPOOF_UNAME
+          )
+
+          for config in "${configs[@]}"; do
+            test -f "$config"
+
+            for symbol in "${symbols[@]}"; do
+              sed -i -E "/^(# )?CONFIG_${symbol}(=| is not set)/d" "$config"
+            done
+
+            cat >> "$config" <<'EOF'
+          # KernelSU-Next + SUSFS
+          CONFIG_KSU=y
+          CONFIG_KSU_MANUAL_HOOK=y
+          # CONFIG_KSU_KPROBES_HOOK is not set
+          CONFIG_KSU_SUSFS=y
+          CONFIG_KSU_SUSFS_SUS_PATH=y
+          CONFIG_KSU_SUSFS_SUS_MOUNT=y
+          CONFIG_KSU_SUSFS_SUS_KSTAT=y
+          CONFIG_KSU_SUSFS_TRY_UMOUNT=y
+          CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+          EOF
           done
+
           echo "::endgroup::"
 
       - name: Clone AnyKernel3
         run: |
           set -euo pipefail
-          echo "::group::Cloning AnyKernel3"
-          git clone --depth=1 --branch "${{ env.ANYKERNEL3_BRANCH }}" "${{ env.ANYKERNEL_REPO }}" anykernel3
+          echo "::group::Clone AnyKernel3"
+
+          rm -rf anykernel3
+          git clone --depth=1 --branch main https://github.com/osm0sis/AnyKernel3.git anykernel3
+
           echo "::endgroup::"
 
-      - name: Clone and build dtbTool (Exynos)
+      - name: Build dtbTool
         run: |
           set -euo pipefail
-          echo "::group::Building dtbTool"
-          rm -rf dtbTool
-          git clone --depth=1 "${{ env.DTBTOOL_REPO }}" dtbTool
+          echo "::group::Build dtbTool"
 
-          SRC_FILE="$(find dtbTool -type f -name 'dtbtool.c' -print -quit)"
-          if [[ -z "$SRC_FILE" ]]; then
-            echo "::error::dtbtool.c not found anywhere under cloned dtbTool repo"
+          rm -rf dtbTool dtbTool-bin
+          git clone --depth=1 https://github.com/rajatgupta1998/android_tools_system_dtbTool.git dtbTool
+
+          source_file="$(find dtbTool -type f -name dtbtool.c -print -quit)"
+          if [[ -z "$source_file" ]]; then
+            echo "::error::dtbtool.c was not found"
             exit 1
           fi
-          echo "Found dtbtool source: $SRC_FILE"
 
-          gcc "$SRC_FILE" -o dtbTool-bin
+          gcc "$source_file" -O2 -o dtbTool-bin
           chmod +x dtbTool-bin
-          rm -rf dtbTool
+          test -x dtbTool-bin
 
-          if [[ ! -x dtbTool-bin ]]; then
-            echo "::error::dtbTool-bin was not produced or is not executable"
-            exit 1
-          fi
           echo "::endgroup::"
 
-      - name: Build kernel and DTBs (all variants)
+      - name: Build kernel variants
         id: build
         if: inputs.dry_run != true
         run: |
           set -euo pipefail
-          echo "::group::Building kernel"
-          export ARCH=arm64
-          export CROSS_COMPILE=aarch64-none-linux-gnu-
+          echo "::group::Build kernel variants"
+
+          export PATH="$(dirname "$(find toolchains/clang -type f -path '*/bin/clang' -print -quit)"):$PATH"
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CLANG_TRIPLE=aarch64-linux-gnu-
           export CC=clang
-          export CLANG_TRIPLE=aarch64-none-linux-gnu-
+          export LD=ld.lld
           export AR=llvm-ar
           export NM=llvm-nm
           export OBJCOPY=llvm-objcopy
           export OBJDUMP=llvm-objdump
           export STRIP=llvm-strip
+          export KCFLAGS="$EXTRA_CFLAGS"
 
-          # Extra flags go through KCFLAGS/KAFLAGS (kbuild's supported injection
-          # points) rather than being appended as bare make arguments, which
-          # would be parsed as targets/goals, not compiler flags.
-          KCFLAGS="${{ inputs.extra_cflags }}"
-          if [[ "${{ inputs.enable_lto }}" == "true" ]]; then
-            KCFLAGS="$KCFLAGS -flto"
-          fi
-          export KCFLAGS
+          IFS=',' read -r -a variants <<< "$BUILD_VARIANTS"
+          built_variants=()
 
-          mkdir -p kernel-out
-          IFS=',' read -ra VAR_ARRAY <<< "${{ inputs.build_variants }}"
-          for defconfig in "${VAR_ARRAY[@]/#/exynos9810-}"; do
-            defconfig="${defconfig}_defconfig"
-            echo "Building $defconfig..."
-            make O=kernel-out ARCH=arm64 CROSS_COMPILE="$CROSS_COMPILE" CC="$CC" CLANG_TRIPLE="$CLANG_TRIPLE" AR="$AR" NM="$NM" OBJCOPY="$OBJCOPY" OBJDUMP="$OBJDUMP" STRIP="$STRIP" "$defconfig"
-            make -j"$(nproc)" O=kernel-out ARCH=arm64 CROSS_COMPILE="$CROSS_COMPILE" CC="$CC" CLANG_TRIPLE="$CLANG_TRIPLE" AR="$AR" NM="$NM" OBJCOPY="$OBJCOPY" OBJDUMP="$OBJDUMP" STRIP="$STRIP" KCFLAGS="$KCFLAGS"
-            cp kernel-out/arch/arm64/boot/Image.gz-dtb "kernel-out/Image.gz-dtb.${defconfig%.defconfig}"
+          rm -rf out
+          mkdir -p out
+
+          for variant in "${variants[@]}"; do
+            variant="${variant//[[:space:]]/}"
+            output_dir="out/$variant"
+            defconfig="exynos9810-${variant}_defconfig"
+
+            mkdir -p "$output_dir"
+
+            make -C . O="$output_dir" ARCH="$ARCH" "$defconfig"
+
+            scripts/config \
+              --file "$output_dir/.config" \
+              -e KSU \
+              -e KSU_MANUAL_HOOK \
+              -d KSU_KPROBES_HOOK \
+              -e KSU_SUSFS \
+              -e KSU_SUSFS_SUS_PATH \
+              -e KSU_SUSFS_SUS_MOUNT \
+              -e KSU_SUSFS_SUS_KSTAT \
+              -e KSU_SUSFS_TRY_UMOUNT \
+              -e KSU_SUSFS_SPOOF_UNAME
+
+            if [[ "$ENABLE_LTO" == "true" ]]; then
+              if ! grep -Rqs '^config LTO_CLANG$' arch drivers fs include kernel security; then
+                echo "::error::enable_lto=true, but this kernel tree does not provide CONFIG_LTO_CLANG"
+                exit 1
+              fi
+              scripts/config --file "$output_dir/.config" -e LTO_CLANG
+            fi
+
+            make -C . O="$output_dir" ARCH="$ARCH" olddefconfig
+
+            grep -qx 'CONFIG_KSU=y' "$output_dir/.config"
+            grep -qx 'CONFIG_KSU_MANUAL_HOOK=y' "$output_dir/.config"
+            grep -qx 'CONFIG_KSU_SUSFS=y' "$output_dir/.config"
+
+            if [[ "$ENABLE_LTO" == "true" ]]; then
+              grep -qx 'CONFIG_LTO_CLANG=y' "$output_dir/.config"
+            fi
+
+            make -C . \
+              -j"$(nproc)" \
+              O="$output_dir" \
+              ARCH="$ARCH" \
+              CROSS_COMPILE="$CROSS_COMPILE" \
+              CLANG_TRIPLE="$CLANG_TRIPLE" \
+              CC="$CC" \
+              LD="$LD" \
+              AR="$AR" \
+              NM="$NM" \
+              OBJCOPY="$OBJCOPY" \
+              OBJDUMP="$OBJDUMP" \
+              STRIP="$STRIP" \
+              KCFLAGS="$KCFLAGS" \
+              Image.gz-dtb dtbs
+
+            image="$output_dir/arch/arm64/boot/Image.gz-dtb"
+            if [[ ! -s "$image" ]]; then
+              echo "::error::$variant did not produce Image.gz-dtb"
+              exit 1
+            fi
+
+            cp "$image" "out/Image.gz-dtb-$variant"
+            built_variants+=("$variant")
           done
-          echo "variants=${VAR_ARRAY[*]}" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "variants=$(IFS=,; echo "${built_variants[*]}")"
+            echo "clang_label=$CLANG_LABEL"
+          } >> "$GITHUB_OUTPUT"
+
           ccache -s || true
           echo "::endgroup::"
 
-      - name: Build dtb.img (Exynos dtbTool)
+      - name: Create per-variant DTB images
         if: inputs.dry_run != true && inputs.upload_dtbs == true
         run: |
           set -euo pipefail
-          echo "::group::Building dtb.img"
-          export ARCH=arm64
-          export OUT_DIR=kernel-out
-          mkdir -p "$OUT_DIR/arch/$ARCH/boot"
-          DTBTOOL="./dtbTool-bin"
-          if [[ ! -x "$DTBTOOL" ]]; then
-            echo "::error::dtbTool not found at $DTBTOOL"
-            exit 1
-          fi
-          "$DTBTOOL" \
-            -s 2048 \
-            -o "$OUT_DIR/arch/$ARCH/boot/dtb.img" \
-            -p "$OUT_DIR/scripts/dtc/" \
-            "$OUT_DIR/arch/$ARCH/boot/dts/exynos"/*.dtb 2>/dev/null || {
-              echo "::warning::dtbTool failed, dtb.img may be incomplete"
-            }
-          cp "$OUT_DIR/arch/$ARCH/boot/dtb.img" "$OUT_DIR/dtb.img" 2>/dev/null || true
+          echo "::group::Create per-variant DTB images"
+
+          IFS=',' read -r -a variants <<< "$BUILD_VARIANTS"
+
+          for variant in "${variants[@]}"; do
+            variant="${variant//[[:space:]]/}"
+            output_dir="out/$variant"
+            dts_dir="$output_dir/arch/arm64/boot/dts/exynos"
+            dtb_image="$output_dir/arch/arm64/boot/dtb.img"
+
+            shopt -s nullglob
+            dtbs=("$dts_dir"/*.dtb)
+            shopt -u nullglob
+
+            if [[ "${#dtbs[@]}" -eq 0 ]]; then
+              echo "::error::$variant produced no Exynos DTBs"
+              exit 1
+            fi
+
+            ./dtbTool-bin \
+              -s 2048 \
+              -o "$dtb_image" \
+              -p "$output_dir/scripts/dtc/" \
+              "${dtbs[@]}"
+
+            test -s "$dtb_image"
+            cp "$dtb_image" "out/dtb-$variant.img"
+          done
+
           echo "::endgroup::"
 
-      - name: Package with AnyKernel3 (per variant)
+      - name: Package AnyKernel3 ZIPs
         if: inputs.dry_run != true
         run: |
           set -euo pipefail
-          echo "::group::Packaging AnyKernel3 ZIPs"
-          CLANG_VER="${{ env.CLANG_VERSION }}"
-          IFS=',' read -ra VAR_ARRAY <<< "${{ inputs.build_variants }}"
-          for variant in "${VAR_ARRAY[@]}"; do
-            mkdir -p "ak3-$variant"
-            cp -r anykernel3/* "ak3-$variant/"
-            cp "kernel-out/Image.gz-dtb.$variant" "ak3-$variant/Image.gz-dtb"
-            if [[ "${{ inputs.upload_dtbs }}" == "true" ]]; then
-              cp "kernel-out/dtb.img" "ak3-$variant/dtb.img" 2>/dev/null || true
+          echo "::group::Package AnyKernel3 ZIPs"
+
+          rm -rf packages
+          mkdir -p packages
+
+          IFS=',' read -r -a variants <<< "$BUILD_VARIANTS"
+
+          for variant in "${variants[@]}"; do
+            variant="${variant//[[:space:]]/}"
+            staging_dir="packages/AnyKernel3-$variant"
+            zip_name="Chimera-KSUN-SUSFS-${CLANG_LABEL}${LOCALVERSION}-${variant}.zip"
+
+            mkdir -p "$staging_dir"
+            rsync -a --delete --exclude=.git anykernel3/ "$staging_dir/"
+
+            cp "out/Image.gz-dtb-$variant" "$staging_dir/Image.gz-dtb"
+
+            if [[ "$UPLOAD_DTBS" == "true" ]]; then
+              cp "out/dtb-$variant.img" "$staging_dir/dtb.img"
             fi
-            cd "ak3-$variant"
-            zip -r9 "../AnyKernel3-KSUN-clang${CLANG_VER}-${{ inputs.localversion }}-$variant.zip" .
-            cd ..
-            rm -rf "ak3-$variant"
+
+            if [[ -f "$staging_dir/anykernel.sh" ]]; then
+              sed -i -E \
+                "s|^kernel.string=.*|kernel.string=Chimera ${KERNEL_VERSION} KSUN + SUSFS (${variant})|" \
+                "$staging_dir/anykernel.sh"
+            fi
+
+            (
+              cd "$staging_dir"
+              zip -r9 "../$zip_name" .
+            )
+
+            mv "packages/$zip_name" "packages/$zip_name"
+            rm -rf "$staging_dir"
           done
+
+          {
+            echo "Repository: $GITHUB_REPOSITORY"
+            echo "Commit: $(git rev-parse HEAD)"
+            echo "Kernel: Linux $KERNEL_VERSION"
+            echo "Toolchain: $CLANG_VERSION"
+            echo "Localversion: $LOCALVERSION"
+            echo "Build user/host: $KBUILD_BUILD_USER@$KBUILD_BUILD_HOST"
+            echo "Build version: $KBUILD_BUILD_VERSION"
+            echo "Build timestamp: $KBUILD_BUILD_TIMESTAMP"
+            echo "Variants: $BUILD_VARIANTS"
+            echo "KSUN manual hook: enabled"
+            echo "SUSFS: enabled"
+            echo "LTO: $ENABLE_LTO"
+            echo "Extra KCFLAGS: ${EXTRA_CFLAGS:-none}"
+          } > artifacts/build-metadata.txt
+
           echo "::endgroup::"
 
-      - name: Upload artifacts
+      - name: Upload build artifacts
         if: inputs.dry_run != true
         uses: actions/upload-artifact@v4
         with:
-          name: kernels-${{ inputs.toolchain }}-${{ inputs.localversion }}
+          name: Chimera-KSUN-SUSFS-${{ inputs.toolchain || 'llvm22' }}-${{ github.run_number }}
           path: |
-            AnyKernel3-KSUN-*.zip
-            kernel-out/Image.gz-dtb.*
-            kernel-out/dtb.img
+            packages/*.zip
+            out/Image.gz-dtb-*
+            out/dtb-*.img
+            artifacts/build-metadata.txt
+            artifacts/toolchain.txt
           retention-days: 14
-          if-no-files-found: warn
+          if-no-files-found: error
 
-      - name: Create release
-        if: inputs.do_release == true && startsWith(github.ref, 'refs/tags/')
+      - name: Create GitHub release
+        if: github.event_name == 'workflow_dispatch' && inputs.do_release == true && inputs.dry_run != true
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: Chimera-KSUN-SUSFS-${{ github.run_number }}
+          name: Chimera KSUN + SUSFS — Build ${{ github.run_number }}
           files: |
-            AnyKernel3-KSUN-*.zip
+            packages/*.zip
           body: |
-            **Exynos9810 — Linux 4.9.337 — KSUN (manual hook)**
+            ## Exynos 9810 — KernelSU-Next + SUSFS
 
-            - Repo: royd-jpg/Project_Chimera (lineage-24.0)
-            - Toolchain: ${{ inputs.toolchain }} (${{ env.CLANG_VERSION }})
+            - Kernel: Linux 4.9.337
+            - Source: Project_Chimera / lineage-24.0
+            - Toolchain: ${{ inputs.toolchain }}
             - Localversion: ${{ inputs.localversion }}
-            - Build: ${{ inputs.build_user }}@${{ inputs.build_host }} #${{ inputs.build_version }}
+            - Build identity: ${{ inputs.build_user }}@${{ inputs.build_host }} #${{ inputs.build_version }}
             - Timestamp: ${{ inputs.build_timestamp }}
             - Variants: ${{ steps.build.outputs.variants }}
-            - DTB: ${{ inputs.upload_dtbs == true && 'included' || 'not included' }}
-            - LTO: ${{ inputs.enable_lto == true && 'enabled' || 'disabled' }}
-            - Extra KCFLAGS: `${{ inputs.extra_cflags || 'none' }}`
+            - DTB artifacts: ${{ inputs.upload_dtbs && 'included' || 'not included' }}
+            - LTO: ${{ inputs.enable_lto && 'enabled' || 'disabled' }}
 
-            ⚠️ Test on physical devices before flashing.
+            Flash only on supported Exynos 9810 devices.
