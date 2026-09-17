@@ -276,8 +276,8 @@ jobs:
           set -euo pipefail
           echo "::group::Download and extract toolchain"
 
-          rm -rf toolchains/clang /tmp/clang-archive /tmp/clang.tar
-          mkdir -p toolchains/clang
+          rm -rf toolchains/clang /tmp/clang-archive /tmp/clang.tar /tmp/clang-stage
+          mkdir -p toolchains/clang /tmp/clang-stage
 
           aria2c \
             --allow-overwrite=true \
@@ -291,22 +291,20 @@ jobs:
             --split=16 \
             "$TC_URL"
 
-          # Detect by file content, rather than assuming a format from a URL.
-          # This keeps the dynamic ZyCromerZ URL and every pinned archive safe.
+          test -s /tmp/clang-archive
+
+          # Detect by file content, not by the URL suffix.
           archive_kind="$(file -b /tmp/clang-archive)"
           case "$archive_kind" in
             *gzip*)
-              tar_list=(tar -tzf /tmp/clang-archive)
-              tar_extract=(tar -xzf /tmp/clang-archive -C toolchains/clang)
+              tar_extract=(tar -xzf /tmp/clang-archive -C /tmp/clang-stage)
               ;;
             *XZ*)
-              tar_list=(tar -tJf /tmp/clang-archive)
-              tar_extract=(tar -xJf /tmp/clang-archive -C toolchains/clang)
+              tar_extract=(tar -xJf /tmp/clang-archive -C /tmp/clang-stage)
               ;;
             *Zstandard*)
               zstd -d -f /tmp/clang-archive -o /tmp/clang.tar
-              tar_list=(tar -tf /tmp/clang.tar)
-              tar_extract=(tar -xf /tmp/clang.tar -C toolchains/clang)
+              tar_extract=(tar -xf /tmp/clang.tar -C /tmp/clang-stage)
               ;;
             *)
               echo "::error::Unsupported toolchain archive: $archive_kind"
@@ -314,16 +312,40 @@ jobs:
               ;;
           esac
 
-          # Remove a wrapper directory only when one exists. Neutron exposes
-          # bin/ directly; stripping it would remove the compiler directory.
-          if "${tar_list[@]}" | grep -qx 'bin/clang'; then
-            "${tar_extract[@]}"
-          else
-            "${tar_extract[@]}" --strip-components=1
+          "${tar_extract[@]}"
+
+          # Locate the actual compiler root by finding clang itself.
+          # This handles:
+          #   <root>/bin/clang
+          #   bin/clang
+          #   nested/wrapper/<root>/bin/clang
+          clang_bin="$(find /tmp/clang-stage -type f -path '*/bin/clang' -print -quit)"
+          if [[ -z "$clang_bin" ]]; then
+            echo "::error::clang was not found in extracted archive"
+            echo "::group::Archive contents"
+            find /tmp/clang-stage -maxdepth 5 -type f \
+              \( -name clang -o -name ld.lld -o -name llvm-ar \) \
+              -print | sort | head -n 200
+            echo "::endgroup::"
+            exit 1
           fi
+
+          toolchain_root="$(cd "$(dirname "$clang_bin")/.." && pwd)"
+
+          # Keep the complete toolchain root intact. This is important for
+          # Neutron, where bin/, lib/, and supporting files belong together.
+          rm -rf toolchains/clang
+          mkdir -p toolchains/clang
+          rsync -a "$toolchain_root"/ toolchains/clang/
 
           test -x toolchains/clang/bin/clang
           test -x toolchains/clang/bin/ld.lld
+
+          # Make all bundled LLVM tools executable when the archive preserved
+          # them as non-executable files.
+          find toolchains/clang/bin -maxdepth 1 -type f -exec chmod +x {} +
+
+          echo "Resolved toolchain root: $toolchain_root"
           echo "::endgroup::"
 
       - name: Configure and verify toolchain
@@ -331,20 +353,24 @@ jobs:
           set -euo pipefail
           echo "::group::Configure and verify toolchain"
 
-          clang_bin="$(find toolchains/clang -type f -path '*/bin/clang' -print -quit)"
-          if [[ -z "$clang_bin" ]]; then
-            echo "::error::clang was not found in the extracted toolchain"
+          toolchain_bin="$PWD/toolchains/clang/bin"
+          if [[ ! -x "$toolchain_bin/clang" ]]; then
+            echo "::error::clang is missing from $toolchain_bin"
+            find toolchains/clang -maxdepth 4 -type f \
+              \( -name clang -o -name ld.lld -o -name llvm-ar \) \
+              -print | sort | head -n 200
             exit 1
           fi
 
-          toolchain_bin="$(dirname "$clang_bin")"
-          chmod +x "$toolchain_bin"/* || true
+          chmod +x "$toolchain_bin"/* 2>/dev/null || true
           echo "$toolchain_bin" >> "$GITHUB_PATH"
-
           export PATH="$toolchain_bin:$PATH"
 
           for binary in clang ld.lld llvm-ar llvm-nm llvm-objcopy llvm-objdump llvm-strip; do
-            command -v "$binary" >/dev/null
+            if ! command -v "$binary" >/dev/null 2>&1; then
+              echo "::error::Required tool missing: $binary"
+              exit 1
+            fi
           done
 
           clang_major="$(clang --version | sed -nE 's/^clang version ([0-9]+).*/\1/p' | head -n1)"
@@ -358,6 +384,7 @@ jobs:
             echo "Kernel: Linux $KERNEL_VERSION"
             echo "Toolchain: $(clang --version | head -n1)"
             echo "Linker: $(ld.lld --version | head -n1)"
+            echo "Toolchain root: $PWD/toolchains/clang"
             echo "Commit: $(git rev-parse HEAD)"
           } > artifacts/toolchain.txt
 
@@ -448,7 +475,6 @@ jobs:
 
           export PATH="$(dirname "$(find toolchains/clang -type f -path '*/bin/clang' -print -quit)"):$PATH"
           export CROSS_COMPILE=aarch64-linux-gnu-
-          export CLANG_TRIPLE=aarch64-linux-gnu-
           export CC=clang
           export LD=ld.lld
           export AR=llvm-ar
