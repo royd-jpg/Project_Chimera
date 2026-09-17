@@ -611,29 +611,29 @@ jobs:
             test -s "out/Image.gz-dtb-$variant"
 
             cat > "$staging_dir/anykernel.sh" <<EOF
-#!/usr/bin/env bash
-
-properties() { '
-kernel.string=Chimera Linux $KERNEL_VERSION KSUN + SUSFS ($variant) | $CLANG_VERSION
-do.devicecheck=1
-do.modules=0
-do.systemless=1
-do.cleanup=1
-do.cleanuponabort=0
-$device_names
-supported.versions=17
-'; }
-
-BLOCK=/dev/block/by-name/BOOT
-IS_SLOT_DEVICE=0
-RAMDISK_COMPRESSION=auto
-PATCH_VBMETA_FLAG=auto
-
-. tools/ak3-core.sh
-
-dump_boot
-write_boot
-EOF
+          #!/usr/bin/env bash
+          
+          properties() { '
+          kernel.string=Chimera Linux $KERNEL_VERSION KSUN + SUSFS ($variant) | $CLANG_VERSION
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=0
+          $device_names
+          supported.versions=17
+          '; }
+          
+          BLOCK=/dev/block/by-name/BOOT
+          IS_SLOT_DEVICE=0
+          RAMDISK_COMPRESSION=auto
+          PATCH_VBMETA_FLAG=auto
+          
+          . tools/ak3-core.sh
+          
+          dump_boot
+          write_boot
+          EOF
 
             chmod +x "$staging_dir/anykernel.sh"
             cp "out/Image.gz-dtb-$variant" "$staging_dir/Image.gz-dtb"
