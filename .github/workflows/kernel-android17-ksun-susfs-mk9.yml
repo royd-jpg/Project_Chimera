@@ -299,7 +299,7 @@ jobs:
               tar -xJf /tmp/clang-archive -C toolchains/clang --strip-components=1
               ;;
             tar.zst)
-              zstd --decompress --force --output=/tmp/clang.tar /tmp/clang-archive
+              zstd -d -f /tmp/clang-archive -o /tmp/clang.tar
               tar -xf /tmp/clang.tar -C toolchains/clang --strip-components=1
               ;;
             *)
