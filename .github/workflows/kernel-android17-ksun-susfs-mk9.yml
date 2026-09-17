@@ -415,7 +415,7 @@ jobs:
           echo "::group::Clone AnyKernel3"
 
           rm -rf anykernel3
-          git clone --depth=1 --branch main https://github.com/osm0sis/AnyKernel3.git anykernel3
+          git clone --depth=1 --branch master https://github.com/osm0sis/AnyKernel3.git anykernel3
 
           echo "::endgroup::"
 
@@ -576,7 +576,7 @@ jobs:
         if: inputs.dry_run != true
         run: |
           set -euo pipefail
-          echo "::group::Package AnyKernel3 ZIPs"
+          echo "::group::Package device-checked AnyKernel3 ZIPs"
 
           rm -rf packages
           mkdir -p packages
@@ -586,47 +586,66 @@ jobs:
           for variant in "${variants[@]}"; do
             variant="${variant//[[:space:]]/}"
             staging_dir="packages/AnyKernel3-$variant"
-            zip_name="Chimera-KSUN-SUSFS-${CLANG_LABEL}${LOCALVERSION}-${variant}.zip"
+            zip_name="Chimera-KSUN-SUSFS-${CLANG_LABEL}${LOCALVERSION}-$variant.zip"
+
+            case "$variant" in
+              star2lte)
+                device_names=$'device.name1=star2lte\ndevice.name2=star2ltexx\ndevice.name3=SM-G965F\ndevice.name4=SM-G965U\ndevice.name5=SM-G965N'
+                ;;
+              starlte)
+                device_names=$'device.name1=starlte\ndevice.name2=starltexx\ndevice.name3=SM-G960F\ndevice.name4=SM-G960U\ndevice.name5=SM-G960N'
+                ;;
+              crownlte)
+                device_names=$'device.name1=crownlte\ndevice.name2=crownltexx\ndevice.name3=SM-N960F\ndevice.name4=SM-N960U\ndevice.name5=SM-N960N'
+                ;;
+              *)
+                echo "::error::Unsupported AnyKernel3 variant: $variant"
+                exit 1
+                ;;
+            esac
 
             mkdir -p "$staging_dir"
             rsync -a --delete --exclude=.git anykernel3/ "$staging_dir/"
 
+            test -f "$staging_dir/tools/ak3-core.sh"
+            test -s "out/Image.gz-dtb-$variant"
+
+            cat > "$staging_dir/anykernel.sh" <<EOF
+#!/usr/bin/env bash
+
+properties() { '
+kernel.string=Chimera Linux $KERNEL_VERSION KSUN + SUSFS ($variant) | $CLANG_VERSION
+do.devicecheck=1
+do.modules=0
+do.systemless=1
+do.cleanup=1
+do.cleanuponabort=0
+$device_names
+supported.versions=9-17
+'; }
+
+BLOCK=/dev/block/by-name/BOOT
+IS_SLOT_DEVICE=0
+RAMDISK_COMPRESSION=auto
+PATCH_VBMETA_FLAG=auto
+
+. tools/ak3-core.sh
+
+dump_boot
+write_boot
+EOF
+
+            chmod +x "$staging_dir/anykernel.sh"
             cp "out/Image.gz-dtb-$variant" "$staging_dir/Image.gz-dtb"
-
-            if [[ "$UPLOAD_DTBS" == "true" ]]; then
-              cp "out/dtb-$variant.img" "$staging_dir/dtb.img"
-            fi
-
-            if [[ -f "$staging_dir/anykernel.sh" ]]; then
-              sed -i -E \
-                "s|^kernel.string=.*|kernel.string=Chimera ${KERNEL_VERSION} KSUN + SUSFS (${variant})|" \
-                "$staging_dir/anykernel.sh"
-            fi
 
             (
               cd "$staging_dir"
-              zip -r9 "../$zip_name" .
+              zip -r9 "../$zip_name" . -x ".git/*" ".github/*"
             )
 
             test -s "packages/$zip_name"
             rm -rf "$staging_dir"
           done
-
-          {
-            echo "Repository: $GITHUB_REPOSITORY"
-            echo "Commit: $(git rev-parse HEAD)"
-            echo "Kernel: Linux $KERNEL_VERSION"
-            echo "Toolchain: $CLANG_VERSION"
-            echo "Localversion: $LOCALVERSION"
-            echo "Build user/host: $KBUILD_BUILD_USER@$KBUILD_BUILD_HOST"
-            echo "Build version: $KBUILD_BUILD_VERSION"
-            echo "Build timestamp: $KBUILD_BUILD_TIMESTAMP"
-            echo "Variants: $BUILD_VARIANTS"
-            echo "KSUN manual hook: enabled"
-            echo "SUSFS: enabled"
-            echo "LTO: $ENABLE_LTO"
-            echo "Extra KCFLAGS: ${EXTRA_CFLAGS:-none}"
-          } > artifacts/build-metadata.txt
 
           echo "::endgroup::"
 
