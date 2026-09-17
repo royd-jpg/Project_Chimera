@@ -31,24 +31,6 @@ on:
         type: boolean
         default: false
 
-      base_repo:
-        description: "Canonical KSU-Next+SUSFS integration base (owner/repo)"
-        required: false
-        type: string
-        default: "gavdoc38/android_kernel_samsung_exynos9810"
-
-      base_ref:
-        description: "Base ref: full 40-hex commit SHA only"
-        required: false
-        type: string
-        default: "f25719cfa1dbf0de6c394e17ae3749f05e10d287"
-
-      ksu_commit:
-        description: "KernelSU-Next exact commit SHA (full 40-hex)"
-        required: false
-        type: string
-        default: "685b4a6ba3d2befdf40b3c67cf096d050c7aa6cb"
-
       localversion:
         description: "LOCALVERSION suffix (must start with '-')"
         required: true
@@ -108,23 +90,16 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  KERNEL_DIR: "kernel"
+  KERNEL_DIR: "."
   OUT_DIR: "kernel-out"
   LOG_DIR: "logs"
   ANYKERNEL_DIR: "anykernel3"
   ANYKERNEL_REPO: "https://github.com/osm0sis/AnyKernel3.git"
   ANYKERNEL3_BRANCH: "main"
   DTBTOOL_REPO: "https://github.com/rajatgupta1998/android_tools_system_dtbTool.git"
-  KERNEL_REPO: "https://github.com/ExyHyperBrick/android_kernel_samsung_exynos9810.git"
-  KERNEL_BRANCH: "lineage-24.0"
 
   CCACHE_MAXSIZE: "3G"
   KERNEL_VERSION: "4.9.337"
-
-  TOOLCHAIN: ${{ inputs.toolchain }}
-  BASE_REPO: ${{ inputs.base_repo }}
-  BASE_REF: ${{ inputs.base_ref }}
-  KSU_COMMIT: ${{ inputs.ksu_commit }}
 
   LOCALVERSION: ${{ inputs.localversion }}
   KBUILD_BUILD_USER: ${{ inputs.build_user }}
@@ -148,21 +123,6 @@ jobs:
           echo "::group::Validating workflow inputs"
           FAIL=0
 
-          if ! [[ "${{ inputs.base_ref }}" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::base_ref must be a full 40-hex commit SHA, got '${{ inputs.base_ref }}'"
-            FAIL=1
-          fi
-
-          if ! [[ "${{ inputs.ksu_commit }}" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::ksu_commit must be a full 40-hex commit SHA, got '${{ inputs.ksu_commit }}'"
-            FAIL=1
-          fi
-
-          if [[ -z "${{ inputs.base_repo }}" || ! "${{ inputs.base_repo }}" =~ ^[^/]+/[^/]+$ ]]; then
-            echo "::error::base_repo must be 'owner/repo', got '${{ inputs.base_repo }}'"
-            FAIL=1
-          fi
-
           if [[ "${{ inputs.localversion }}" != -* ]]; then
             echo "::error::localversion must start with '-', got '${{ inputs.localversion }}'"
             FAIL=1
@@ -185,12 +145,10 @@ jobs:
           fi
           echo "PASS: all workflow_dispatch inputs valid"
 
-      - name: Checkout kernel source
+      - name: Checkout kernel source (Project_Chimera)
         uses: actions/checkout@v4
         with:
-          repository: "${{ env.KERNEL_REPO }}"
-          ref: "${{ env.KERNEL_BRANCH }}"
-          path: "${{ env.KERNEL_DIR }}"
+          path: "."
           fetch-depth: 1
 
       - name: Install build dependencies
@@ -391,208 +349,10 @@ jobs:
           } > logs/toolchain-identity.txt
           echo "::endgroup::"
 
-      - name: Clone KernelSU-Next (next-susfs)
-        run: |
-          set -euo pipefail
-          echo "::group::Cloning KernelSU-Next"
-          cd kernel
-          git clone --depth=1 --branch next-susfs https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU-Next
-          cd KernelSU-Next
-          git fetch --depth=1 origin "${{ env.KSU_COMMIT }}"
-          git checkout "${{ env.KSU_COMMIT }}"
-          echo "::endgroup::"
-
-      - name: Run KernelSU-Next setup (next-susfs)
-        run: |
-          set -euo pipefail
-          echo "::group::Running KernelSU-Next setup"
-          cd kernel
-          bash KernelSU-Next/kernel/setup.sh next-susfs
-          echo "::endgroup::"
-
-      - name: Apply manual legacy hooks (Linux 4.9.337)
-        run: |
-          set -euo pipefail
-          echo "::group::Applying manual legacy hooks"
-          cd kernel
-          cat > ksun_manual_hooks.patch << 'PATCH'
-          --- a/fs/exec.c
-          +++ b/fs/exec.c
-          @@ -1886,6 +1886,13 @@ static int __do_execve_file(int fd, struct filename *filename,
-           return retval;
-           }
-
-          +#ifdef CONFIG_KSU
-          +extern int ksu_handle_execveat(int *fd, struct filename **filename_ptr,
-          +       void *argv, void *envp, int *flags);
-          +#endif
-          +
-           static int do_execveat_common(int fd, struct filename *filename,
-           struct user_arg_ptr argv,
-           struct user_arg_ptr envp,
-          @@ -1893,6 +1900,10 @@ static int do_execveat_common(int fd, struct filename *filename,
-           {
-           struct filename *tmp;
-
-          +#ifdef CONFIG_KSU
-          +       ksu_handle_execveat(&fd, &filename, &argv, &envp, NULL);
-          +#endif
-          +
-           tmp = filename;
-           filename = getname_kernel("init");
-           if (IS_ERR(filename)) {
-          --- a/fs/open.c
-          +++ b/fs/open.c
-          @@ -348,6 +348,11 @@ SYSCALL_DEFINE4(fallocate, int, fd, int, mode, loff_t, offset, loff_t, len)
-           return ksys_fallocate(fd, mode, offset, len);
-           }
-
-          +#ifdef CONFIG_KSU
-          +extern int ksu_handle_faccessat(int *dfd, const char __user **filename_user,
-          +       int *mode, int *flags);
-          +#endif
-          +
-           /*
-            * access() needs to use the real uid/gid, not the effective uid/gid.
-            * We do this by temporarily clearing all FS-related capabilities and
-          @@ -355,6 +360,9 @@ SYSCALL_DEFINE4(fallocate, int, fd, int, mode, loff_t, offset, loff_t, len)
-            */
-           long do_faccessat(int dfd, const char __user *filename, int mode)
-           {
-          +#ifdef CONFIG_KSU
-          +       ksu_handle_faccessat(&dfd, &filename, &mode, NULL);
-          +#endif
-           const struct cred *old_cred;
-           struct cred *override_cred;
-           struct path path;
-          --- a/fs/read_write.c
-          +++ b/fs/read_write.c
-          @@ -434,6 +434,12 @@ ssize_t kernel_read(struct file *file, void *buf, size_t count, loff_t *pos)
-           EXPORT_SYMBOL(kernel_read);
-
-          +#ifdef CONFIG_KSU
-          +extern bool ksu_vfs_read_hook __read_mostly;
-          +extern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr,
-          +       size_t *count_ptr, loff_t **pos);
-          +#endif
-          +
-           ssize_t vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos)
-           {
-           ssize_t ret;
-          @@ -441,6 +447,10 @@ ssize_t vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos)
-           if (!(file->f_mode & FMODE_READ))
-           return -EBADF;
-           if (!(file->f_mode & FMODE_CAN_READ))
-          +#ifdef CONFIG_KSU
-          +       if (unlikely(ksu_vfs_read_hook))
-          +               ksu_handle_vfs_read(&file, &buf, &count, &pos);
-          +#endif
-           ret = rw_verify_area(READ, file, pos, count, 0);
-           if (ret)
-           return ret;
-          --- a/fs/stat.c
-          +++ b/fs/stat.c
-          @@ -148,6 +148,11 @@ int vfs_statx_fd(unsigned int fd, struct kstat *stat,
-           EXPORT_SYMBOL(vfs_statx_fd);
-           }
-
-          +#ifdef CONFIG_KSU
-          +extern int ksu_handle_stat(int *dfd, const char __user **filename_user,
-          +       int *flags);
-          +#endif
-          +
-           /**
-            * vfs_statx - Get basic and extra attributes by filename
-            * @dfd: A file descriptor representing the base dir for a relative filename
-          @@ -170,6 +175,9 @@ int vfs_statx(int dfd, const char __user *filename, int flags,
-           int error = -EINVAL;
-           unsigned int lookup_flags = LOOKUP_FOLLOW | LOOKUP_AUTOMOUNT;
-
-          +#ifdef CONFIG_KSU
-          +       ksu_handle_stat(&dfd, &filename, &flags);
-          +#endif
-           if ((flags & ~(AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT |
-           AT_EMPTY_PATH | KSTAT_QUERY_FLAGS)) != 0)
-           return -EINVAL;
-          --- a/kernel/reboot.c
-          +++ b/kernel/reboot.c
-          @@ -277,6 +277,12 @@ EXPORT_SYMBOL(emergency_restart);
-            *
-            * reboot doesn't sync: do that yourself before calling this.
-            */
-          +
-          +#ifdef CONFIG_KSU
-          +extern int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user **arg);
-          +#endif
-          +
-           SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
-           void __user *, arg)
-           {
-          @@ -284,6 +290,9 @@ SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
-           struct pid_namespace *pid_ns = task_active_pid_ns(current);
-           char buffer[256];
-           int ret = 0;
-          +
-          +#ifdef CONFIG_KSU
-          +       ksu_handle_sys_reboot(magic1, magic2, cmd, &arg);
-          +#endif
-
-           /* We only trust the superuser with rebooting the system. */
-           if (!ns_capable(pid_ns->user_ns, CAP_SYS_BOOT))
-          --- a/drivers/input/input.c
-          +++ b/drivers/input/input.c
-          @@ -367,6 +367,12 @@ static int input_get_disposition(struct input_dev *dev,
-           return disposition;
-           }
-
-          +#ifdef CONFIG_KSU
-          +extern bool ksu_input_hook __read_mostly;
-          +extern int ksu_handle_input_handle_event(unsigned int *type, unsigned int *code, int *value);
-          +#endif
-          +
-           static void input_handle_event(struct input_dev *dev,
-           unsigned int type, unsigned int code, int value)
-           {
-          @@ -374,6 +380,10 @@ static void input_handle_event(struct input_dev *dev,
-           if (disposition != INPUT_IGNORE_EVENT && type != EV_SYN)
-           add_input_randomness(type, code, value);
-
-          +#ifdef CONFIG_KSU
-          +       if (unlikely(ksu_input_hook))
-          +               ksu_handle_input_handle_event(&type, &code, &value);
-          +#endif
-           }
-
-           static void input_handle_event(struct input_dev *dev,
-          PATCH
-
-          patch -p1 < ksun_manual_hooks.patch
-          echo "::endgroup::"
-
-      - name: Verify hooks are present
-        run: |
-          set -euo pipefail
-          echo "::group::Verifying KSU hooks"
-          cd kernel
-          HOOKS_OK=0
-          grep -q "ksu_handle_execveat" fs/exec.c || { echo "::error::exec hook missing" >&2; HOOKS_OK=1; }
-          grep -q "ksu_handle_faccessat" fs/open.c || { echo "::error::faccessat hook missing" >&2; HOOKS_OK=1; }
-          grep -q "ksu_handle_vfs_read" fs/read_write.c || { echo "::error::vfs_read hook missing" >&2; HOOKS_OK=1; }
-          grep -q "ksu_handle_stat" fs/stat.c || { echo "::error::stat hook missing" >&2; HOOKS_OK=1; }
-          grep -q "ksu_handle_sys_reboot" kernel/reboot.c || { echo "::error::reboot hook missing" >&2; HOOKS_OK=1; }
-          grep -q "ksu_handle_input_handle_event" drivers/input/input.c || { echo "::error::input hook missing" >&2; HOOKS_OK=1; }
-          if [[ "$HOOKS_OK" -ne 0 ]]; then
-            echo "::error::One or more KSU hooks missing"
-            exit 1
-          fi
-          echo "All hooks verified."
-          echo "::endgroup::"
-
       - name: Configure defconfigs for KSUN (manual hook)
         run: |
           set -euo pipefail
           echo "::group::Configuring defconfigs"
-          cd kernel
           for cfg in arch/arm64/configs/exynos9810-star2lte_defconfig \
                    arch/arm64/configs/exynos9810-starlte_defconfig \
                    arch/arm64/configs/exynos9810-crownlte_defconfig; do
@@ -639,7 +399,6 @@ jobs:
         run: |
           set -euo pipefail
           echo "::group::Building kernel"
-          cd kernel
           export ARCH=arm64
           export CROSS_COMPILE=aarch64-none-linux-gnu-
           export CC=clang
@@ -673,7 +432,6 @@ jobs:
         run: |
           set -euo pipefail
           echo "::group::Building dtb.img"
-          cd kernel
           export ARCH=arm64
           export OUT_DIR=kernel-out
           mkdir -p "$OUT_DIR/arch/$ARCH/boot"
@@ -734,6 +492,7 @@ jobs:
           body: |
             **Exynos9810 — Linux 4.9.337 — KSUN (manual hook)**
 
+            - Repo: royd-jpg/Project_Chimera (lineage-24.0)
             - Toolchain: ${{ inputs.toolchain }} (${{ env.CLANG_VERSION }})
             - Localversion: ${{ inputs.localversion }}
             - Build: ${{ inputs.build_user }}@${{ inputs.build_host }} #${{ inputs.build_version }}
