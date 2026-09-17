@@ -264,11 +264,11 @@ jobs:
           echo "::endgroup::"
 
       - name: Restore toolchain cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         id: toolchain-cache
         with:
           path: toolchains/clang
-          key: toolchain-${{ inputs.toolchain || 'llvm22' }}-ubuntu-24.04-v2
+          key: toolchain-${{ inputs.toolchain || 'llvm22' }}-ubuntu-24.04-v3
 
       - name: Download and extract toolchain
         if: steps.toolchain-cache.outputs.cache-hit != 'true'
@@ -291,28 +291,31 @@ jobs:
             --split=16 \
             "$TC_URL"
 
-          case "$TC_ARCHIVE" in
-            tar.gz)
+          # Detect by file content, rather than assuming a format from a URL.
+          # This keeps the dynamic ZyCromerZ URL and every pinned archive safe.
+          archive_kind="$(file -b /tmp/clang-archive)"
+          case "$archive_kind" in
+            *gzip*)
               tar_list=(tar -tzf /tmp/clang-archive)
               tar_extract=(tar -xzf /tmp/clang-archive -C toolchains/clang)
               ;;
-            tar.xz)
+            *XZ*)
               tar_list=(tar -tJf /tmp/clang-archive)
               tar_extract=(tar -xJf /tmp/clang-archive -C toolchains/clang)
               ;;
-            tar.zst)
+            *Zstandard*)
               zstd -d -f /tmp/clang-archive -o /tmp/clang.tar
               tar_list=(tar -tf /tmp/clang.tar)
               tar_extract=(tar -xf /tmp/clang.tar -C toolchains/clang)
               ;;
             *)
-              echo "::error::Unknown toolchain archive type: $TC_ARCHIVE"
+              echo "::error::Unsupported toolchain archive: $archive_kind"
               exit 1
               ;;
           esac
 
-          # Archives with a top-level directory need one component removed.
-          # Neutron's archive exposes bin/ directly and must not be stripped.
+          # Remove a wrapper directory only when one exists. Neutron exposes
+          # bin/ directly; stripping it would remove the compiler directory.
           if "${tar_list[@]}" | grep -qx 'bin/clang'; then
             "${tar_extract[@]}"
           else
@@ -320,6 +323,7 @@ jobs:
           fi
 
           test -x toolchains/clang/bin/clang
+          test -x toolchains/clang/bin/ld.lld
           echo "::endgroup::"
 
       - name: Configure and verify toolchain
@@ -604,6 +608,7 @@ jobs:
               zip -r9 "../$zip_name" .
             )
 
+            test -s "packages/$zip_name"
             rm -rf "$staging_dir"
           done
 
@@ -627,7 +632,7 @@ jobs:
 
       - name: Upload build artifacts
         if: inputs.dry_run != true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: Chimera-KSUN-SUSFS-${{ inputs.toolchain || 'llvm22' }}-${{ github.run_number }}
           path: |
@@ -641,7 +646,7 @@ jobs:
 
       - name: Create GitHub release
         if: github.event_name == 'workflow_dispatch' && inputs.do_release == true && inputs.dry_run != true
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: Chimera-KSUN-SUSFS-${{ github.run_number }}
           name: Chimera KSUN + SUSFS — Build ${{ github.run_number }}
