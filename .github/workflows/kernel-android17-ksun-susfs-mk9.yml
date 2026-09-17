@@ -1,0 +1,592 @@
+# KernelSU-Next + SUSFS integration for Exynos 9810 (lineage-24.0) — Mk9 model.
+#
+# MK9 MODEL (differs from the prior "Chimera" workflow):
+#   - The kernel repo (royd-jpg/Project_Chimera @ lineage-24.0) is NEVER modified in
+#     Git. There is no patches/ directory dependency and no `git apply` of a tracked
+#     patch file anywhere in this workflow.
+#   - All KSU/SUSFS integration happens ONLY inside the ephemeral CI runner's working
+#     copy, during the build:
+#       * KSU is cloned at a pinned SHA into /tmp/ksu-src, then vendored (rsync) into
+#         drivers/kernelsu/ in the runner checkout only.
+#       * drivers/Makefile and drivers/Kconfig are wired via idempotent, runner-local
+#         appends (grep-guarded) -- not via a committed patch file.
+#       * SUSFS sources are fetched into /tmp/susfs-src and copied into fs/ and
+#         include/linux/ in the runner checkout only; fs/Makefile is wired the same
+#         grep-guarded way.
+#       * Defconfig fragments (chimera-ksu-*.cfg, already tracked in the repo) are
+#         merged via merge_config.sh in the runner only.
+#   - Nothing is committed or pushed back. actions/checkout is fetch-depth 1 and the
+#     runner is destroyed after the job; the tree the workflow mutates never persists.
+#
+# CRITICAL LIMITATION -- MANUAL-HOOK MODE (read before relying on this):
+#   Per the Mk9 constraint "do not generate or patch C hook call sites in the
+#   workflow", this workflow does NOT patch fs/exec.c, fs/open.c, fs/stat.c,
+#   fs/read_write.c, drivers/input/input.c, or kernel/reboot.c. It only verifies
+#   (greps for) the 6 ksu_handle_* call sites and FAILS CLOSED if they are absent.
+#   royd-jpg/Project_Chimera@lineage-24.0 is a clean/stock tree (no KSU code at all),
+#   so ksu_integration_mode=manual WILL fail verification on that ref as-is. To use
+#   manual mode successfully under the Mk9 model you must point the checkout (see the
+#   "Checkout kernel tree" step) at a ref that already carries the 6 hook call sites
+#   (e.g. a maintained fork/branch equivalent to lineage-23.2-ksun3-susfs2's base,
+#   kept OUTSIDE this pristine lineage-24.0 branch). kprobe mode has no such
+#   limitation: its hook mechanism (kernel/hook/hook_manager.c) is vendored wholesale
+#   from the KSU source tree itself, not patched into existing files.
+#
+# KSU PIN CORRECTION (carried over from the Chimera workflow, still applies):
+#   685b4a6ba3d2befdf40b3c67cf096d050c7aa6cb does NOT exist in gavdoc38/KernelSU-Next
+#   (verified: git log --all / git rev-list --all, zero matches). Do not use it.
+#   The corrected default, 242f245b2c971eb5c1cc4a689e01dcdeaff4c939, is the SHA
+#   royd-jpg/Project_Chimera's OWN lineage-23.2-ksun3-susfs2 branch pins as its
+#   KernelSU-Next submodule. NOTE: a 39-hex-character variant of this SHA
+#   (missing a digit) has circulated in other drafts of this task -- that value is
+#   malformed and will fail to resolve; do not reuse it.
+#   CAVEAT: 242f245b is a dangling commit (not reachable from any branch tip in the
+#   upstream KSU repo) -- fetchable only by direct SHA, and not guaranteed to stay
+#   retained by GitHub forever. Mirror it to your own fork once a build succeeds.
+#   Do NOT use KernelSU-Next's `legacy` branch HEAD for manual mode: it still
+#   declares CONFIG_KSU_MANUAL_HOOK in Kconfig but the macro is unused in any C
+#   source on that branch -- CONFIG_KSU=y would build with no working hook mechanism.
+#
+# SUSFS is included due to device age and lack of ongoing Google Play / vendor
+# support, to maintain compatibility on user-owned legacy hardware. Strictly for
+# legitimate use (filesystem visibility / namespace testing).
+#
+# "Android 17 compatibility" here means building the modified Exynos 9810 vendor
+# kernel for potential use with a compatible LineageOS 24 userspace. Runtime
+# compatibility (boot, root, SELinux, RKP/DEFEX, basic functionality) requires
+# physical-device testing and is NOT claimed by a successful CI build alone.
+#
+# Kprobe mode may conflict with Samsung security / RKP/DEFEX on Exynos 9810
+# (RKP/TIMA are typically enforced by an EL2/TrustZone blob outside Kconfig-visible
+# symbols, so this cannot be confirmed or ruled out from the defconfig alone).
+
+name: Exynos9810 Kernel — KSUN + SUSFS (Mk9, Android 17 / LineageOS 24)
+
+on:
+  workflow_dispatch:
+    inputs:
+      defconfig:
+        description: "Defconfig to build (e.g. exynos9810-star2lte_defconfig)"
+        type: string
+        default: "exynos9810-star2lte_defconfig"
+      ksu_integration_mode:
+        description: "KernelSU integration mode: disabled / kprobe / manual (see header comment: manual requires a checkout ref that already has the 6 hook call sites -- Mk9 does not patch them)"
+        type: choice
+        options: ["disabled", "kprobe", "manual"]
+        default: "kprobe"
+      enable_susfs:
+        description: "Enable SUSFS (requires a KSU mode != disabled)"
+        type: boolean
+        default: false
+      ksu_repo:
+        description: "KernelSU repo URL (used only if mode != disabled)"
+        type: string
+        default: "https://github.com/gavdoc38/KernelSU-Next"
+      ksu_ref:
+        description: "KernelSU ref (immutable SHA). Default is the corrected pin -- see header comment. 685b4a6... does not exist upstream and will fail resolution below."
+        type: string
+        default: "242f245b2c971eb5c1cc4a689e01dcdeaff4c939"
+      susfs_repo:
+        description: "SUSFS source repo (used only if enable_susfs=true)"
+        type: string
+        default: "https://github.com/royd-jpg/Project_Chimera"
+      susfs_ref:
+        description: "SUSFS source ref/SHA (used only if enable_susfs=true)"
+        type: string
+        default: "6752be5bb08dccfc58d9bc98c51199515aa19abc"
+      extra_kcflags:
+        description: "Extra KCFLAGS appended to the build (escape-hatch for late-tree diagnostics)"
+        type: string
+        default: ""
+      clean_build:
+        description: "Clean build before compiling"
+        type: boolean
+        default: true
+      publish_release:
+        description: "Publish a GitHub release (false by default)"
+        type: boolean
+        default: false
+  push:
+    branches: [lineage-24.0]
+    paths:
+      - ".github/workflows/kernel-android17-ksun-susfs-mk9.yml"
+      - "arch/arm64/configs/**"
+      - "arch/arm64/boot/dts/**"
+      - "arch/arm64/Kconfig"
+      - "Makefile"
+      - "fs/**"
+      - "kernel/**"
+      - "drivers/**"
+      - "include/**"
+      - "security/**"
+  pull_request:
+    branches: [lineage-24.0]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: kernel-mk9-${{ github.ref }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+env:
+  ARCH: arm64
+  CC: clang
+  LD: ld.lld
+  CROSS_COMPILE: aarch64-linux-gnu-
+  CLANG_VERSION: "18"
+
+jobs:
+  build:
+    name: Build Mk9 (${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ksu_integration_mode || 'disabled' }}${{ github.event_name == 'workflow_dispatch' && github.event.inputs.enable_susfs == 'true' && '+susfs' || '' }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    outputs:
+      mode_label: ${{ steps.meta.outputs.mode_label }}
+      ksu_integration_mode: ${{ steps.meta.outputs.ksu_integration_mode }}
+      enable_susfs: ${{ steps.meta.outputs.enable_susfs }}
+      artifact_prefix: ${{ steps.meta.outputs.artifact_prefix }}
+    steps:
+      # ------------------------------------------------------------------ meta
+      - name: Compute build metadata
+        id: meta
+        run: |
+          set -Eeuo pipefail
+          if [ "${GITHUB_EVENT_NAME}" = "push" ] || [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
+            MODE="disabled"
+            SUSFS="false"
+            echo "Forced stock validation for ${GITHUB_EVENT_NAME} event." >&2
+          else
+            MODE="${{ github.event.inputs.ksu_integration_mode }}"
+            SUSFS="${{ github.event.inputs.enable_susfs }}"
+          fi
+          case "${MODE}" in
+            disabled|kprobe|manual) ;;
+            *) echo "::error::Invalid ksu_integration_mode '${MODE}'"; exit 1 ;;
+          esac
+          if [ "${SUSFS}" = "true" ] && [ "${MODE}" = "disabled" ]; then
+            echo "::error::enable_susfs=true requires ksu_integration_mode != disabled"
+            exit 1
+          fi
+          if [ "${MODE}" = "manual" ]; then
+            echo "::warning::Mk9 does not patch the 6 manual-hook call sites. This mode"
+            echo "::warning::will fail the 'Verify KSU hook call sites' step unless the"
+            echo "::warning::checked-out ref already contains them. See workflow header."
+          fi
+          if [ "${MODE}" = "manual" ]; then LABEL="ksu-manual"
+          elif [ "${MODE}" = "kprobe" ]; then LABEL="ksu-kprobe"
+          else LABEL="stock"; fi
+          if [ "${SUSFS}" = "true" ]; then LABEL="${LABEL}+susfs"; fi
+          echo "mode_label=${LABEL}"            >> "$GITHUB_OUTPUT"
+          echo "ksu_integration_mode=${MODE}"   >> "$GITHUB_OUTPUT"
+          echo "enable_susfs=${SUSFS}"          >> "$GITHUB_OUTPUT"
+          echo "artifact_prefix=${LABEL}"       >> "$GITHUB_OUTPUT"
+          echo "::notice::mode_label=${LABEL} ksu=${MODE} susfs=${SUSFS} (mk9)"
+
+      # ------------------------------------------------------------------ checkout
+      - name: Checkout kernel tree (lineage-24.0, pristine)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && 'lineage-24.0' || github.ref }}
+          fetch-depth: 1
+          clean: true
+
+      # ------------------------------------------------------------------ deps
+      - name: Install host dependencies
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            build-essential bc bison flex libncurses-dev libssl-dev \
+            libelf-dev python3 rsync git curl cpio xz-utils file jq \
+            clang-${CLANG_VERSION} lld-${CLANG_VERSION} llvm-${CLANG_VERSION} \
+            binutils-aarch64-linux-gnu
+          sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-${CLANG_VERSION} 100 || true
+          sudo update-alternatives --install /usr/bin/ld.lld ld.lld /usr/bin/ld.lld-${CLANG_VERSION} 100 || true
+
+      - name: Detect and print toolchain versions
+        id: toolchain
+        run: |
+          set -Eeuo pipefail
+          {
+            echo "=== toolchain versions ==="
+            echo "clang:  $(clang --version 2>&1 | head -1)"
+            echo "ld.lld: $(ld.lld --version 2>&1 | head -1)"
+            echo "aarch64-linux-gnu-ld: $(aarch64-linux-gnu-ld --version 2>&1 | head -1)"
+            echo "aarch64-linux-gnu-as: $(aarch64-linux-gnu-as --version 2>&1 | head -1)"
+            echo "make:   $(make --version 2>&1 | head -1)"
+            echo "git:    $(git --version)"
+          } | tee toolchain-info.txt
+          {
+            echo "clang=$(clang --version 2>&1 | head -1)"
+            echo "ld_lld=$(ld.lld --version 2>&1 | head -1)"
+            echo "cross_ld=$(aarch64-linux-gnu-ld --version 2>&1 | head -1)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Validate requested defconfig exists
+        run: |
+          set -Eeuo pipefail
+          DEF="${{ github.event_name == 'workflow_dispatch' && github.event.inputs.defconfig || 'exynos9810-star2lte_defconfig' }}"
+          echo "Defconfig: ${DEF}"
+          test -f "arch/arm64/configs/${DEF}"
+          echo "Verified: arch/arm64/configs/${DEF} exists."
+
+      # ------------------------------------------------------------------ KSU vendoring (runner-only, compile-time)
+      - name: Vendor KernelSU source into drivers/kernelsu/ (mode != disabled)
+        if: steps.meta.outputs.ksu_integration_mode != 'disabled'
+        run: |
+          set -Eeuo pipefail
+          KSU_REPO="${{ github.event.inputs.ksu_repo }}"
+          KSU_REF="${{ github.event.inputs.ksu_ref }}"
+          if [ -z "${KSU_REPO}" ] || [ -z "${KSU_REF}" ]; then
+            echo "::error::ksu_repo and ksu_ref must be non-empty when ksu_integration_mode != disabled"
+            exit 1
+          fi
+          echo "Cloning KernelSU: ${KSU_REPO} @ ${KSU_REF}"
+          git clone --no-checkout "${KSU_REPO}" /tmp/ksu-src
+          # Direct-SHA fetch: required because the corrected pin (242f245b...) is a
+          # dangling commit not reachable from any branch tip -- `git fetch <sha>`
+          # still works against GitHub as long as the object is retained server-side.
+          git -C /tmp/ksu-src fetch --no-tags --depth 1 origin "${KSU_REF}"
+          git -C /tmp/ksu-src checkout --force "${KSU_REF}"
+          RESOLVED="$(git -C /tmp/ksu-src rev-parse HEAD)"
+          echo "Resolved KSU HEAD: ${RESOLVED}"
+          if ! printf '%s' "${KSU_REF}" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::warning::ksu_ref '${KSU_REF}' is not a 40-hex SHA; this is NOT an immutable pin."
+            echo "::warning::Resolved commit: ${RESOLVED}"
+          else
+            if [ "${RESOLVED}" != "${KSU_REF}" ]; then
+              echo "::error::Resolved KSU HEAD (${RESOLVED}) does not match pinned SHA (${KSU_REF})"
+              exit 1
+            fi
+          fi
+          test -d /tmp/ksu-src/kernel
+          test -f /tmp/ksu-src/kernel/Kconfig
+          test -f /tmp/ksu-src/kernel/Kbuild
+          mkdir -p drivers/kernelsu
+          rsync -a --delete /tmp/ksu-src/kernel/ drivers/kernelsu/
+          {
+            echo "ksu_repo=${KSU_REPO}"
+            echo "ksu_ref=${KSU_REF}"
+            echo "ksu_resolved_sha=${RESOLVED}"
+            date -u +"ksu_integrated_at=%Y-%m-%dT%H:%M:%SZ"
+            echo "mk9_note=vendored into runner checkout only; never committed"
+          } > drivers/kernelsu/KSU_PIN
+          echo "KernelSU vendored into drivers/kernelsu/ (runner-only; KSU_PIN recorded)."
+          if [ "${{ steps.meta.outputs.ksu_integration_mode }}" = "manual" ]; then
+            grep -qE '^(void|int) ksu_handle_sys_read\(' drivers/kernelsu/runtime/ksud_integration.c || {
+              echo "::error::ksu_handle_sys_read not found at the expected location for this pin."
+              echo "::error::If ksu_ref changed, re-verify this signature (see header comment)."
+              exit 1
+            }
+          fi
+
+      - name: Wire drivers/Makefile + drivers/Kconfig for KSU (runner-only, Mk9)
+        if: steps.meta.outputs.ksu_integration_mode != 'disabled'
+        run: |
+          set -Eeuo pipefail
+          # Additive, idempotent, grep-guarded appends -- no patch file, no commit.
+          # These edits exist only in this job's ephemeral working copy.
+          if ! grep -qE 'obj-\$\(CONFIG_KSU\)[[:space:]]*\+=[[:space:]]*kernelsu/' drivers/Makefile; then
+            printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
+            echo "drivers/Makefile wired for KSU (runner-only)."
+          else
+            echo "drivers/Makefile already wired for KSU."
+          fi
+          if ! grep -qF 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig; then
+            if grep -qE '^endmenu' drivers/Kconfig; then
+              sed -i '0,/^endmenu/s//source "drivers\/kernelsu\/Kconfig"\n\nendmenu/' drivers/Kconfig
+            else
+              echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
+            fi
+            echo "drivers/Kconfig wired for KSU (runner-only)."
+          else
+            echo "drivers/Kconfig already wired for KSU."
+          fi
+          test -f drivers/kernelsu/Kconfig || { echo "::error::drivers/kernelsu/Kconfig missing after vendoring"; exit 1; }
+
+      # ------------------------------------------------------------------ SUSFS integration (runner-only, compile-time)
+      - name: Integrate SUSFS sources (enable_susfs=true)
+        if: steps.meta.outputs.enable_susfs == 'true'
+        run: |
+          set -Eeuo pipefail
+          SUSFS_REPO="${{ github.event.inputs.susfs_repo }}"
+          SUSFS_REF="${{ github.event.inputs.susfs_ref }}"
+          if [ -z "${SUSFS_REPO}" ] || [ -z "${SUSFS_REF}" ]; then
+            echo "::error::susfs_repo and susfs_ref must be non-empty when enable_susfs=true"
+            exit 1
+          fi
+          echo "Fetching SUSFS source: ${SUSFS_REPO} @ ${SUSFS_REF}"
+          git clone --no-checkout "${SUSFS_REPO}" /tmp/susfs-src
+          git -C /tmp/susfs-src fetch --no-tags --depth 1 origin "${SUSFS_REF}"
+          git -C /tmp/susfs-src checkout --force "${SUSFS_REF}"
+          echo "SUSFS resolved HEAD: $(git -C /tmp/susfs-src rev-parse HEAD)"
+          if [ ! -f /tmp/susfs-src/fs/susfs.c ]; then
+            echo "::error::fs/susfs.c not found in susfs_ref '${SUSFS_REF}' at ${SUSFS_REPO}."
+            echo "::error::Expected layout: fs/susfs.c, include/linux/susfs.h,"
+            echo "::error::include/linux/susfs_def.h (see lineage-23.2-ksun3-susfs2 for a"
+            echo "::error::known-good layout). If the source layout has changed, update"
+            echo "::error::the copy paths below."
+            exit 1
+          fi
+          cp -v /tmp/susfs-src/fs/susfs.c fs/susfs.c
+          mkdir -p include/linux
+          cp -v /tmp/susfs-src/include/linux/susfs.h include/linux/susfs.h
+          cp -v /tmp/susfs-src/include/linux/susfs_def.h include/linux/susfs_def.h
+          # NOTE: susfs_ref (23.2-derived) is NOT verified compatible with
+          # lineage-24.0 fs/*.c beyond compiling fs/susfs.c itself -- CI verifies
+          # compilation, not behavioral parity. See chimera-ksu-susfs.cfg.
+          if ! grep -qE 'obj-\$\(CONFIG_KSU_SUSFS\)[[:space:]]*\+=[[:space:]]*susfs\.o' fs/Makefile; then
+            printf '\nobj-$(CONFIG_KSU_SUSFS) += susfs.o\n' >> fs/Makefile
+            echo "fs/Makefile wired for SUSFS (runner-only)."
+          else
+            echo "fs/Makefile already wired for SUSFS."
+          fi
+          echo "SUSFS sources staged (fs/susfs.c + headers, runner-only)."
+
+      # ------------------------------------------------------------------ configure
+      - name: Clean build tree
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.clean_build == 'true'
+        run: |
+          set -Eeuo pipefail
+          make ARCH=${ARCH} mrproper || true
+
+      - name: Configure kernel (defconfig + KSU/SUSFS fragments)
+        run: |
+          set -Eeuo pipefail
+          DEF="${{ github.event_name == 'workflow_dispatch' && github.event.inputs.defconfig || 'exynos9810-star2lte_defconfig' }}"
+          make ARCH=${ARCH} CC=${CC} CROSS_COMPILE=${CROSS_COMPILE} "${DEF}"
+          MODE="${{ steps.meta.outputs.ksu_integration_mode }}"
+          SUSFS="${{ steps.meta.outputs.enable_susfs }}"
+          FRAGS=()
+          if [ "${MODE}" = "manual" ]; then FRAGS+=("arch/arm64/configs/chimera-ksu-manual.cfg"); fi
+          if [ "${MODE}" = "kprobe" ]; then FRAGS+=("arch/arm64/configs/chimera-ksu-kprobe.cfg"); fi
+          if [ "${SUSFS}" = "true" ]; then FRAGS+=("arch/arm64/configs/chimera-ksu-susfs.cfg"); fi
+          if [ "${#FRAGS[@]}" -gt 0 ]; then
+            ./scripts/kconfig/merge_config.sh -m -O . "${FRAGS[@]}"
+          fi
+          make ARCH=${ARCH} CC=${CC} CROSS_COMPILE=${CROSS_COMPILE} olddefconfig
+          cp .config config-${{ steps.meta.outputs.artifact_prefix }}
+
+      # ------------------------------------------------------------------ verify config
+      - name: Verify final .config symbols
+        run: |
+          set -Eeuo pipefail
+          MODE="${{ steps.meta.outputs.ksu_integration_mode }}"
+          SUSFS="${{ steps.meta.outputs.enable_susfs }}"
+          fail=0
+          check() {
+            local sym="$1" exp="$2" got
+            got="$(grep -E "^${sym}=|^# ${sym} is not set" .config | head -1 || true)"
+            echo "${sym}: ${got:-<absent>}"
+            case "${exp}" in
+              y) [[ "${got}" = "${sym}=y" ]] || { echo "::error::expected ${sym}=y"; fail=1; } ;;
+              n) [[ "${got}" = "${sym}=y" ]] && { echo "::error::expected ${sym} off but it is =y"; fail=1; } ;;
+            esac
+          }
+          if [ "${MODE}" = "manual" ]; then
+            check CONFIG_KSU y
+            check CONFIG_KSU_MANUAL_HOOK y
+            check CONFIG_KSU_KPROBES_HOOK n
+          elif [ "${MODE}" = "kprobe" ]; then
+            check CONFIG_KSU y
+            check CONFIG_KSU_MANUAL_HOOK n
+            check CONFIG_KSU_KPROBES_HOOK y
+            check CONFIG_KPROBES y
+            check CONFIG_KRETPROBES y
+          elif [ "${MODE}" = "disabled" ]; then
+            check CONFIG_KSU n
+          fi
+          if [ "${SUSFS}" = "true" ]; then
+            check CONFIG_KSU_SUSFS y
+          else
+            check CONFIG_KSU_SUSFS n
+          fi
+          [ "${fail}" -eq 0 ] || exit 1
+          echo "Final .config symbol check passed."
+
+      # ------------------------------------------------------------------ verify hooks (critical, fails closed)
+      - name: Verify KSU hook call sites (manual mode)
+        if: steps.meta.outputs.ksu_integration_mode == 'manual'
+        run: |
+          set -Eeuo pipefail
+          declare -A TARGETS=(
+            ["fs/exec.c"]="ksu_handle_execveat"
+            ["fs/open.c"]="ksu_handle_faccessat"
+            ["fs/stat.c"]="ksu_handle_stat"
+            ["fs/read_write.c"]="ksu_handle_sys_read"
+            ["drivers/input/input.c"]="ksu_handle_input_handle_event"
+            ["kernel/reboot.c"]="ksu_handle_sys_reboot"
+          )
+          fail=0
+          for f in "${!TARGETS[@]}"; do
+            sym="${TARGETS[$f]}"
+            if [ ! -f "${f}" ]; then
+              echo "::error::${f} not found"; fail=1; continue
+            fi
+            if ! grep -qE "\b${sym}\b" "${f}"; then
+              echo "::error::Manual hook symbol '${sym}' not found in ${f}"
+              fail=1
+            else
+              echo "OK: ${sym} present in ${f}"
+            fi
+          done
+          if [ "${fail}" -ne 0 ]; then
+            echo "::error::Manual-hook call sites are missing. Under the Mk9 model this"
+            echo "::error::workflow does NOT patch fs/exec.c, fs/open.c, fs/stat.c,"
+            echo "::error::fs/read_write.c, drivers/input/input.c, or kernel/reboot.c --"
+            echo "::error::it only vendors KSU/SUSFS and wires build files at compile time."
+            echo "::error::The checked-out ref must already contain these 6 call sites."
+            echo "::error::Reference implementation: royd-jpg/Project_Chimera, branch"
+            echo "::error::lineage-23.2-ksun3-susfs2. Point this workflow's checkout at an"
+            echo "::error::equivalent hook-carrying ref, or use ksu_integration_mode=kprobe"
+            echo "::error::instead, which requires no existing-file modifications."
+            exit 1
+          fi
+          echo "All manual-hook call sites verified present."
+
+      - name: Verify kprobe config and KSU symbols (kprobe mode)
+        if: steps.meta.outputs.ksu_integration_mode == 'kprobe'
+        run: |
+          set -Eeuo pipefail
+          grep -qE '^CONFIG_KSU_KPROBES_HOOK=y' .config
+          grep -qE '^CONFIG_HAVE_SYSCALL_TRACEPOINTS=y' .config
+          grep -qE '^CONFIG_KRETPROBES=y' .config
+          grep -qE '^CONFIG_KPROBES=y' .config
+          test -f drivers/kernelsu/hook/hook_manager.c
+          grep -qE 'kprobe|kretprobe|tracepoint' drivers/kernelsu/hook/hook_manager.c
+          echo "Kprobe-mode KSU symbols verified."
+
+      - name: Verify SUSFS integration (enable_susfs=true)
+        if: steps.meta.outputs.enable_susfs == 'true'
+        run: |
+          set -Eeuo pipefail
+          test -f fs/susfs.c || { echo "::error::fs/susfs.c missing after SUSFS integration"; exit 1; }
+          test -f include/linux/susfs.h || { echo "::error::include/linux/susfs.h missing"; exit 1; }
+          grep -qE '^CONFIG_KSU_SUSFS=y' .config
+          grep -qE 'susfs' fs/susfs.c
+          grep -qE 'obj-\$\(CONFIG_KSU_SUSFS\)[[:space:]]*\+=[[:space:]]*susfs\.o' fs/Makefile
+          echo "SUSFS integration verified (fs/susfs.c + include/linux/susfs.h + fs/Makefile entry present)."
+
+      # ------------------------------------------------------------------ build
+      - name: Build security/selinux first (ksu.o flask.h dependency)
+        run: |
+          set -Eeuo pipefail
+          # ksu.o includes headers generated under security/selinux/; build that
+          # subtree first to avoid a -j race on $(objtree)/security/selinux/flask.h.
+          # This tail/|| true is for log brevity only; real failures here still
+          # surface at the full build step below and are not masked.
+          make ARCH=${ARCH} CC=${CC} LD=${LD} CROSS_COMPILE=${CROSS_COMPILE} -j"$(nproc)" security/selinux/ 2>&1 | tail -20 || true
+
+      - name: Build Image.gz + dtbs
+        run: |
+          set -Eeuo pipefail
+          EXTRA_KCFLAGS="${{ github.event.inputs.extra_kcflags || '' }}"
+          KCFLAGS_ARG=""
+          if [ -n "${EXTRA_KCFLAGS}" ]; then KCFLAGS_ARG="KCFLAGS=${EXTRA_KCFLAGS}"; fi
+          make ARCH=${ARCH} CC=${CC} LD=${LD} CROSS_COMPILE=${CROSS_COMPILE} \
+              ${KCFLAGS_ARG} -j"$(nproc)" Image.gz dtbs 2>&1 | tee build.log
+          echo "Build exit: ${PIPESTATUS[0]}"
+          test -s arch/arm64/boot/Image.gz
+          echo "Image.gz produced."
+
+      - name: Verify image format and architecture
+        run: |
+          set -Eeuo pipefail
+          file arch/arm64/boot/Image.gz
+          od -An -tx1 -N2 arch/arm64/boot/Image.gz
+          find arch/arm64/boot/dts -name '*.dtb' | head
+          test -n "$(find arch/arm64/boot/dts -name '*.dtb' | head -1)"
+
+      # ------------------------------------------------------------------ post-build
+      - name: Generate SHA256SUMS and build manifest
+        id: manifest
+        run: |
+          set -Eeuo pipefail
+          PREFIX="${{ steps.meta.outputs.artifact_prefix }}"
+          STAGE="out/${PREFIX}"
+          mkdir -p "${STAGE}"
+          cp arch/arm64/boot/Image.gz "${STAGE}/Image.gz"
+          find arch/arm64/boot/dts -name '*.dtb' -exec cp {} "${STAGE}/" \;
+          cp .config "${STAGE}/config-${PREFIX}"
+          cp build.log "${STAGE}/build.log"
+          cp toolchain-info.txt "${STAGE}/toolchain-info.txt"
+          # Mk9: diff only the files this workflow can legitimately have touched
+          # (runner-only wiring + vendored/copied sources). The 6 manual-hook files
+          # are intentionally excluded -- Mk9 never modifies them.
+          git diff -- drivers/Makefile drivers/Kconfig drivers/kernelsu fs/susfs.c fs/Makefile \
+                   include/linux/susfs.h include/linux/susfs_def.h \
+                   > "${STAGE}/source-diff-${PREFIX}.patch" 2>/dev/null || true
+          [ -s "${STAGE}/source-diff-${PREFIX}.patch" ] || rm -f "${STAGE}/source-diff-${PREFIX}.patch"
+          ( cd "${STAGE}" && sha256sum * > SHA256SUMS )
+          BUILD_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          KERNEL_RELEASE="$(make ARCH=${ARCH} CC=${CC} -s kernelrelease 2>/dev/null || echo unknown)"
+          cat > "${STAGE}/manifest.json" <<EOF
+          {
+            "kernel_version": "Linux 4.9.337 (Exynos 9810)",
+            "kernel_release": "${KERNEL_RELEASE}",
+            "arch": "arm64",
+            "workflow_model": "mk9",
+            "defconfig": "${{ github.event_name == 'workflow_dispatch' && github.event.inputs.defconfig || 'exynos9810-star2lte_defconfig' }}",
+            "ksu_integration_mode": "${{ steps.meta.outputs.ksu_integration_mode }}",
+            "enable_susfs": "${{ steps.meta.outputs.enable_susfs }}",
+            "mode_label": "${{ steps.meta.outputs.mode_label }}",
+            "ksu_repo": "${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ksu_repo || '' }}",
+            "ksu_ref": "${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ksu_ref || '' }}",
+            "susfs_repo": "${{ github.event_name == 'workflow_dispatch' && github.event.inputs.susfs_repo || '' }}",
+            "susfs_ref": "${{ github.event_name == 'workflow_dispatch' && github.event.inputs.susfs_ref || '' }}",
+            "toolchain": {
+              "clang": "${{ steps.toolchain.outputs.clang }}",
+              "ld_lld": "${{ steps.toolchain.outputs.ld_lld }}",
+              "cross_ld": "${{ steps.toolchain.outputs.cross_ld }}"
+            },
+            "build_timestamp": "${BUILD_TS}",
+            "commit_sha": "${{ github.sha }}",
+            "android17_scope": "Android 17 compatibility here means building the modified Exynos 9810 vendor kernel for potential use with a compatible LineageOS 24 userspace. Runtime compatibility requires physical-device testing.",
+            "artifact_names": $(cd "${STAGE}" && ls | jq -R -s -c 'split("\n") | map(select(length>0))'),
+            "sha256sums": $(cd "${STAGE}" && jq -R -s -c 'split("\n") | map(select(length>0))' SHA256SUMS)
+          }
+          EOF
+          cat "${STAGE}/manifest.json"
+          echo "stage_dir=${STAGE}" >> "$GITHUB_OUTPUT"
+          echo "prefix=${PREFIX}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-mk9-${{ steps.meta.outputs.artifact_prefix }}-${{ github.run_id }}
+          path: out/${{ steps.meta.outputs.artifact_prefix }}/*
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: Publish release (optional)
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.publish_release == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: kernel-mk9-${{ needs.build.outputs.artifact_prefix }}-${{ github.run_id }}
+          path: release-assets
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: kernel-mk9-${{ needs.build.outputs.mode_label }}-${{ github.run_id }}
+          name: Exynos9810 kernel (Mk9) — ${{ needs.build.outputs.mode_label }}
+          body: |
+            Exynos 9810 (Linux 4.9.337) kernel build. Mk9 model: KSU/SUSFS merged
+            at compile time only; repo tree unmodified in Git.
+            Mode: ${{ needs.build.outputs.ksu_integration_mode }}
+            SUSFS: ${{ needs.build.outputs.enable_susfs }}
+
+            Android 17 compatibility here means building the modified Exynos 9810 vendor kernel for
+            potential use with a compatible LineageOS 24 userspace. Runtime compatibility requires
+            physical-device testing.
+          files: release-assets/*
+          draft: true
+          prerelease: true
