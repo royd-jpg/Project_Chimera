@@ -268,7 +268,7 @@ jobs:
         id: toolchain-cache
         with:
           path: toolchains/clang
-          key: toolchain-${{ inputs.toolchain || 'llvm22' }}-ubuntu-24.04-v1
+          key: toolchain-${{ inputs.toolchain || 'llvm22' }}-ubuntu-24.04-v2
 
       - name: Download and extract toolchain
         if: steps.toolchain-cache.outputs.cache-hit != 'true'
@@ -293,14 +293,17 @@ jobs:
 
           case "$TC_ARCHIVE" in
             tar.gz)
-              tar -xzf /tmp/clang-archive -C toolchains/clang --strip-components=1
+              tar_list=(tar -tzf /tmp/clang-archive)
+              tar_extract=(tar -xzf /tmp/clang-archive -C toolchains/clang)
               ;;
             tar.xz)
-              tar -xJf /tmp/clang-archive -C toolchains/clang --strip-components=1
+              tar_list=(tar -tJf /tmp/clang-archive)
+              tar_extract=(tar -xJf /tmp/clang-archive -C toolchains/clang)
               ;;
             tar.zst)
               zstd -d -f /tmp/clang-archive -o /tmp/clang.tar
-              tar -xf /tmp/clang.tar -C toolchains/clang --strip-components=1
+              tar_list=(tar -tf /tmp/clang.tar)
+              tar_extract=(tar -xf /tmp/clang.tar -C toolchains/clang)
               ;;
             *)
               echo "::error::Unknown toolchain archive type: $TC_ARCHIVE"
@@ -308,9 +311,15 @@ jobs:
               ;;
           esac
 
-          test -d toolchains/clang
-          test -n "$(find toolchains/clang -type f -print -quit)"
+          # Archives with a top-level directory need one component removed.
+          # Neutron's archive exposes bin/ directly and must not be stripped.
+          if "${tar_list[@]}" | grep -qx 'bin/clang'; then
+            "${tar_extract[@]}"
+          else
+            "${tar_extract[@]}" --strip-components=1
+          fi
 
+          test -x toolchains/clang/bin/clang
           echo "::endgroup::"
 
       - name: Configure and verify toolchain
