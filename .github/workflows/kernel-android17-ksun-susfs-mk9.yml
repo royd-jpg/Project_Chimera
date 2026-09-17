@@ -621,7 +621,7 @@ do.systemless=1
 do.cleanup=1
 do.cleanuponabort=0
 $device_names
-supported.versions=9-17
+supported.versions=17
 '; }
 
 BLOCK=/dev/block/by-name/BOOT
