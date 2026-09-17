@@ -108,8 +108,6 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  KERNEL_REPO: "https://github.com/ExyHyperBrick/android_kernel_samsung_exynos9810.git"
-  KERNEL_BRANCH: "lineage-24.0"
   KERNEL_DIR: "kernel"
   OUT_DIR: "kernel-out"
   LOG_DIR: "logs"
@@ -117,6 +115,8 @@ env:
   ANYKERNEL_REPO: "https://github.com/osm0sis/AnyKernel3.git"
   ANYKERNEL3_BRANCH: "main"
   DTBTOOL_REPO: "https://github.com/rajatgupta1998/android_tools_system_dtbTool.git"
+  KERNEL_REPO: "https://github.com/ExyHyperBrick/android_kernel_samsung_exynos9810.git"
+  KERNEL_BRANCH: "lineage-24.0"
 
   CCACHE_MAXSIZE: "3G"
   KERNEL_VERSION: "4.9.337"
@@ -132,14 +132,12 @@ env:
   KBUILD_BUILD_VERSION: ${{ inputs.build_version }}
   KBUILD_BUILD_TIMESTAMP: ${{ inputs.build_timestamp }}
 
-  CHIMERA_KCFLAGS: -O2 -fcommon -fno-strict-aliasing -Wno-error -Wno-error=unused-but-set-global -Wno-unknown-warning-option -fuse-ld=lld
-  CHIMERA_KBUILD_LDFLAGS: "-fuse-ld=lld"
-
   ABS_KERNEL: "${{ github.workspace }}/${{ env.KERNEL_DIR }}"
   ABS_OUT: "${{ github.workspace }}/${{ env.OUT_DIR }}"
   ABS_LOG: "${{ github.workspace }}/${{ env.LOG_DIR }}"
   ABS_TC: "${{ github.workspace }}/toolchains/clang"
   ABS_AK3: "${{ github.workspace }}/${{ env.ANYKERNEL_DIR }}"
+  ABS_DTBCOMP: "${{ github.workspace }}/dtbTool"
 
 jobs:
   build:
@@ -153,53 +151,78 @@ jobs:
     steps:
       - name: Validate workflow inputs
         run: |
-          set -Eeuo pipefail
+          set -euo pipefail
+          echo "::group::Validating workflow inputs"
           FAIL=0
+
           if ! [[ "${{ inputs.base_ref }}" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "FATAL: base_ref must be a full 40-hex commit SHA, got '${{ inputs.base_ref }}'" >&2
+            echo "::error::base_ref must be a full 40-hex commit SHA, got '${{ inputs.base_ref }}'"
             FAIL=1
           fi
+
           if ! [[ "${{ inputs.ksu_commit }}" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "FATAL: ksu_commit must be a full 40-hex commit SHA, got '${{ inputs.ksu_commit }}'" >&2
+            echo "::error::ksu_commit must be a full 40-hex commit SHA, got '${{ inputs.ksu_commit }}'"
             FAIL=1
           fi
-          if [[ -z "${{ inputs.base_repo }}" || "${{ inputs.base_repo }}" != */* ]]; then
-            echo "FATAL: base_repo must be 'owner/repo', got '${{ inputs.base_repo }}'" >&2
+
+          if [[ -z "${{ inputs.base_repo }}" || ! "${{ inputs.base_repo }}" =~ ^[^/]+/[^/]+$ ]]; then
+            echo "::error::base_repo must be 'owner/repo', got '${{ inputs.base_repo }}'"
             FAIL=1
           fi
+
           if [[ "${{ inputs.localversion }}" != -* ]]; then
-            echo "FATAL: localversion must start with '-', got '${{ inputs.localversion }}'" >&2
+            echo "::error::localversion must start with '-', got '${{ inputs.localversion }}'"
             FAIL=1
           fi
-          [[ "$FAIL" -eq 0 ]] || exit 1
+
+          if [[ -z "${{ inputs.build_timestamp }}" ]]; then
+            echo "::error::build_timestamp must not be empty"
+            FAIL=1
+          fi
+
+          if [[ -z "${{ inputs.build_variants }}" ]]; then
+            echo "::error::build_variants must not be empty"
+            FAIL=1
+          fi
+
+          echo "::endgroup::"
+          if [[ "$FAIL" -ne 0 ]]; then
+            echo "::error::Input validation failed"
+            exit 1
+          fi
           echo "PASS: all workflow_dispatch inputs valid"
 
       - name: Checkout kernel source
         uses: actions/checkout@v4
         with:
-          repository: ${{ env.KERNEL_REPO }}
-          ref: ${{ env.KERNEL_BRANCH }}
-          path: ${{ env.KERNEL_DIR }}
+          repository: "${{ env.KERNEL_REPO }}"
+          ref: "${{ env.KERNEL_BRANCH }}"
+          path: "${{ env.KERNEL_DIR }}"
           fetch-depth: 1
 
       - name: Install build dependencies
         run: |
+          set -euo pipefail
+          echo "::group::Installing build dependencies"
           sudo apt-get update
-          sudo apt-get install -y \
+          sudo apt-get install -y --no-install-recommends \
             bc bison build-essential ccache curl flex git gnupg gperf \
             libssl-dev libtinfo5 lzop ncurses-dev openssl \
             python3 python3-pip rsync wget zip zlib1g-dev \
             libelf1 libfdt1 libffi7 libstdc++6 \
             device-tree-compiler aria2 zstd
+          echo "::endgroup::"
 
       - name: Resolve toolchain configuration
         id: tc-resolve
         run: |
-          set -Eeuo pipefail
+          set -euo pipefail
+          echo "::group::Resolving toolchain configuration"
           TOOLCHAIN="${{ inputs.toolchain }}"
           TC_URL=""
           TC_ARCHIVE_FMT="tar.gz"
           TC_CACHE_KEY=""
+
           case "$TOOLCHAIN" in
             aosp19)
               TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-15.0.0_r10/clang-r536225.tar.gz"
@@ -248,136 +271,157 @@ jobs:
               TC_CACHE_KEY="neutron-clang-30072026-ubuntu-24.04-v2"
               ;;
             zyc_stable)
-              TC_URL=$(curl -fsSL \
-                "https://raw.githubusercontent.com/ZyCromerZ/Clang/main/Clang-main-link.txt" \
-                || true)
+              TC_URL=$(curl -fsSL "https://raw.githubusercontent.com/ZyCromerZ/Clang/main/Clang-main-link.txt" 2>/dev/null || true)
               if [[ -n "$TC_URL" ]]; then
                 TC_CACHE_KEY="zyc-clang-ubuntu-24.04-$(printf '%s' "$TC_URL" | sha256sum | cut -c1-16)"
               else
                 TC_CACHE_KEY="zyc-clang-ubuntu-24.04-lookup-failed"
+                echo "::warning::zyc_stable URL lookup failed, cache key will not be unique"
               fi
               ;;
             *)
-              echo "ERROR: unsupported toolchain '$TOOLCHAIN'" >&2
+              echo "::error::Unsupported toolchain '$TOOLCHAIN'"
               exit 1
               ;;
           esac
-          {
-            echo "TC_URL=$TC_URL"
-            echo "TC_ARCHIVE_FMT=$TC_ARCHIVE_FMT"
-            echo "TC_CACHE_KEY=$TC_CACHE_KEY"
-          } >> "$GITHUB_ENV"
+
+          echo "TC_URL=$TC_URL" >> "$GITHUB_ENV"
+          echo "TC_ARCHIVE_FMT=$TC_ARCHIVE_FMT" >> "$GITHUB_ENV"
+          echo "TC_CACHE_KEY=$TC_CACHE_KEY" >> "$GITHUB_ENV"
           echo "TC_CACHE_KEY=$TC_CACHE_KEY" >> "$GITHUB_OUTPUT"
+          echo "Toolchain resolved: $TOOLCHAIN -> $TC_CACHE_KEY"
+          echo "::endgroup::"
 
       - name: Cache toolchain
         uses: actions/cache@v4
         id: tc-cache
         with:
-          path: ${{ env.ABS_TC }}
-          key: ${{ env.TC_CACHE_KEY }}
+          path: "${{ env.ABS_TC }}"
+          key: "${{ env.TC_CACHE_KEY }}"
+          restore-keys: |
+            ${{ env.TC_CACHE_KEY }}
 
       - name: Download and extract toolchain
         if: steps.tc-cache.outputs.cache-hit != 'true'
         run: |
-          set -Eeuo pipefail
-          rm -rf "$ABS_TC"
-          mkdir -p "$ABS_TC"
+          set -euo pipefail
+          echo "::group::Downloading toolchain"
+          rm -rf "${{ env.ABS_TC }}"
+          mkdir -p "${{ env.ABS_TC }}"
 
           ARCHIVE="/tmp/clang_archive"
-          if [[ -z "$TC_URL" ]]; then
-            echo "FATAL: TC_URL is empty (zyc_stable's dynamic link lookup may have failed upstream)" >&2
+          if [[ -z "${{ env.TC_URL }}" ]]; then
+            echo "::error::TC_URL is empty (zyc_stable lookup may have failed)"
             exit 1
           fi
+
           aria2c -x 16 -s 16 -k 1M -c \
             --max-tries=5 \
             --retry-wait=5 \
             --timeout=60 \
             --dir="/tmp" \
             --out="clang_archive" \
-            "$TC_URL"
+            "${{ env.TC_URL }}"
+
           if [[ ! -s "$ARCHIVE" ]]; then
-            echo "FATAL: aria2c failed to download the toolchain archive, or it is empty." >&2
+            echo "::error::aria2c download failed or archive is empty"
             exit 1
           fi
-          case "$TC_ARCHIVE_FMT" in
+
+          case "${{ env.TC_ARCHIVE_FMT }}" in
             tar.gz|tar)
-              tar -C "$ABS_TC" -xzf "$ARCHIVE"
+              tar -C "${{ env.ABS_TC }}" -xzf "$ARCHIVE" --strip-components=1
               ;;
             tar.xz)
-              tar -C "$ABS_TC" -xJf "$ARCHIVE"
+              tar -C "${{ env.ABS_TC }}" -xJf "$ARCHIVE" --strip-components=1
               ;;
             tar.zst)
               zstd -d "$ARCHIVE" -o /tmp/clang.tar --force
-              tar -C "$ABS_TC" -xf /tmp/clang.tar
+              tar -C "${{ env.ABS_TC }}" -xf /tmp/clang.tar --strip-components=1
               ;;
             *)
-              echo "FATAL: unrecognized TC_ARCHIVE_FMT '$TC_ARCHIVE_FMT' — cannot extract" >&2
+              echo "::error::Unrecognized TC_ARCHIVE_FMT '${{ env.TC_ARCHIVE_FMT }}'"
               exit 1
               ;;
           esac
 
-          if [[ -z "$(find "$ABS_TC" -type f -print -quit)" ]]; then
-            echo "FATAL: extraction reported success but $ABS_TC contains no files" >&2
+          if [[ -z "$(find "${{ env.ABS_TC }}" -type f -print -quit)" ]]; then
+            echo "::error::Extraction succeeded but ${{ env.ABS_TC }} is empty"
             exit 1
           fi
-          echo "Toolchain ready: $(find "$ABS_TC" -type f | wc -l) file(s)"
+          echo "Toolchain extracted: $(find "${{ env.ABS_TC }}" -type f | wc -l) file(s)"
+          echo "::endgroup::"
 
       - name: Configure toolchain PATH
         run: |
-          set -Eeuo pipefail
-          ACTUAL_BIN=$(find "$ABS_TC" -type d -name "bin" -printf "%d\t%p\n" | sort -n | cut -f2 | head -n 1)
+          set -euo pipefail
+          echo "::group::Configuring toolchain PATH"
+          ACTUAL_BIN=$(find "${{ env.ABS_TC }}" -type d -name "bin" -printf "%d\t%p\n" | sort -n | cut -f2 | head -n 1)
           if [[ -z "$ACTUAL_BIN" || ! -d "$ACTUAL_BIN" ]]; then
-            echo "FATAL: Could not find 'bin' directory inside extracted toolchain ($ABS_TC)."
+            echo "::error::Could not find 'bin' directory in ${{ env.ABS_TC }}"
             exit 1
           fi
           echo "Found toolchain bin: $ACTUAL_BIN"
           chmod +x "$ACTUAL_BIN"/* 2>/dev/null || true
           echo "$ACTUAL_BIN" >> "$GITHUB_PATH"
+          echo "::endgroup::"
 
-      - name: Verify Toolchain and capture compiler identity
+      - name: Verify toolchain and capture compiler identity
         run: |
-          set -Eeuo pipefail
-          echo "Validating toolchain in PATH..."
+          set -euo pipefail
+          echo "::group::Verifying toolchain binaries"
           for bin in clang llvm-nm llvm-objdump llvm-ar llvm-objcopy llvm-strip ld.lld; do
-            command -v "$bin" >/dev/null 2>&1 || {
-              echo "FATAL: required toolchain binary '$bin' not found in PATH" >&2
+            if ! command -v "$bin" >/dev/null 2>&1; then
+              echo "::error::Required toolchain binary '$bin' not found in PATH"
               exit 1
-            }
+            fi
           done
+
           CLANG_VERSION="$(clang --version | head -1)"
           LLD_VERSION="$(ld.lld --version | head -1)"
-          echo "$CLANG_VERSION"
-          llvm-nm --version | head -1
-          llvm-objdump --version | head -1
-          echo "$LLD_VERSION"
-          [[ -n "$CLANG_VERSION" ]] || { echo "FATAL: clang --version produced no output" >&2; exit 1; }
+          echo "Clang: $CLANG_VERSION"
+          echo "LLD:  $LLD_VERSION"
+
+          if [[ -z "$CLANG_VERSION" ]]; then
+            echo "::error::clang --version produced no output"
+            exit 1
+          fi
+
           TC_IDENTITY_HASH="$(printf '%s\n%s\n' "$CLANG_VERSION" "$LLD_VERSION" | sha256sum | cut -d' ' -f1 | head -c 16)"
-          {
-            echo "CLANG_VERSION=$CLANG_VERSION"
-            echo "TC_IDENTITY_HASH=$TC_IDENTITY_HASH"
-          } >> "$GITHUB_ENV"
-          mkdir -p "$ABS_LOG"
+          echo "CLANG_VERSION=$CLANG_VERSION" >> "$GITHUB_ENV"
+          echo "TC_IDENTITY_HASH=$TC_IDENTITY_HASH" >> "$GITHUB_ENV"
+
+          mkdir -p "${{ env.ABS_LOG }}"
           {
             echo "$CLANG_VERSION"
             echo "$LLD_VERSION"
-          } > "$ABS_LOG/toolchain-identity.txt"
+          } > "${{ env.ABS_LOG }}/toolchain-identity.txt"
+          echo "::endgroup::"
 
       - name: Clone KernelSU-Next (next-susfs)
         run: |
-          cd ${{ env.ABS_KERNEL }}
+          set -euo pipefail
+          echo "::group::Cloning KernelSU-Next"
+          cd "${{ env.ABS_KERNEL }}"
           git clone --depth=1 --branch next-susfs https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU-Next
           cd KernelSU-Next
-          git fetch --depth=1 origin ${{ env.KSU_COMMIT }}
-          git checkout ${{ env.KSU_COMMIT }}
+          git fetch --depth=1 origin "${{ env.KSU_COMMIT }}"
+          git checkout "${{ env.KSU_COMMIT }}"
+          echo "::endgroup::"
 
       - name: Run KernelSU-Next setup (next-susfs)
         run: |
-          cd ${{ env.ABS_KERNEL }}
+          set -euo pipefail
+          echo "::group::Running KernelSU-Next setup"
+          cd "${{ env.ABS_KERNEL }}"
           bash KernelSU-Next/kernel/setup.sh next-susfs
+          echo "::endgroup::"
 
       - name: Apply manual legacy hooks (Linux 4.9.337)
         run: |
-          cd ${{ env.ABS_KERNEL }}
+          set -euo pipefail
+          echo "::group::Applying manual legacy hooks"
+          cd "${{ env.ABS_KERNEL }}"
           cat > ksun_manual_hooks.patch << 'PATCH'
           --- a/fs/exec.c
           +++ b/fs/exec.c
@@ -530,51 +574,79 @@ jobs:
           PATCH
 
           patch -p1 < ksun_manual_hooks.patch
+          echo "::endgroup::"
 
       - name: Verify hooks are present
         run: |
-          cd ${{ env.ABS_KERNEL }}
-          echo "Checking for KSU hooks..."
-          grep -q "ksu_handle_execveat" fs/exec.c || { echo "ERROR: exec hook missing"; exit 1; }
-          grep -q "ksu_handle_faccessat" fs/open.c || { echo "ERROR: faccessat hook missing"; exit 1; }
-          grep -q "ksu_handle_vfs_read" fs/read_write.c || { echo "ERROR: vfs_read hook missing"; exit 1; }
-          grep -q "ksu_handle_stat" fs/stat.c || { echo "ERROR: stat hook missing"; exit 1; }
-          grep -q "ksu_handle_sys_reboot" kernel/reboot.c || { echo "ERROR: reboot hook missing"; exit 1; }
-          grep -q "ksu_handle_input_handle_event" drivers/input/input.c || { echo "ERROR: input hook missing"; exit 1; }
+          set -euo pipefail
+          echo "::group::Verifying KSU hooks"
+          cd "${{ env.ABS_KERNEL }}"
+          HOOKS_OK=0
+          grep -q "ksu_handle_execveat" fs/exec.c || { echo "::error::exec hook missing" >&2; HOOKS_OK=1; }
+          grep -q "ksu_handle_faccessat" fs/open.c || { echo "::error::faccessat hook missing" >&2; HOOKS_OK=1; }
+          grep -q "ksu_handle_vfs_read" fs/read_write.c || { echo "::error::vfs_read hook missing" >&2; HOOKS_OK=1; }
+          grep -q "ksu_handle_stat" fs/stat.c || { echo "::error::stat hook missing" >&2; HOOKS_OK=1; }
+          grep -q "ksu_handle_sys_reboot" kernel/reboot.c || { echo "::error::reboot hook missing" >&2; HOOKS_OK=1; }
+          grep -q "ksu_handle_input_handle_event" drivers/input/input.c || { echo "::error::input hook missing" >&2; HOOKS_OK=1; }
+          if [[ "$HOOKS_OK" -ne 0 ]]; then
+            echo "::error::One or more KSU hooks missing"
+            exit 1
+          fi
           echo "All hooks verified."
+          echo "::endgroup::"
 
       - name: Configure defconfigs for KSUN (manual hook)
         run: |
-          cd ${{ env.ABS_KERNEL }}
+          set -euo pipefail
+          echo "::group::Configuring defconfigs"
+          cd "${{ env.ABS_KERNEL }}"
           for cfg in arch/arm64/configs/exynos9810-star2lte_defconfig \
                    arch/arm64/configs/exynos9810-starlte_defconfig \
                    arch/arm64/configs/exynos9810-crownlte_defconfig; do
-            [ -f "$cfg" ] || continue
-            echo "# KernelSU-Next (manual hook)" >> "$cfg"
-            echo "CONFIG_KSU=y" >> "$cfg"
-            echo "CONFIG_KSU_MANUAL_HOOK=y" >> "$cfg"
-            echo "CONFIG_KSU_KPROBES_HOOK=n" >> "$cfg"
-            echo "CONFIG_KPROBES=n" >> "$cfg"
-            echo "CONFIG_HAVE_KPROBES=n" >> "$cfg"
-            echo "CONFIG_KPROBE_EVENTS=n" >> "$cfg"
-            echo "CONFIG_KSU_SUSFS=n" >> "$cfg"
+            if [[ ! -f "$cfg" ]]; then
+              echo "::warning::$cfg not found, skipping"
+              continue
+            fi
+            {
+              echo "# KernelSU-Next (manual hook)"
+              echo "CONFIG_KSU=y"
+              echo "CONFIG_KSU_MANUAL_HOOK=y"
+              echo "CONFIG_KSU_KPROBES_HOOK=n"
+              echo "CONFIG_KPROBES=n"
+              echo "CONFIG_HAVE_KPROBES=n"
+              echo "CONFIG_KPROBE_EVENTS=n"
+              echo "CONFIG_KSU_SUSFS=n"
+            } >> "$cfg"
           done
+          echo "::endgroup::"
 
       - name: Clone AnyKernel3
         run: |
-          git clone --depth=1 --branch ${{ env.ANYKERNEL3_BRANCH }} ${{ env.ANYKERNEL_REPO }} ${{ env.ANYKERNEL_DIR }}
+          set -euo pipefail
+          echo "::group::Cloning AnyKernel3"
+          git clone --depth=1 --branch "${{ env.ANYKERNEL3_BRANCH }}" "${{ env.ANYKERNEL_REPO }}" "${{ env.ANYKERNEL_DIR }}"
+          echo "::endgroup::"
 
       - name: Clone dtbTool (Exynos)
         run: |
-          git clone --depth=1 ${{ env.DTBTOOL_REPO }} dtbTool
+          set -euo pipefail
+          echo "::group::Cloning dtbTool"
+          git clone --depth=1 "${{ env.DTBTOOL_REPO }}" dtbTool
           cd dtbTool
           gcc dtbTool/source/dtbtool.c -o dtbTool
+          mv dtbTool "${{ env.ABS_DTBCOMP }}"
+          chmod +x "${{ env.ABS_DTBCOMP }}"
+          cd ..
+          rm -rf dtbTool
+          echo "::endgroup::"
 
       - name: Build kernel and DTBs (all variants)
         id: build
         if: inputs.dry_run != true
         run: |
-          cd ${{ env.ABS_KERNEL }}
+          set -euo pipefail
+          echo "::group::Building kernel"
+          cd "${{ env.ABS_KERNEL }}"
           export ARCH=arm64
           export CROSS_COMPILE=aarch64-none-linux-gnu-
           export CC=clang
@@ -585,56 +657,69 @@ jobs:
           export OBJDUMP=llvm-objdump
           export STRIP=llvm-strip
 
-          if [ "${{ inputs.enable_lto }}" = "true" ]; then
+          if [[ "${{ inputs.enable_lto }}" == "true" ]]; then
             export CFLAGS="${{ inputs.extra_cflags }} -flto"
           else
             export CFLAGS="${{ inputs.extra_cflags }}"
           fi
 
-          mkdir -p ${{ env.ABS_OUT }}
-          VARIANTS="${{ inputs.build_variants || 'star2lte,starlte,crownlte' }}"
-          IFS=',' read -ra VAR_ARRAY <<< "$VARIANTS"
+          mkdir -p "${{ env.ABS_OUT }}"
+          IFS=',' read -ra VAR_ARRAY <<< "${{ inputs.build_variants }}"
           for defconfig in "${VAR_ARRAY[@]/#/exynos9810-}"; do
             defconfig="${defconfig}_defconfig"
             echo "Building $defconfig..."
-            make O=${{ env.ABS_OUT }} ARCH=arm64 CROSS_COMPILE=$CROSS_COMPILE CC=$CC CLANG_TRIPLE=$CLANG_TRIPLE AR=$AR NM=$NM OBJCOPY=$OBJCOPY OBJDUMP=$OBJDUMP STRIP=$STRIP ${defconfig}
-            make -j$(nproc) O=${{ env.ABS_OUT }} ARCH=arm64 CROSS_COMPILE=$CROSS_COMPILE CC=$CC CLANG_TRIPLE=$CLANG_TRIPLE AR=$AR NM=$NM OBJCOPY=$OBJCOPY OBJDUMP=$OBJDUMP STRIP=$STRIP $CFLAGS
-            cp ${{ env.ABS_OUT }}/arch/arm64/boot/Image.gz-dtb ${{ env.ABS_OUT }}/Image.gz-dtb.${defconfig%.defconfig}
+            make O="${{ env.ABS_OUT }}" ARCH=arm64 CROSS_COMPILE="$CROSS_COMPILE" CC="$CC" CLANG_TRIPLE="$CLANG_TRIPLE" AR="$AR" NM="$NM" OBJCOPY="$OBJCOPY" OBJDUMP="$OBJDUMP" STRIP="$STRIP" "$defconfig"
+            make -j"$(nproc)" O="${{ env.ABS_OUT }}" ARCH=arm64 CROSS_COMPILE="$CROSS_COMPILE" CC="$CC" CLANG_TRIPLE="$CLANG_TRIPLE" AR="$AR" NM="$NM" OBJCOPY="$OBJCOPY" OBJDUMP="$OBJDUMP" STRIP="$STRIP" $CFLAGS
+            cp "${{ env.ABS_OUT }}/arch/arm64/boot/Image.gz-dtb" "${{ env.ABS_OUT }}/Image.gz-dtb.${defconfig%.defconfig}"
           done
-          echo "variants=${VAR_ARRAY[*]}" >> $GITHUB_OUTPUT
+          echo "variants=${VAR_ARRAY[*]}" >> "$GITHUB_OUTPUT"
+          echo "::endgroup::"
 
       - name: Build dtb.img (Exynos dtbTool)
         if: inputs.dry_run != true && inputs.upload_dtbs == true
         run: |
-          cd ${{ env.ABS_KERNEL }}
+          set -euo pipefail
+          echo "::group::Building dtb.img"
+          cd "${{ env.ABS_KERNEL }}"
           export ARCH=arm64
-          export OUT_DIR=${{ env.ABS_OUT }}
-          mkdir -p $OUT_DIR/arch/$ARCH/boot
-          ${{ github.workspace }}/dtbTool/dtbTool \
+          export OUT_DIR="${{ env.ABS_OUT }}"
+          mkdir -p "$OUT_DIR/arch/$ARCH/boot"
+          DTBTOOL="${{ env.ABS_DTBCOMP }}"
+          if [[ ! -x "$DTBTOOL" ]]; then
+            echo "::error::dtbTool not found at $DTBTOOL"
+            exit 1
+          fi
+          "$DTBTOOL" \
             -s 2048 \
-            -o $OUT_DIR/arch/$ARCH/boot/dtb.img \
-            -p $OUT_DIR/scripts/dtc/ \
-            $OUT_DIR/arch/$ARCH/boot/dts/exynos/*.dtb
-          cp $OUT_DIR/arch/$ARCH/boot/dtb.img $OUT_DIR/dtb.img
+            -o "$OUT_DIR/arch/$ARCH/boot/dtb.img" \
+            -p "$OUT_DIR/scripts/dtc/" \
+            "$OUT_DIR/arch/$ARCH/boot/dts/exynos"/*.dtb 2>/dev/null || {
+              echo "::warning::dtbTool failed, dtb.img may be incomplete"
+            }
+          cp "$OUT_DIR/arch/$ARCH/boot/dtb.img" "$OUT_DIR/dtb.img" 2>/dev/null || true
+          echo "::endgroup::"
 
       - name: Package with AnyKernel3 (per variant)
         if: inputs.dry_run != true
         run: |
-          cd ${{ github.workspace }}
+          set -euo pipefail
+          echo "::group::Packaging AnyKernel3 ZIPs"
+          cd "${{ github.workspace }}"
           CLANG_VER="${{ env.CLANG_VERSION }}"
-          VARIANTS="${{ steps.build.outputs.variants }}"
-          for variant in $VARIANTS; do
-            mkdir -p ak3-$variant
-            cp -r ${{ env.ANYKERNEL_DIR }}/* ak3-$variant/
-            cp ${{ env.ABS_OUT }}/Image.gz-dtb.$variant ak3-$variant/Image.gz-dtb
-            if [ "${{ inputs.upload_dtbs }}" = "true" ]; then
-              cp ${{ env.ABS_OUT }}/dtb.img ak3-$variant/dtb.img || true
+          IFS=',' read -ra VAR_ARRAY <<< "${{ inputs.build_variants }}"
+          for variant in "${VAR_ARRAY[@]}"; do
+            mkdir -p "ak3-$variant"
+            cp -r "${{ env.ANYKERNEL_DIR }}"/* "ak3-$variant/"
+            cp "${{ env.ABS_OUT }}/Image.gz-dtb.$variant" "ak3-$variant/Image.gz-dtb"
+            if [[ "${{ inputs.upload_dtbs }}" == "true" ]]; then
+              cp "${{ env.ABS_OUT }}/dtb.img" "ak3-$variant/dtb.img" 2>/dev/null || true
             fi
-            cd ak3-$variant
-            zip -r9 ../AnyKernel3-KSUN-clang${CLANG_VER}-${{ inputs.localversion }}-$variant.zip *
+            cd "ak3-$variant"
+            zip -r9 "../AnyKernel3-KSUN-clang${CLANG_VER}-${{ inputs.localversion }}-$variant.zip" .
             cd ..
-            rm -rf ak3-$variant
+            rm -rf "ak3-$variant"
           done
+          echo "::endgroup::"
 
       - name: Upload artifacts
         if: inputs.dry_run != true
@@ -646,6 +731,7 @@ jobs:
             ${{ env.ABS_OUT }}/Image.gz-dtb.*
             ${{ env.ABS_OUT }}/dtb.img
           retention-days: 14
+          if-no-files-found: warn
 
       - name: Create release
         if: inputs.do_release == true && startsWith(github.ref, 'refs/tags/')
