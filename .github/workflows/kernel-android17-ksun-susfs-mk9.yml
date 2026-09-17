@@ -62,7 +62,7 @@ on:
         default: "Wed Aug 19 03:26:19 UTC 2026"
 
       build_variants:
-        description: "Device variants to build (comma-separated)"
+        description: "Device variants to build (comma-separated: star2lte,starlte,crownlte)"
         required: true
         type: string
         default: "star2lte,starlte,crownlte"
@@ -80,7 +80,7 @@ on:
         default: false
 
       extra_cflags:
-        description: "Extra CFLAGS (space-separated)"
+        description: "Extra KCFLAGS (space-separated)"
         required: false
         type: string
         default: ""
@@ -138,6 +138,17 @@ jobs:
             FAIL=1
           fi
 
+          IFS=',' read -ra VARS_CHECK <<< "${{ inputs.build_variants }}"
+          for v in "${VARS_CHECK[@]}"; do
+            case "$v" in
+              star2lte|starlte|crownlte) ;;
+              *)
+                echo "::error::Unknown build variant '$v' (allowed: star2lte, starlte, crownlte)"
+                FAIL=1
+                ;;
+            esac
+          done
+
           echo "::endgroup::"
           if [[ "$FAIL" -ne 0 ]]; then
             echo "::error::Input validation failed"
@@ -151,6 +162,21 @@ jobs:
           path: "."
           fetch-depth: 1
 
+      - name: Guard against unsupported Linux 4.9 IDA APIs
+        run: |
+          set -euo pipefail
+          echo "::group::Checking fs/namespace.c for post-4.9 IDA APIs"
+          # ida_alloc()/ida_alloc_min()/ida_free() do not exist in Linux 4.9's IDA
+          # layer (only ida_simple_get/ida_pre_get/ida_get_new*/ida_remove). If a
+          # KSU/SUSFS patch introduced these, the build fails deep into compilation
+          # with -Werror,-Wimplicit-function-declaration. Fail fast here instead.
+          if [[ -f fs/namespace.c ]] && grep -nE '\bida_(alloc|alloc_min|free)\b' fs/namespace.c; then
+            echo "::error::fs/namespace.c uses IDA APIs unavailable in Linux ${KERNEL_VERSION} (ida_alloc/ida_alloc_min/ida_free). Backport to ida_get_new()/ida_get_new_above()/ida_remove() before building."
+            exit 1
+          fi
+          echo "PASS: no unsupported IDA APIs found in fs/namespace.c"
+          echo "::endgroup::"
+
       - name: Install build dependencies
         run: |
           set -euo pipefail
@@ -162,6 +188,25 @@ jobs:
             python3 python3-pip rsync wget zip zlib1g-dev \
             libelf1 libfdt1 libffi7 libstdc++6 \
             device-tree-compiler aria2 zstd
+          echo "::endgroup::"
+
+      - name: Cache ccache directory
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-${{ inputs.toolchain }}-${{ github.ref_name }}
+          restore-keys: |
+            ccache-${{ inputs.toolchain }}-
+
+      - name: Configure ccache
+        run: |
+          set -euo pipefail
+          echo "::group::Configuring ccache"
+          mkdir -p ~/.ccache
+          ccache -M "${CCACHE_MAXSIZE}"
+          ccache -z
+          echo "/usr/lib/ccache" >> "$GITHUB_PATH"
+          echo "USE_CCACHE=1" >> "$GITHUB_ENV"
           echo "::endgroup::"
 
       - name: Resolve toolchain configuration
@@ -360,6 +405,10 @@ jobs:
               echo "::warning::$cfg not found, skipping"
               continue
             fi
+            if grep -q '^CONFIG_KSU=y' "$cfg" 2>/dev/null; then
+              echo "$cfg already has KSU config, skipping append"
+              continue
+            fi
             {
               echo "# KernelSU-Next (manual hook)"
               echo "CONFIG_KSU=y"
@@ -380,17 +429,28 @@ jobs:
           git clone --depth=1 --branch "${{ env.ANYKERNEL3_BRANCH }}" "${{ env.ANYKERNEL_REPO }}" anykernel3
           echo "::endgroup::"
 
-      - name: Clone dtbTool (Exynos)
+      - name: Clone and build dtbTool (Exynos)
         run: |
           set -euo pipefail
-          echo "::group::Cloning dtbTool"
-          git clone --depth=1 "${{ env.DTBTOOL_REPO }}" dtbTool
-          cd dtbTool
-          gcc dtbTool/source/dtbtool.c -o dtbTool
-          mv dtbTool dtbTool-bin
-          chmod +x dtbTool-bin
-          cd ..
+          echo "::group::Building dtbTool"
           rm -rf dtbTool
+          git clone --depth=1 "${{ env.DTBTOOL_REPO }}" dtbTool
+
+          SRC_FILE="$(find dtbTool -type f -name 'dtbtool.c' -print -quit)"
+          if [[ -z "$SRC_FILE" ]]; then
+            echo "::error::dtbtool.c not found anywhere under cloned dtbTool repo"
+            exit 1
+          fi
+          echo "Found dtbtool source: $SRC_FILE"
+
+          gcc "$SRC_FILE" -o dtbTool-bin
+          chmod +x dtbTool-bin
+          rm -rf dtbTool
+
+          if [[ ! -x dtbTool-bin ]]; then
+            echo "::error::dtbTool-bin was not produced or is not executable"
+            exit 1
+          fi
           echo "::endgroup::"
 
       - name: Build kernel and DTBs (all variants)
@@ -409,11 +469,14 @@ jobs:
           export OBJDUMP=llvm-objdump
           export STRIP=llvm-strip
 
+          # Extra flags go through KCFLAGS/KAFLAGS (kbuild's supported injection
+          # points) rather than being appended as bare make arguments, which
+          # would be parsed as targets/goals, not compiler flags.
+          KCFLAGS="${{ inputs.extra_cflags }}"
           if [[ "${{ inputs.enable_lto }}" == "true" ]]; then
-            export CFLAGS="${{ inputs.extra_cflags }} -flto"
-          else
-            export CFLAGS="${{ inputs.extra_cflags }}"
+            KCFLAGS="$KCFLAGS -flto"
           fi
+          export KCFLAGS
 
           mkdir -p kernel-out
           IFS=',' read -ra VAR_ARRAY <<< "${{ inputs.build_variants }}"
@@ -421,10 +484,11 @@ jobs:
             defconfig="${defconfig}_defconfig"
             echo "Building $defconfig..."
             make O=kernel-out ARCH=arm64 CROSS_COMPILE="$CROSS_COMPILE" CC="$CC" CLANG_TRIPLE="$CLANG_TRIPLE" AR="$AR" NM="$NM" OBJCOPY="$OBJCOPY" OBJDUMP="$OBJDUMP" STRIP="$STRIP" "$defconfig"
-            make -j"$(nproc)" O=kernel-out ARCH=arm64 CROSS_COMPILE="$CROSS_COMPILE" CC="$CC" CLANG_TRIPLE="$CLANG_TRIPLE" AR="$AR" NM="$NM" OBJCOPY="$OBJCOPY" OBJDUMP="$OBJDUMP" STRIP="$STRIP" $CFLAGS
+            make -j"$(nproc)" O=kernel-out ARCH=arm64 CROSS_COMPILE="$CROSS_COMPILE" CC="$CC" CLANG_TRIPLE="$CLANG_TRIPLE" AR="$AR" NM="$NM" OBJCOPY="$OBJCOPY" OBJDUMP="$OBJDUMP" STRIP="$STRIP" KCFLAGS="$KCFLAGS"
             cp kernel-out/arch/arm64/boot/Image.gz-dtb "kernel-out/Image.gz-dtb.${defconfig%.defconfig}"
           done
           echo "variants=${VAR_ARRAY[*]}" >> "$GITHUB_OUTPUT"
+          ccache -s || true
           echo "::endgroup::"
 
       - name: Build dtb.img (Exynos dtbTool)
@@ -500,6 +564,6 @@ jobs:
             - Variants: ${{ steps.build.outputs.variants }}
             - DTB: ${{ inputs.upload_dtbs == true && 'included' || 'not included' }}
             - LTO: ${{ inputs.enable_lto == true && 'enabled' || 'disabled' }}
-            - Extra CFLAGS: `${{ inputs.extra_cflags || 'none' }}`
+            - Extra KCFLAGS: `${{ inputs.extra_cflags || 'none' }}`
 
             ⚠️ Test on physical devices before flashing.
