@@ -834,10 +834,56 @@ jobs:
           rm -rf out
           mkdir -p out
 
+          # security/selinux/ first: drivers/kernelsu/*.o includes the
+          # generated flask.h, and a parallel -j build races its generation
+          # otherwise (confirmed reproducible on this tree).
+          #
+          # ALSO prime drivers/kernelsu/ here, for a separate, more serious
+          # reason: this KSU-Next pin's Kbuild self-patches fs/namespace.c,
+          # fs/internal.h, include/linux/seccomp.h, and 4 security/selinux/*
+          # files via `sed` at the moment Kbuild PARSES drivers/kernelsu/Kbuild
+          # — which happens only when Make descends into drivers/, i.e. after
+          # fs/, kernel/, and security/selinux/ have already been compiled in
+          # normal build order (confirmed via timestamps: fs/namespace.o
+          # built at 22:27:51, the sed patch fired at 22:30:09 in run
+          # 35401094486). Building unpatched first, then patching mid-build,
+          # produces a hard link failure — the patched path_umount()/
+          # can_umount() never make it into fs/built-in.o because
+          # fs/namespace.c was compiled before the patch existed — plus a
+          # silent, unconfirmed-but-real risk of earlier- and later-compiled
+          # objects seeing different struct seccomp layouts, since a field
+          # is added to it mid-build. Forcing Kbuild to parse
+          # drivers/kernelsu/Kbuild here, against a throwaway config,
+          # applies every sed patch to the shared source tree BEFORE the
+          # real per-variant build below ever compiles fs/, kernel/, or
+          # security/selinux/ for real — so every object in the real build
+          # sees one consistent, already-patched source tree.
           make -C . O="out/_selinux_prime" ARCH="$ARCH" exynos9810-star2lte_defconfig >/dev/null
+          scripts/config --file out/_selinux_prime/.config \
+            -e KSU -e KSU_MANUAL_HOOK -d KSU_KPROBES_HOOK
+          if [[ "$ENABLE_SUSFS" == "true" ]]; then
+            scripts/config --file out/_selinux_prime/.config \
+              -e KSU_SUSFS -e KSU_SUSFS_SUS_PATH -e KSU_SUSFS_SUS_MOUNT \
+              -e KSU_SUSFS_SUS_KSTAT -e KSU_SUSFS_TRY_UMOUNT -e KSU_SUSFS_SPOOF_UNAME \
+              -d KSU_SUSFS_SUS_MEMFD
+          fi
+          make -C . O="out/_selinux_prime" ARCH="$ARCH" olddefconfig >/dev/null
           make -C . -j"$(nproc)" O="out/_selinux_prime" ARCH="$ARCH" \
             CC="$CC" LD="$LD" CROSS_COMPILE="$CROSS_COMPILE" CLANG_TRIPLE="$CLANG_TRIPLE" \
-            security/selinux/ >/dev/null 2>&1 || true
+            security/selinux/ drivers/kernelsu/ >/dev/null 2>&1 || true
+
+          # Fail loud, now, if priming didn't actually patch the source tree
+          # — better than discovering it 4 minutes into the real build again.
+          grep -q '^int path_umount' fs/namespace.c || {
+            echo "::error::Priming pass did not add path_umount to fs/namespace.c — KSU-Next's self-patcher did not run as expected. Do not proceed; the real build will hit the same link failure."
+            exit 1; }
+          grep -q 'int path_umount' fs/internal.h || {
+            echo "::error::Priming pass did not add path_umount declaration to fs/internal.h"
+            exit 1; }
+          grep -q 'atomic_t filter_count;' include/linux/seccomp.h || {
+            echo "::error::Priming pass did not patch include/linux/seccomp.h for filter_count"
+            exit 1; }
+          echo "Priming confirmed: fs/namespace.c, fs/internal.h, include/linux/seccomp.h patched before real build."
 
           for variant in "${variants[@]}"; do
             variant="${variant//[[:space:]]/}"
