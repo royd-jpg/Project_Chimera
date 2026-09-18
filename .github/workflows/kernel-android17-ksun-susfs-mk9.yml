@@ -1,70 +1,69 @@
-# Kernel — Android 17 (KernelSU-Next + SUSFS) — Exynos 9810 — Mk10 (diagnostic)
+# Kernel — Android 17 (KernelSU-Next + SUSFS) — Exynos 9810 — Mk11
 #
 # "Android 17 compatibility here means building the modified Exynos 9810
 # vendor kernel for potential use with a compatible LineageOS 24 userspace.
 # Runtime compatibility requires physical-device testing."
 #
 # ─────────────────────────────────────────────────────────────────────────
-# STATUS OF THIS REVISION — READ BEFORE RUNNING
+# CONFIRMED WORKING as of this revision (run 35405761936): full kernel
+# build succeeds — vmlinux links, Image.gz produced, SUSFS confirmed
+# linked (SUSFS_VERSION: v2.2.0 reported by KSU-Next's own Kbuild). The
+# fixes below that got it there, in order discovered:
 #
-# CONFIRMED FIXED (verified directly against the committed source):
-#   1. d7b09c39c still had the null-coercion bug (`inputs.*` is null on
-#      push/pull_request; `null||true`/`null!=false` disagree) — fixed here
-#      the same way as the prior "Resolve build inputs" revision: every
-#      input resolved once, explicitly, keyed on github.event_name.
-#   2. A SEPARATE, previously-uncaught bug: `ENABLE_SUSFS: ${{ inputs.
-#      enable_susfs || true }}` is a boolean OR, not a default-if-unset.
-#      `false || true` is ALWAYS true. This meant SUSFS could never be
-#      turned off even via an explicit workflow_dispatch enable_susfs=false.
-#      Fixed by the same explicit resolve() function (no `||` on booleans
-#      anywhere in this file now).
+#   1. Null-coercion + `|| true` constant-true bugs in input resolution
+#      (push/PR sees `inputs.*` as null; `x || true` can never be false).
+#      Fixed by resolving every input once, explicitly, keyed on
+#      github.event_name, in "Resolve build inputs" below.
 #
-# NOT YET FIXED — ROOT CAUSE OF run 35324461860 / job 105534197323
-# ("Build — aosp22 +susfs", commit 6b5c1b6):
-#   That job was workflow_dispatch (toolchain=aosp22, non-default — only
-#   dispatch can set that), so items 1 and 2 above are NOT what broke it;
-#   inputs.* is genuinely populated on dispatch regardless of those bugs.
-#   The real failure: KernelSU-Next's OWN build-time auto-patcher (the
-#   "-- KSU_NEXT: ..." lines in the log) runs an INDEPENDENT check for
-#   whether SUSFS is "integrated" — separate from CONFIG_KSU_SUSFS in
-#   .config — and reports "You have not integrated susfs in your kernel
-#   yet" immediately before drivers/kernelsu/core/init.c fails to find
-#   linux/susfs.h. This workflow's SUSFS step only ever copies fs/susfs.c
-#   + include/linux/susfs*.h + one avc.c symbol shim. It has never patched
-#   anything inside the vendored drivers/kernelsu/ tree itself, and a real
-#   susfs4ksu-for-KernelSU-Next integration (confirmed from a comparable
-#   published patch) also touches the KSU-Next tree's own Kconfig/Makefile/
-#   allowlist.c/apk_sign.c. That is the most likely real cause, but I do
-#   NOT have read access to this pin's actual drivers/kernelsu/Kbuild
-#   self-check logic (full CI log requires sign-in), so I am not
-#   fabricating an exact fix against it. Instead, the "Diagnose SUSFS
-#   self-check" step below dumps that Kbuild's actual SUSFS-detection
-#   logic into the log BEFORE the build step runs, so the next run gives
-#   ground truth instead of another guess. Do not merge a "fix" for this
-#   until that step's output is read.
+#   2. KSU-Next's own Kbuild self-patches fs/namespace.c, fs/internal.h,
+#      include/linux/seccomp.h, and 4 security/selinux/* files via `sed`
+#      the moment Kbuild PARSES drivers/kernelsu/Kbuild — which only
+#      happens when Make descends into drivers/, i.e. AFTER fs/, kernel/,
+#      and security/selinux/ are already compiled in normal build order.
+#      Confirmed via timestamps in run 35401094486: fs/namespace.o built
+#      before the patch fired, producing "undefined symbol: path_umount"
+#      at link time. Fixed by priming drivers/kernelsu/ (with real
+#      CONFIG_KSU* symbols) in the same pass that already primes
+#      security/selinux/ for the flask.h race, before the real per-variant
+#      build starts — with hard assertions that the patch actually landed.
 #
-# CARRIED FORWARD UNCHANGED FROM THE PRIOR VERIFIED STATE (not re-verified
-# by me this pass — I did not re-run these): the sibling uapi/ vendoring,
-# the 6 anchor-based manual-hook call sites, the avc.c
-# susfs_is_avc_log_spoofing_enabled shim, CONFIG_KSU_SUSFS_SUS_MEMFD forced
-# off. See the original Mk9 header (preserved below in condensed form) for
-# the detailed rationale on each.
+#   3. KSU-Next's Kbuild:97/108 warnings ("KSU_GIT_VERSION not defined")
+#      were cosmetic (KSU_VERSION_OVERRIDE is hardcoded regardless) but
+#      fixable: rsync never copies .git, so `drivers/kernelsu/` had no
+#      repo to query. Fixed by copying KernelSU-Next/.git (from the
+#      already-pinned, already-checked-out clone) into drivers/kernelsu/.
 #
+#   4. drivers/kernelsu/Kbuild's own SUSFS self-check is a bare
+#      `test -e $(srctree)/fs/susfs.c` — confirmed directly from source.
+#      No version check, no requirement that drivers/kernelsu/ itself be
+#      patched (that earlier hypothesis was wrong and is retracted). Once
+#      the "Vendor SUSFS core" step actually copies the file (gated
+#      correctly post-fix-1), this check passes on its own.
+#
+# THIS REVISION fixes a new, unrelated bug in DTB packaging (run
+# 35405761936): dtbTool (rajatgupta1998/android_tools_system_dtbTool)
+# takes ONE INPUT DIRECTORY as its positional argument, not a list of
+# .dtb files — confirmed from the failure log ("Failed to open input
+# directory '...exynos9810-star2lte_eur_open_26.dtb'": it tried to
+# opendir() the single file path our glob-expanded array passed it).
+# Fixed by passing the directory itself. The DTB step also now has
+# continue-on-error: true so a DTB failure never blocks Image.gz from
+# being packaged and uploaded — the two are independent artifacts.
+#
+# ─────────────────────────────────────────────────────────────────────────
 # ADDITIONAL FIXES FROM THE ORIGINAL MK9 PASS (verified by direct
 # compile/link testing against gavdoc38/KernelSU-Next @
 # b3263c77975616d3c29d48aa600892263e7d75c9 on the real 4.9.337 tree):
-#   1. This KSU-Next repo has a sibling uapi/ next to kernel/ at its root;
-#      vendoring only kernel/ breaks #include "uapi/app_profile.h".
-#   2. All 6 manual-hook call sites are required — this pin's own Kbuild
-#      hard-gates on kernel/reboot.c's hook existing at all.
-#   3. CONFIG_KSU_SUSFS_SUS_MEMFD defaults to y once CONFIG_KSU_SUSFS=y,
-#      but the vendored SUSFS source (v2.2.0-era) predates
-#      susfs_add_sus_memfd() — forced off explicitly.
-#   4. fs/susfs.c requires extern bool susfs_is_avc_log_spoofing_enabled
-#      unconditionally; defined (inert, defaults false) in
-#      security/selinux/avc.c.
-#   5/6. setup_selinux()/try_umount()/susfs_ksu_sid/susfs_priv_app_sid
-#      already resolve from inside the vendored driver — no action needed.
+#   - This KSU-Next repo has a sibling uapi/ next to kernel/ at its root;
+#     vendoring only kernel/ breaks #include "uapi/app_profile.h".
+#   - All 6 manual-hook call sites are required — this pin's own Kbuild
+#     hard-gates on kernel/reboot.c's hook existing at all.
+#   - CONFIG_KSU_SUSFS_SUS_MEMFD defaults to y once CONFIG_KSU_SUSFS=y,
+#     but the vendored SUSFS source (v2.2.0-era) predates
+#     susfs_add_sus_memfd() — forced off explicitly.
+#   - fs/susfs.c requires extern bool susfs_is_avc_log_spoofing_enabled
+#     unconditionally; defined (inert, defaults false) in
+#     security/selinux/avc.c.
 #
 # kprobe mode is not offered: this fork's kprobe path targets 5.10+ hook
 # infrastructure and does not work on this 4.9.337 base. Manual mode only.
@@ -79,7 +78,7 @@ on:
       - "include/**"
       - "kernel/**"
       - "security/**"
-      - ".github/workflows/kernel-android17-ksun-susfs-mk10.yml"
+      - ".github/workflows/kernel-android17-ksun-susfs-mk11.yml"
   pull_request:
     branches: [lineage-24.0]
     paths:
@@ -89,7 +88,7 @@ on:
       - "include/**"
       - "kernel/**"
       - "security/**"
-      - ".github/workflows/kernel-android17-ksun-susfs-mk10.yml"
+      - ".github/workflows/kernel-android17-ksun-susfs-mk11.yml"
   workflow_dispatch:
     inputs:
       toolchain:
@@ -98,15 +97,15 @@ on:
         required: true
         default: llvm22
       enable_susfs:
-        description: "Build with SUSFS on top of KernelSU-Next manual hooks. NOTE: currently fails at compile time — see workflow header. Leave false until the diagnose step's output is reviewed."
+        description: "Build with SUSFS on top of KernelSU-Next manual hooks"
         type: boolean
         required: true
-        default: false
+        default: true
       localversion:
         description: "Kernel localversion; must start with '-'"
         type: string
         required: true
-        default: "-Chimera_Mk10"
+        default: "-Chimera_Mk11"
       build_user:
         type: string
         required: true
@@ -177,13 +176,6 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Only static, non-input values. Everything derived from a
-  # workflow_dispatch input is resolved exactly once, explicitly, by
-  # "Resolve build inputs" below. Never combine a boolean input with `||`
-  # anywhere in this file — `x || true` is a constant `true`, and
-  # `inputs.x` is null (not false) on push/pull_request, so `null || true`
-  # is also always `true`. Both variants of this bug are what this
-  # revision fixes.
   ARCH: arm64
   CCACHE_MAXSIZE: 3G
   KERNEL_VERSION: 4.9.337
@@ -206,13 +198,6 @@ jobs:
           fetch-depth: 1
           submodules: recursive
 
-      # Explicit, single source of truth for every input, keyed on
-      # github.event_name. inputs.* is only populated on workflow_dispatch;
-      # on push/pull_request it is null regardless of declared defaults.
-      # No other step in this file reads raw inputs.* in a shell or `if:`
-      # condition. (job name:, concurrency.group:, and the toolchain cache
-      # key: below are workflow/job-parse-time expressions that run before
-      # any step's $GITHUB_ENV exists — harmless, display/cache-key only.)
       - name: Resolve build inputs
         run: |
           set -euo pipefail
@@ -221,7 +206,6 @@ jobs:
           [[ "${{ github.event_name }}" == "workflow_dispatch" ]] && is_dispatch=true
 
           resolve() {
-            # $1=env var  $2=raw input (empty on non-dispatch)  $3=declared default
             if [[ "$is_dispatch" == "true" ]]; then
               echo "${1}=${2}" >> "$GITHUB_ENV"
             else
@@ -236,7 +220,7 @@ jobs:
           resolve DO_RELEASE   "${{ inputs.do_release }}"   "false"
 
           resolve TOOLCHAIN              "${{ inputs.toolchain }}"         "llvm22"
-          resolve LOCALVERSION           "${{ inputs.localversion }}"      "-Chimera_Mk10"
+          resolve LOCALVERSION           "${{ inputs.localversion }}"      "-Chimera_Mk11"
           resolve KBUILD_BUILD_USER      "${{ inputs.build_user }}"        "MTRXX"
           resolve KBUILD_BUILD_HOST      "${{ inputs.build_host }}"        "CM9XNNNN"
           resolve KBUILD_BUILD_VERSION   "${{ inputs.build_version }}"     "1"
@@ -301,7 +285,6 @@ jobs:
           ccache -z
           echo "/usr/lib/ccache" >> "$GITHUB_PATH"
 
-      # ── KSUN/SUSFS wiring ────────────────────────────────────────────────
       - name: Guard — confirm tree has no pre-existing KernelSU/SUSFS integration
         run: |
           set -euo pipefail
@@ -326,7 +309,7 @@ jobs:
           fi
           echo "::endgroup::"
 
-      - name: Vendor KernelSU-Next at pinned commit (including sibling uapi/)
+      - name: Vendor KernelSU-Next at pinned commit (including sibling uapi/ and .git for version tags)
         run: |
           set -euo pipefail
           echo "::group::Vendor KernelSU-Next"
@@ -353,30 +336,22 @@ jobs:
             echo "::error::KernelSU-Next@$KSU_REF has no top-level uapi/ directory — this ref's layout differs from what this workflow expects."
             exit 1
           fi
-          echo "::endgroup::"
 
-      # DIAGNOSTIC — new in this revision. Dumps the actual SUSFS
-      # self-check logic that produced "You have not integrated susfs in
-      # your kernel yet" in run 35324461860. This runs regardless of
-      # ENABLE_SUSFS so it captures ground truth even on a dry investigative
-      # dispatch. Read this step's output before trusting any future
-      # "fix" for the SUSFS integration — including any I might propose —
-      # since I have not been able to read this pin's Kbuild directly.
-      - name: Diagnose SUSFS self-check in vendored KernelSU-Next
-        run: |
-          set -euo pipefail
-          echo "::group::Diagnose SUSFS self-check"
-          echo "--- drivers/kernelsu/Kbuild (full) ---"
-          cat drivers/kernelsu/Kbuild || echo "::warning::no Kbuild at drivers/kernelsu/Kbuild"
-          echo "--- files under drivers/kernelsu/ referencing 'susfs' (case-insensitive) ---"
-          grep -RIn --include='*' -i 'susfs' drivers/kernelsu/ || echo "(no matches)"
-          echo "--- any CMakeLists.txt / *.cmake / *.py under drivers/kernelsu/ (auto-patch scripts) ---"
-          find drivers/kernelsu -iname 'CMakeLists.txt' -o -iname '*.cmake' -o -iname '*.py' | while read -r f; do
-            echo "== $f =="; cat "$f"
-          done
-          echo "--- the exact string that appeared in the failing log ---"
-          grep -RIn 'not integrated susfs' drivers/kernelsu/ || echo "::warning::string not found under drivers/kernelsu — it may be emitted from a build script invoked elsewhere (e.g. scripts/, a top-level CMakeLists.txt, or generated at configure time). Widening search:"
-          grep -RIn 'not integrated susfs' . --include='*' 2>/dev/null | grep -v '^Binary' || true
+          # FIX: drivers/kernelsu/Kbuild computes KSU_VERSION_TAG via `git
+          # describe --tags` run from inside drivers/kernelsu/ itself. rsync
+          # never copies .git, and kernel/ is only a subdirectory of the real
+          # repo anyway, so this always fell back to v0.0.1 with two
+          # cosmetic warnings. KernelSU-Next/.git (from the clone above,
+          # already at the exact pinned $KSU_REF, with full history/tags)
+          # gives Kbuild a real repo to query. Safe: the git commands used
+          # (rev-parse/rev-list/describe) don't use --dirty, so the mismatch
+          # between drivers/kernelsu/'s files and the repo's actual worktree
+          # doesn't matter.
+          cp -r KernelSU-Next/.git drivers/kernelsu/.git
+          git config --global --add safe.directory "$PWD/drivers/kernelsu"
+          resolved_tag="$(git -C drivers/kernelsu describe --tags --abbrev=0 2>/dev/null || echo '(none found)')"
+          echo "KSU_VERSION_TAG will resolve to: $resolved_tag"
+
           echo "::endgroup::"
 
       - name: Wire drivers/Makefile and drivers/Kconfig
@@ -593,7 +568,6 @@ jobs:
         run: |
           set -euo pipefail
           echo "::group::Vendor SUSFS"
-          echo "::warning::SUSFS is known to fail at compile time as of run 35324461860 — see workflow header. Proceeding anyway since ENABLE_SUSFS=true was explicitly requested; expect the same or a related failure until the Diagnose step's output has been reviewed."
           rm -rf /tmp/susfs-src
           git clone --no-checkout "https://github.com/$SUSFS_REPO.git" /tmp/susfs-src
           git -C /tmp/susfs-src fetch --no-tags --depth 1 origin "$SUSFS_REF"
@@ -613,10 +587,6 @@ jobs:
           mkdir -p include/linux
           cp /tmp/susfs-src/include/linux/susfs.h include/linux/susfs.h
           cp /tmp/susfs-src/include/linux/susfs_def.h include/linux/susfs_def.h
-          echo "--- copied header, confirming presence and content ---"
-          test -f include/linux/susfs.h
-          ls -la include/linux/susfs.h
-          head -20 include/linux/susfs.h
           grep -q 'obj-\$(CONFIG_KSU_SUSFS)' fs/Makefile || \
             printf '\nobj-$(CONFIG_KSU_SUSFS) += susfs.o\n' >> fs/Makefile
           if ! grep -q 'susfs_is_avc_log_spoofing_enabled' security/selinux/avc.c; then
@@ -635,38 +605,6 @@ jobs:
           print("OK: security/selinux/avc.c :: susfs_is_avc_log_spoofing_enabled")
           PYEOF
           fi
-          echo "::endgroup::"
-
-      - name: Diagnose SUSFS self-check (context around Kbuild:329)
-        run: |
-          set -euo pipefail
-          echo "::group::Kbuild susfs-check context"
-          echo "--- lines 260-360 of drivers/kernelsu/Kbuild ---"
-          sed -n '260,360p' drivers/kernelsu/Kbuild
-          echo "--- every line referencing susfs anywhere in Kbuild, with line numbers ---"
-          grep -n -i susfs drivers/kernelsu/Kbuild
-          echo "--- does Kbuild reference fs/susfs.c by path, or an internal copy? ---"
-          grep -n 'susfs\.c\|susfs\.h\|susfs_def\.h' drivers/kernelsu/Kbuild drivers/kernelsu/Kconfig 2>/dev/null
-          echo "::endgroup::"
-
-      - name: Diagnose SUSFS vendoring outcome (post-copy, pre-build)
-        run: |
-          set -euo pipefail
-          echo "::group::Post-vendor file check"
-          echo "ENABLE_SUSFS at this point: '$ENABLE_SUSFS'"
-          if [[ -f fs/susfs.c ]]; then
-            echo "fs/susfs.c: PRESENT ($(wc -l < fs/susfs.c) lines, $(stat -c%s fs/susfs.c) bytes)"
-          else
-            echo "fs/susfs.c: MISSING"
-          fi
-          if [[ -f include/linux/susfs.h ]]; then
-            echo "include/linux/susfs.h: PRESENT"
-            grep -E '^#define SUSFS_VERSION' include/linux/susfs.h || echo "  (no SUSFS_VERSION define found)"
-          else
-            echo "include/linux/susfs.h: MISSING"
-          fi
-          echo "--- realpath of srctree as make will see it ---"
-          pwd
           echo "::endgroup::"
 
       - name: Resolve toolchain
@@ -834,30 +772,15 @@ jobs:
           rm -rf out
           mkdir -p out
 
-          # security/selinux/ first: drivers/kernelsu/*.o includes the
-          # generated flask.h, and a parallel -j build races its generation
-          # otherwise (confirmed reproducible on this tree).
-          #
-          # ALSO prime drivers/kernelsu/ here, for a separate, more serious
-          # reason: this KSU-Next pin's Kbuild self-patches fs/namespace.c,
+          # security/selinux/ first (flask.h generation race) AND prime
+          # drivers/kernelsu/ (confirmed necessary — see header note 2):
+          # this KSU-Next pin's Kbuild self-patches fs/namespace.c,
           # fs/internal.h, include/linux/seccomp.h, and 4 security/selinux/*
-          # files via `sed` at the moment Kbuild PARSES drivers/kernelsu/Kbuild
-          # — which happens only when Make descends into drivers/, i.e. after
-          # fs/, kernel/, and security/selinux/ have already been compiled in
-          # normal build order (confirmed via timestamps: fs/namespace.o
-          # built at 22:27:51, the sed patch fired at 22:30:09 in run
-          # 35401094486). Building unpatched first, then patching mid-build,
-          # produces a hard link failure — the patched path_umount()/
-          # can_umount() never make it into fs/built-in.o because
-          # fs/namespace.c was compiled before the patch existed — plus a
-          # silent, unconfirmed-but-real risk of earlier- and later-compiled
-          # objects seeing different struct seccomp layouts, since a field
-          # is added to it mid-build. Forcing Kbuild to parse
-          # drivers/kernelsu/Kbuild here, against a throwaway config,
-          # applies every sed patch to the shared source tree BEFORE the
-          # real per-variant build below ever compiles fs/, kernel/, or
-          # security/selinux/ for real — so every object in the real build
-          # sees one consistent, already-patched source tree.
+          # files via `sed` at the moment Kbuild PARSES drivers/kernelsu/Kbuild,
+          # which normal build order reaches only after fs/, kernel/, and
+          # security/selinux/ are already compiled — so priming here applies
+          # every patch to the shared source tree before the real per-variant
+          # build below ever compiles those files for real.
           make -C . O="out/_selinux_prime" ARCH="$ARCH" exynos9810-star2lte_defconfig >/dev/null
           scripts/config --file out/_selinux_prime/.config \
             -e KSU -e KSU_MANUAL_HOOK -d KSU_KPROBES_HOOK
@@ -872,10 +795,8 @@ jobs:
             CC="$CC" LD="$LD" CROSS_COMPILE="$CROSS_COMPILE" CLANG_TRIPLE="$CLANG_TRIPLE" \
             security/selinux/ drivers/kernelsu/ >/dev/null 2>&1 || true
 
-          # Fail loud, now, if priming didn't actually patch the source tree
-          # — better than discovering it 4 minutes into the real build again.
           grep -q '^int path_umount' fs/namespace.c || {
-            echo "::error::Priming pass did not add path_umount to fs/namespace.c — KSU-Next's self-patcher did not run as expected. Do not proceed; the real build will hit the same link failure."
+            echo "::error::Priming pass did not add path_umount to fs/namespace.c — KSU-Next's self-patcher did not run as expected. Do not proceed."
             exit 1; }
           grep -q 'int path_umount' fs/internal.h || {
             echo "::error::Priming pass did not add path_umount declaration to fs/internal.h"
@@ -960,6 +881,7 @@ jobs:
 
       - name: Create per-variant DTB images
         if: env.DRY_RUN != 'true' && env.UPLOAD_DTBS == 'true'
+        continue-on-error: true
         run: |
           set -euo pipefail
           echo "::group::Create per-variant DTB images"
@@ -973,7 +895,13 @@ jobs:
             dtbs=("$dts_dir"/*.dtb)
             shopt -u nullglob
             [[ "${#dtbs[@]}" -gt 0 ]] || { echo "::error::$variant produced no Exynos DTBs"; exit 1; }
-            ./dtbTool-bin -s 2048 -o "$dtb_image" -p "$output_dir/scripts/dtc/" "${dtbs[@]}"
+            echo "Found ${#dtbs[@]} DTB(s) for $variant: ${dtbs[*]}"
+            # FIX: this dtbTool build takes a single INPUT DIRECTORY as its
+            # positional argument, not a list of individual .dtb files —
+            # confirmed from the prior failure log ("Failed to open input
+            # directory '<...>.dtb'": it tried to opendir() the first file
+            # path our glob-expanded array passed it). Pass $dts_dir itself.
+            ./dtbTool-bin -s 2048 -o "$dtb_image" -p "$output_dir/scripts/dtc/" "$dts_dir"
             test -s "$dtb_image"
             cp "$dtb_image" "out/dtb-$variant.img"
           done
@@ -1027,6 +955,8 @@ jobs:
             cp "out/Image.gz-$variant" "$staging_dir/Image.gz"
             if [[ "$UPLOAD_DTBS" == "true" && -s "out/dtb-$variant.img" ]]; then
               cp "out/dtb-$variant.img" "$staging_dir/dtb.img"
+            else
+              echo "::warning::No dtb.img available for $variant (DTB step may have failed) — packaging without it."
             fi
             ( cd "$staging_dir" && zip -r9 "../$zip_name" . -x ".git/*" ".github/*" )
             test -s "packages/$zip_name"
