@@ -348,7 +348,7 @@ jobs:
           resolve DO_RELEASE   "${{ inputs.do_release }}"   "false"
 
           # Strings — resolved the same way for a single source of truth,
-          # replacing the old job-level `env: ${{ inputs.X || default }}`
+          # replacing the old job-level `env: $ {{ inputs.X || default }}`
           # block entirely.
           resolve TOOLCHAIN            "${{ inputs.toolchain }}"         "llvm22"
           resolve LOCALVERSION         "${{ inputs.localversion }}"      "-Chimera_Mk9"
