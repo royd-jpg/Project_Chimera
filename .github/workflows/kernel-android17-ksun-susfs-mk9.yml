@@ -1,126 +1,73 @@
-# Kernel — Android 17 (KernelSU-Next + SUSFS) — Exynos 9810 — Mk9 (refactored)
+# Kernel — Android 17 (KernelSU-Next + SUSFS) — Exynos 9810 — Mk10 (diagnostic)
 #
 # "Android 17 compatibility here means building the modified Exynos 9810
 # vendor kernel for potential use with a compatible LineageOS 24 userspace.
 # Runtime compatibility requires physical-device testing."
 #
 # ─────────────────────────────────────────────────────────────────────────
-# WHAT CHANGED FROM THE PRIOR DRAFT (root cause of the reported failure)
+# STATUS OF THIS REVISION — READ BEFORE RUNNING
 #
-# The prior "Apply manual-hook call-site patch" step embedded hand-written
-# unified diffs with WRONG hunk-size headers. Reproduced and confirmed:
-#   - fs/exec.c hunk claimed "-2074,10 +2074,16" (10 old / 16 new lines).
-#     The actual new-side content is 10 context + 8 added = 18 lines, not
-#     16. GNU patch counts forward from the header, desyncs 2 lines short,
-#     and then chokes on the next real diff line thinking it should be a
-#     new hunk header — exactly "malformed patch at line 20: +#endif".
-#   - fs/open.c's hunk has the same class of bug (claimed 20 new lines,
-#     actual 22).
-#   - This is a STATIC bug in the patch text itself — it would fail against
-#     a byte-perfect matching file too. The old step's own error message
-#     ("these files have diverged from the LOS23.2 reference") is a
-#     misdiagnosis baked into the script.
+# CONFIRMED FIXED (verified directly against the committed source):
+#   1. d7b09c39c still had the null-coercion bug (`inputs.*` is null on
+#      push/pull_request; `null||true`/`null!=false` disagree) — fixed here
+#      the same way as the prior "Resolve build inputs" revision: every
+#      input resolved once, explicitly, keyed on github.event_name.
+#   2. A SEPARATE, previously-uncaught bug: `ENABLE_SUSFS: ${{ inputs.
+#      enable_susfs || true }}` is a boolean OR, not a default-if-unset.
+#      `false || true` is ALWAYS true. This meant SUSFS could never be
+#      turned off even via an explicit workflow_dispatch enable_susfs=false.
+#      Fixed by the same explicit resolve() function (no `||` on booleans
+#      anywhere in this file now).
 #
-# FIX: the hand-rolled `patch -p1` step is replaced entirely with
-# anchor-based text insertion (Python str.replace on verified, unique
-# anchor strings). This sidesteps hunk-math entirely and fails loud with a
-# clear assertion if an anchor is not found or not unique — no silent
-# partial application, no line-count arithmetic to get wrong.
+# NOT YET FIXED — ROOT CAUSE OF run 35324461860 / job 105534197323
+# ("Build — aosp22 +susfs", commit 6b5c1b6):
+#   That job was workflow_dispatch (toolchain=aosp22, non-default — only
+#   dispatch can set that), so items 1 and 2 above are NOT what broke it;
+#   inputs.* is genuinely populated on dispatch regardless of those bugs.
+#   The real failure: KernelSU-Next's OWN build-time auto-patcher (the
+#   "-- KSU_NEXT: ..." lines in the log) runs an INDEPENDENT check for
+#   whether SUSFS is "integrated" — separate from CONFIG_KSU_SUSFS in
+#   .config — and reports "You have not integrated susfs in your kernel
+#   yet" immediately before drivers/kernelsu/core/init.c fails to find
+#   linux/susfs.h. This workflow's SUSFS step only ever copies fs/susfs.c
+#   + include/linux/susfs*.h + one avc.c symbol shim. It has never patched
+#   anything inside the vendored drivers/kernelsu/ tree itself, and a real
+#   susfs4ksu-for-KernelSU-Next integration (confirmed from a comparable
+#   published patch) also touches the KSU-Next tree's own Kconfig/Makefile/
+#   allowlist.c/apk_sign.c. That is the most likely real cause, but I do
+#   NOT have read access to this pin's actual drivers/kernelsu/Kbuild
+#   self-check logic (full CI log requires sign-in), so I am not
+#   fabricating an exact fix against it. Instead, the "Diagnose SUSFS
+#   self-check" step below dumps that Kbuild's actual SUSFS-detection
+#   logic into the log BEFORE the build step runs, so the next run gives
+#   ground truth instead of another guess. Do not merge a "fix" for this
+#   until that step's output is read.
 #
-# ─────────────────────────────────────────────────────────────────────────
-# ADDITIONAL FIXES FOUND BY HANDS-ON COMPILE/LINK TESTING AGAINST THIS
-# EXACT PIN (gavdoc38/KernelSU-Next @ b3263c77975616d3c29d48aa600892263e7d75c9)
-# ON THE REAL 4.9.337 TREE (not assumed — all six items below were caught by
-# actually running clang against real object files in this exact
-# configuration):
+# CARRIED FORWARD UNCHANGED FROM THE PRIOR VERIFIED STATE (not re-verified
+# by me this pass — I did not re-run these): the sibling uapi/ vendoring,
+# the 6 anchor-based manual-hook call sites, the avc.c
+# susfs_is_avc_log_spoofing_enabled shim, CONFIG_KSU_SUSFS_SUS_MEMFD forced
+# off. See the original Mk9 header (preserved below in condensed form) for
+# the detailed rationale on each.
 #
-#   1. This repo has a SIBLING `uapi/` directory next to `kernel/` at its
-#      root (`gavdoc38/KernelSU-Next/{kernel,uapi,manager,LICENSE}`). Only
-#      vendoring `kernel/` into drivers/kernelsu/ breaks
-#      `#include "uapi/app_profile.h"` (file not found). Fix: also rsync
-#      the top-level `uapi/` into `drivers/kernelsu/uapi/`.
+# ADDITIONAL FIXES FROM THE ORIGINAL MK9 PASS (verified by direct
+# compile/link testing against gavdoc38/KernelSU-Next @
+# b3263c77975616d3c29d48aa600892263e7d75c9 on the real 4.9.337 tree):
+#   1. This KSU-Next repo has a sibling uapi/ next to kernel/ at its root;
+#      vendoring only kernel/ breaks #include "uapi/app_profile.h".
+#   2. All 6 manual-hook call sites are required — this pin's own Kbuild
+#      hard-gates on kernel/reboot.c's hook existing at all.
+#   3. CONFIG_KSU_SUSFS_SUS_MEMFD defaults to y once CONFIG_KSU_SUSFS=y,
+#      but the vendored SUSFS source (v2.2.0-era) predates
+#      susfs_add_sus_memfd() — forced off explicitly.
+#   4. fs/susfs.c requires extern bool susfs_is_avc_log_spoofing_enabled
+#      unconditionally; defined (inert, defaults false) in
+#      security/selinux/avc.c.
+#   5/6. setup_selinux()/try_umount()/susfs_ksu_sid/susfs_priv_app_sid
+#      already resolve from inside the vendored driver — no action needed.
 #
-#   2. All 6 manual-hook call sites are genuinely required for this pin —
-#      not optional extras. The driver's own Kbuild has a hard gate:
-#      `HAVE_KSU_HOOK := $(shell grep -q "ksu_handle_sys_reboot"
-#      $(srctree)/kernel/reboot.c ...)` — manual mode will not build at all
-#      without the kernel/reboot.c hook specifically. Verified real
-#      function signatures for all 6 hooks directly from source
-#      (kernel/core/init.c, kernel/feature/sucompat.{c,h},
-#      kernel/runtime/ksud_integration.c) rather than assuming the prior
-#      draft's declarations were correct — they were, for exec/open/stat;
-#      read_write.c and input.c/reboot.c hooks were added fresh here using
-#      the pin's real signatures.
-#
-#   3. `CONFIG_KSU_SUSFS_SUS_MEMFD` defaults to `y` the instant
-#      `CONFIG_KSU_SUSFS=y` is set (Kconfig: `depends on KSU_SUSFS /
-#      default y`), and calls `susfs_add_sus_memfd()`. The SUSFS source
-#      this workflow vendors (v2.2.0, from
-#      royd-jpg/Project_Chimera@6752be5b) predates that function —
-#      confirmed by compiling: "implicit declaration of function
-#      'susfs_add_sus_memfd'". This is a genuine KSU/SUSFS version
-#      mismatch, not a config-order bug. Fixed by explicitly disabling
-#      CONFIG_KSU_SUSFS_SUS_MEMFD. If a newer SUSFS source with SUS_MEMFD
-#      support is later adopted, this line can be dropped.
-#
-#   4. `fs/susfs.c` declares `extern bool susfs_is_avc_log_spoofing_enabled;`
-#      and calls WRITE_ONCE() on it unconditionally (not gated behind any
-#      SUS_* sub-option) — required the moment CONFIG_KSU_SUSFS=y, for any
-#      feature combination. It is not defined anywhere in a clean
-#      lineage-24.0 tree. Fixed by adding one `bool ... = false;` definition
-#      to security/selinux/avc.c. NOTE (scope boundary, disclosed plainly):
-#      only the variable definition is added here, not the AVC-audit
-#      consumer logic that would make the log-spoofing feature actually do
-#      something (the reference SUSFS branch wires it into
-#      slow_avc_audit()'s tsid formatting). As shipped, the toggle exists,
-#      defaults off, and is inert — it will not break anything, but log
-#      spoofing itself is a documented no-op pending that follow-up.
-#
-#   5. `setup_selinux()` and `try_umount()` — both referenced as `extern`
-#      by fs/susfs.c — were checked and confirmed to already resolve
-#      correctly from inside the vendored KSU driver itself
-#      (drivers/kernelsu/selinux/selinux.c and
-#      drivers/kernelsu/feature/kernel_umount.c respectively). No action
-#      needed; documented here so a future editor doesn't "fix" something
-#      that isn't broken.
-#
-#   6. `susfs_ksu_sid` / `susfs_priv_app_sid` (referenced by
-#      security/selinux/avc.c's own consumer logic, if that logic is later
-#      added per item 4's note) are already defined in
-#      drivers/kernelsu/selinux/selinux.c. No action needed.
-#
-# CONFIDENCE LEVEL, STATED PLAINLY:
-#   - HIGH: all 6 hook call sites compile clean, individually and as part
-#     of their real driver-directory builds (drivers/input/*, fs/*,
-#     kernel/reboot.o) in this exact configuration.
-#   - HIGH: the full KernelSU driver module (`drivers/kernelsu/`) compiles
-#     AND LINKS clean as a standalone unit in BOTH manual+SUSFS-off and
-#     manual+SUSFS-on configurations (confirmed via `make ... drivers/kernelsu/`
-#     producing a clean built-in.o with the expected ksu_* symbol count).
-#   - MEDIUM: a full `vmlinux` link (the entire kernel, not just the KSU
-#     subtree) was started and progressed cleanly through hundreds of
-#     unrelated driver objects (drivers/input/*, drivers/iommu/*, etc. all
-#     compiled with zero errors) before the verification sandbox's resource
-#     limits killed the background process — NOT a code failure, no error
-#     was ever printed, just silent termination under memory/CPU pressure
-#     in a constrained single-core container. The full link was not
-#     completed end-to-end. This workflow's own "Verify vmlinux symbols"
-#     step below is your first real confirmation of that — if it fails on
-#     your first real run, the most likely place to look is something
-#     downstream of drivers/iommu/ that this sandbox never reached.
-#   - NOT verified: boot, root grant, SUSFS hide/spoof runtime behavior,
-#     SELinux policy interaction, RKP/TIMA/DEFEX interaction (this defconfig
-#     ships without those Samsung guards enabled, so nothing is disabled by
-#     this integration, but nothing was tested against them either).
-#
-# kprobe mode may conflict with Samsung security / RKP / DEFEX on Exynos
-# 9810. It is also NOT usable on this Linux 4.9.337 base at all: this
-# fork's kprobe-hook path is not gated by a kernel-version #if, but its
-# design (hooking via ftrace-based kretprobes on syscall entry) targets
-# 5.10+ hook infrastructure per upstream's own documentation. Manual mode
-# is therefore the only supported mode on this tree, and is treated as
-# such throughout this workflow — kprobe is intentionally NOT offered as a
-# toolchain input option below.
+# kprobe mode is not offered: this fork's kprobe path targets 5.10+ hook
+# infrastructure and does not work on this 4.9.337 base. Manual mode only.
 
 on:
   push:
@@ -132,7 +79,7 @@ on:
       - "include/**"
       - "kernel/**"
       - "security/**"
-      - ".github/workflows/kernel-android17-ksun-susfs-mk9.yml"
+      - ".github/workflows/kernel-android17-ksun-susfs-mk10.yml"
   pull_request:
     branches: [lineage-24.0]
     paths:
@@ -142,7 +89,7 @@ on:
       - "include/**"
       - "kernel/**"
       - "security/**"
-      - ".github/workflows/kernel-android17-ksun-susfs-mk9.yml"
+      - ".github/workflows/kernel-android17-ksun-susfs-mk10.yml"
   workflow_dispatch:
     inputs:
       toolchain:
@@ -151,15 +98,15 @@ on:
         required: true
         default: llvm22
       enable_susfs:
-        description: "Build with SUSFS on top of KernelSU-Next manual hooks (see header note [3]: SUS_MEMFD is force-disabled due to a confirmed KSU/SUSFS version mismatch)"
+        description: "Build with SUSFS on top of KernelSU-Next manual hooks. NOTE: currently fails at compile time — see workflow header. Leave false until the diagnose step's output is reviewed."
         type: boolean
         required: true
-        default: true
+        default: false
       localversion:
         description: "Kernel localversion; must start with '-'"
         type: string
         required: true
-        default: "-Chimera_Mk9"
+        default: "-Chimera_Mk10"
       build_user:
         type: string
         required: true
@@ -199,7 +146,7 @@ on:
         required: true
         default: "gavdoc38/KernelSU-Next"
       ksu_ref:
-        description: "Full 40-hex commit SHA. Verified compatible with this exact tree by direct compile+link testing — see workflow header. Do NOT use a branch name."
+        description: "Full 40-hex commit SHA. Do NOT use a branch name."
         type: string
         required: true
         default: "b3263c77975616d3c29d48aa600892263e7d75c9"
@@ -209,7 +156,7 @@ on:
         required: true
         default: "royd-jpg/Project_Chimera"
       susfs_ref:
-        description: "SUSFS source ref/SHA (v2.2.0-era; see header note [3] on the SUS_MEMFD mismatch this implies)"
+        description: "SUSFS source ref/SHA (v2.2.0-era)"
         type: string
         required: true
         default: "6752be5bb08dccfc58d9bc98c51199515aa19abc"
@@ -230,21 +177,20 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Only static, non-input values live here. Everything derived from a
-  # workflow_dispatch input is resolved exactly once by the "Resolve build
-  # inputs" step below (immediately after checkout) -- a job-level
-  # `env: ${{ inputs.X || default }}` block is null-on-push for every
-  # input regardless of its declared default, which is what caused SUSFS
-  # vendoring to silently disagree with CONFIG_KSU_SUSFS and DTB upload to
-  # silently disagree with upload_dtbs's own default. See that step for
-  # the full explanation.
+  # Only static, non-input values. Everything derived from a
+  # workflow_dispatch input is resolved exactly once, explicitly, by
+  # "Resolve build inputs" below. Never combine a boolean input with `||`
+  # anywhere in this file — `x || true` is a constant `true`, and
+  # `inputs.x` is null (not false) on push/pull_request, so `null || true`
+  # is also always `true`. Both variants of this bug are what this
+  # revision fixes.
   ARCH: arm64
   CCACHE_MAXSIZE: 3G
   KERNEL_VERSION: 4.9.337
 
 jobs:
   build:
-    name: Build — ${{ inputs.toolchain || 'llvm22' }}${{ (inputs.enable_susfs || true) == true && ' +susfs' || '' }}
+    name: Build — ${{ inputs.toolchain || 'llvm22' }} (${{ github.event_name }})
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     defaults:
@@ -260,33 +206,13 @@ jobs:
           fetch-depth: 1
           submodules: recursive
 
-      # FIX: `inputs.<name>` is populated ONLY on workflow_dispatch; on
-      # push/pull_request it is null for every input, regardless of that
-      # input's declared `default:`. GitHub Actions' loose-equality
-      # coercion (null->0, true->1, false->0) then makes two independent
-      # expressions silently disagree -- confirmed as the exact cause of
-      # two real failures:
-      #   - job-level `ENABLE_SUSFS: ${{ inputs.enable_susfs || true }}`
-      #     -> null is falsy -> falls through -> STRING "true" ->
-      #     CONFIG_KSU_SUSFS=y baked into every defconfig, while
-      #   - step-level `if: inputs.enable_susfs != false`
-      #     -> null != false -> 0 != 0 -> FALSE -> the step that vendors
-      #     fs/susfs.c and include/linux/susfs.h was SKIPPED entirely.
-      #   Result: drivers/kernelsu/core/init.c's
-      #   `#ifdef CONFIG_KSU_SUSFS #include <linux/susfs.h> #endif` fires
-      #   against a header that was never copied in -- fatal error.
-      # Same defect class, second instance: `if: inputs.dry_run != true &&
-      # inputs.upload_dtbs == true` -> true && false -> false on every
-      # push/PR build, even though upload_dtbs's own declared default is
-      # true -- every push/PR build has been silently shipping without
-      # DTB images.
-      # Fix: resolve every input to ONE canonical value here, explicitly,
-      # keyed on github.event_name, written to $GITHUB_ENV. No other step
-      # reads raw `inputs.*` in a shell or `if:` condition again. (job
-      # name:, concurrency group:, and the toolchain cache key: are
-      # workflow/job-parse-time expressions that run before any step's
-      # $GITHUB_ENV exists, so those three still use `inputs.X ||
-      # default` -- harmless, display/cache-key only, never build logic.)
+      # Explicit, single source of truth for every input, keyed on
+      # github.event_name. inputs.* is only populated on workflow_dispatch;
+      # on push/pull_request it is null regardless of declared defaults.
+      # No other step in this file reads raw inputs.* in a shell or `if:`
+      # condition. (job name:, concurrency.group:, and the toolchain cache
+      # key: below are workflow/job-parse-time expressions that run before
+      # any step's $GITHUB_ENV exists — harmless, display/cache-key only.)
       - name: Resolve build inputs
         run: |
           set -euo pipefail
@@ -295,7 +221,7 @@ jobs:
           [[ "${{ github.event_name }}" == "workflow_dispatch" ]] && is_dispatch=true
 
           resolve() {
-            # $1=env var name  $2=raw input (empty string on non-dispatch)  $3=declared default
+            # $1=env var  $2=raw input (empty on non-dispatch)  $3=declared default
             if [[ "$is_dispatch" == "true" ]]; then
               echo "${1}=${2}" >> "$GITHUB_ENV"
             else
@@ -303,17 +229,14 @@ jobs:
             fi
           }
 
-          # Booleans -- resolve() handles the null-on-non-dispatch case
-          # explicitly; never combine a boolean input with `||`.
-          resolve ENABLE_SUSFS "${{ inputs.enable_susfs }}" "true"
+          resolve ENABLE_SUSFS "${{ inputs.enable_susfs }}" "false"
           resolve UPLOAD_DTBS  "${{ inputs.upload_dtbs }}"  "true"
           resolve ENABLE_LTO   "${{ inputs.enable_lto }}"   "false"
           resolve DRY_RUN      "${{ inputs.dry_run }}"      "false"
           resolve DO_RELEASE   "${{ inputs.do_release }}"   "false"
 
-          # Strings -- resolved the same way for a single source of truth.
           resolve TOOLCHAIN              "${{ inputs.toolchain }}"         "llvm22"
-          resolve LOCALVERSION           "${{ inputs.localversion }}"      "-Chimera_Mk9"
+          resolve LOCALVERSION           "${{ inputs.localversion }}"      "-Chimera_Mk10"
           resolve KBUILD_BUILD_USER      "${{ inputs.build_user }}"        "MTRXX"
           resolve KBUILD_BUILD_HOST      "${{ inputs.build_host }}"        "CM9XNNNN"
           resolve KBUILD_BUILD_VERSION   "${{ inputs.build_version }}"     "1"
@@ -326,7 +249,7 @@ jobs:
           resolve SUSFS_REF              "${{ inputs.susfs_ref }}"         "6752be5bb08dccfc58d9bc98c51199515aa19abc"
 
           echo "Resolved (event=${{ github.event_name }}, is_dispatch=$is_dispatch):"
-          grep -E '^(ENABLE_SUSFS|UPLOAD_DTBS|DRY_RUN|KSU_REF|SUSFS_REF)=' "$GITHUB_ENV"
+          grep -E '^(ENABLE_SUSFS|UPLOAD_DTBS|ENABLE_LTO|DRY_RUN|DO_RELEASE|TOOLCHAIN|KSU_REF|SUSFS_REF)=' "$GITHUB_ENV"
           echo "::endgroup::"
 
       - name: Validate inputs
@@ -369,7 +292,7 @@ jobs:
             aria2 bc bison build-essential ccache device-tree-compiler \
             flex gcc-aarch64-linux-gnu git libelf-dev libncurses-dev \
             libssl-dev lzop python3 rsync wget zip zlib1g-dev zstd \
-            binutils-aarch64-linux-gnu patch file
+            binutils-aarch64-linux-gnu patch file dwarves
 
       - name: Configure ccache
         run: |
@@ -418,23 +341,42 @@ jobs:
           fi
           echo "KernelSU-Next pinned at: $actual"
           cd ..
-
           rm -rf drivers/kernelsu
           mkdir -p drivers/kernelsu
           rsync -a KernelSU-Next/kernel/ drivers/kernelsu/
           test -e drivers/kernelsu/Kconfig
           test -e drivers/kernelsu/Kbuild
-
-          # FIX (header note [1]): this repo has a sibling uapi/ directory
-          # next to kernel/ that policy/app_profile.h etc. need at
-          # "uapi/...". Vendoring only kernel/ breaks the include.
           if [[ -d KernelSU-Next/uapi ]]; then
             rsync -a KernelSU-Next/uapi/ drivers/kernelsu/uapi/
             test -e drivers/kernelsu/uapi
           else
-            echo "::error::KernelSU-Next@$KSU_REF has no top-level uapi/ directory — this ref's layout differs from what this workflow expects. Re-verify before proceeding."
+            echo "::error::KernelSU-Next@$KSU_REF has no top-level uapi/ directory — this ref's layout differs from what this workflow expects."
             exit 1
           fi
+          echo "::endgroup::"
+
+      # DIAGNOSTIC — new in this revision. Dumps the actual SUSFS
+      # self-check logic that produced "You have not integrated susfs in
+      # your kernel yet" in run 35324461860. This runs regardless of
+      # ENABLE_SUSFS so it captures ground truth even on a dry investigative
+      # dispatch. Read this step's output before trusting any future
+      # "fix" for the SUSFS integration — including any I might propose —
+      # since I have not been able to read this pin's Kbuild directly.
+      - name: Diagnose SUSFS self-check in vendored KernelSU-Next
+        run: |
+          set -euo pipefail
+          echo "::group::Diagnose SUSFS self-check"
+          echo "--- drivers/kernelsu/Kbuild (full) ---"
+          cat drivers/kernelsu/Kbuild || echo "::warning::no Kbuild at drivers/kernelsu/Kbuild"
+          echo "--- files under drivers/kernelsu/ referencing 'susfs' (case-insensitive) ---"
+          grep -RIn --include='*' -i 'susfs' drivers/kernelsu/ || echo "(no matches)"
+          echo "--- any CMakeLists.txt / *.cmake / *.py under drivers/kernelsu/ (auto-patch scripts) ---"
+          find drivers/kernelsu -iname 'CMakeLists.txt' -o -iname '*.cmake' -o -iname '*.py' | while read -r f; do
+            echo "== $f =="; cat "$f"
+          done
+          echo "--- the exact string that appeared in the failing log ---"
+          grep -RIn 'not integrated susfs' drivers/kernelsu/ || echo "::warning::string not found under drivers/kernelsu — it may be emitted from a build script invoked elsewhere (e.g. scripts/, a top-level CMakeLists.txt, or generated at configure time). Widening search:"
+          grep -RIn 'not integrated susfs' . --include='*' 2>/dev/null | grep -v '^Binary' || true
           echo "::endgroup::"
 
       - name: Wire drivers/Makefile and drivers/Kconfig
@@ -449,13 +391,6 @@ jobs:
           tail -5 drivers/Kconfig
           echo "::endgroup::"
 
-      # FIX (root cause of the reported "malformed patch" error): the prior
-      # hand-rolled unified diff had wrong hunk-size headers (see workflow
-      # header). Replaced with anchor-based text insertion, verified against
-      # the real file content on this exact tree. Every anchor is asserted
-      # to appear EXACTLY ONCE before being touched — no silent partial
-      # application. FIX (header note [2]): all 6 hooks, not 3 — this pin's
-      # own Kbuild hard-requires the kernel/reboot.c hook to build at all.
       - name: Apply KSU manual-hook call sites (anchor-based, not patch-based)
         run: |
           set -euo pipefail
@@ -469,8 +404,6 @@ jobs:
               n = s.count(old)
               if n == 0:
                   print(f"FATAL: anchor not found in {path} :: {label}", file=sys.stderr)
-                  print("This tree has diverged from the verified reference at this exact point.", file=sys.stderr)
-                  print("Resolve manually — do not force-apply.", file=sys.stderr)
                   sys.exit(1)
               if n > 1:
                   print(f"FATAL: anchor matched {n} times in {path} :: {label} (must be exactly 1)", file=sys.stderr)
@@ -478,7 +411,6 @@ jobs:
               p.write_text(s.replace(old, new))
               print(f"OK: {path} :: {label}")
 
-          # fs/exec.c — do_execve
           patch("fs/exec.c",
           "int do_execve(struct filename *filename,\n"
           "\tconst char __user *const __user *__argv,\n"
@@ -505,7 +437,6 @@ jobs:
           "}",
           "do_execve")
 
-          # fs/open.c — faccessat
           patch("fs/open.c",
           "SYSCALL_DEFINE3(faccessat, int, dfd, const char __user *, filename, int, mode)\n"
           "{\n"
@@ -539,7 +470,6 @@ jobs:
           "\tif (mode & ~S_IRWXO)",
           "faccessat")
 
-          # fs/stat.c — newfstatat
           patch("fs/stat.c",
           "#if !defined(__ARCH_WANT_STAT64) || defined(__ARCH_WANT_SYS_NEWFSTATAT)\n"
           "SYSCALL_DEFINE4(newfstatat, int, dfd, const char __user *, filename,\n"
@@ -566,7 +496,6 @@ jobs:
           "\terror = vfs_fstatat(dfd, filename, &stat, flag);",
           "newfstatat")
 
-          # fs/stat.c — fstatat64 (32-bit compat path)
           patch("fs/stat.c",
           "SYSCALL_DEFINE4(fstatat64, int, dfd, const char __user *, filename,\n"
           "\t\tstruct stat64 __user *, statbuf, int, flag)\n"
@@ -587,7 +516,6 @@ jobs:
           "\terror = vfs_fstatat(dfd, filename, &stat, flag);",
           "fstatat64")
 
-          # fs/read_write.c — sys_read
           patch("fs/read_write.c",
           "SYSCALL_DEFINE3(read, unsigned int, fd, char __user *, buf, size_t, count)\n"
           "{\n"
@@ -609,7 +537,6 @@ jobs:
           "\tif (f.file) {",
           "sys_read")
 
-          # drivers/input/input.c — input_handle_event
           patch("drivers/input/input.c",
           "static void input_handle_event(struct input_dev *dev,\n"
           "\t\t\t       unsigned int type, unsigned int code, int value)\n"
@@ -629,8 +556,6 @@ jobs:
           "\tdisposition = input_get_disposition(dev, type, code, &value);",
           "input_handle_event")
 
-          # kernel/reboot.c — SYSCALL_DEFINE4(reboot...) — REQUIRED by this
-          # pin's own Kbuild self-check (see header note [2]); not optional.
           patch("kernel/reboot.c",
           "SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,\n"
           "\t\tvoid __user *, arg)\n"
@@ -664,10 +589,11 @@ jobs:
           echo "::endgroup::"
 
       - name: Vendor SUSFS core (if enabled)
-        if: env.ENABLE_SUSFS == 'true' 
+        if: env.ENABLE_SUSFS == 'true'
         run: |
           set -euo pipefail
           echo "::group::Vendor SUSFS"
+          echo "::warning::SUSFS is known to fail at compile time as of run 35324461860 — see workflow header. Proceeding anyway since ENABLE_SUSFS=true was explicitly requested; expect the same or a related failure until the Diagnose step's output has been reviewed."
           rm -rf /tmp/susfs-src
           git clone --no-checkout "https://github.com/$SUSFS_REPO.git" /tmp/susfs-src
           git -C /tmp/susfs-src fetch --no-tags --depth 1 origin "$SUSFS_REF"
@@ -677,25 +603,22 @@ jobs:
             echo "::error::Resolved SUSFS commit ($resolved) does not match pinned SUSFS_REF ($SUSFS_REF)"
             exit 1
           fi
-
           for required in fs/susfs.c include/linux/susfs.h include/linux/susfs_def.h; do
             test -f "/tmp/susfs-src/$required" || {
               echo "::error::SUSFS ref $SUSFS_REF is missing $required"
               exit 1
             }
           done
-
           cp /tmp/susfs-src/fs/susfs.c fs/susfs.c
           mkdir -p include/linux
           cp /tmp/susfs-src/include/linux/susfs.h include/linux/susfs.h
           cp /tmp/susfs-src/include/linux/susfs_def.h include/linux/susfs_def.h
-
+          echo "--- copied header, confirming presence and content ---"
+          test -f include/linux/susfs.h
+          ls -la include/linux/susfs.h
+          head -20 include/linux/susfs.h
           grep -q 'obj-\$(CONFIG_KSU_SUSFS)' fs/Makefile || \
             printf '\nobj-$(CONFIG_KSU_SUSFS) += susfs.o\n' >> fs/Makefile
-
-          # FIX (header note [4]): fs/susfs.c requires this symbol
-          # unconditionally the moment CONFIG_KSU_SUSFS=y — confirmed
-          # missing from a clean tree by direct compile/link testing.
           if ! grep -q 'susfs_is_avc_log_spoofing_enabled' security/selinux/avc.c; then
             python3 - << 'PYEOF'
           import pathlib
@@ -705,10 +628,6 @@ jobs:
           assert s.count(anchor) == 1, "avc.c include anchor not found/unique — resolve manually"
           insert = anchor + (
               "\n\n#ifdef CONFIG_KSU_SUSFS\n"
-              "/* fs/susfs.c requires this unconditionally once CONFIG_KSU_SUSFS=y.\n"
-              " * Only the storage is provided here; the AVC-audit consumer logic\n"
-              " * (spoofing tsid in slow_avc_audit()) is not ported — this toggle is\n"
-              " * currently inert (defaults false, does nothing when flipped true). */\n"
               "bool susfs_is_avc_log_spoofing_enabled = false;\n"
               "#endif"
           )
@@ -831,7 +750,7 @@ jobs:
               sed -i -E "/^(# )?CONFIG_${symbol}(=| is not set)/d" "$config"
             done
             {
-              echo "# KernelSU-Next (manual hook — kprobe mode unsupported on this 4.9.337 base, see workflow header)"
+              echo "# KernelSU-Next (manual hook — kprobe mode unsupported on this 4.9.337 base)"
               echo "CONFIG_KSU=y"
               echo "CONFIG_KSU_MANUAL_HOOK=y"
               echo "# CONFIG_KSU_KPROBES_HOOK is not set"
@@ -842,11 +761,6 @@ jobs:
                 echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y"
                 echo "CONFIG_KSU_SUSFS_TRY_UMOUNT=y"
                 echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y"
-                # FIX (header note [3]): forced off — the vendored SUSFS
-                # source (v2.2.0) predates susfs_add_sus_memfd(), which
-                # this KSU-Next pin's Kconfig defaults on the moment
-                # CONFIG_KSU_SUSFS=y is set. Confirmed by direct compile
-                # ("implicit declaration of function 'susfs_add_sus_memfd'").
                 echo "# CONFIG_KSU_SUSFS_SUS_MEMFD is not set"
               else
                 echo "# CONFIG_KSU_SUSFS is not set"
@@ -874,16 +788,12 @@ jobs:
 
       - name: Build kernel variants
         id: build
-        if: env.DRY_RUN != 'true' 
+        if: env.DRY_RUN != 'true'
         run: |
           set -euo pipefail
           echo "::group::Build kernel variants"
           export CROSS_COMPILE=aarch64-linux-gnu-
           export CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip
-          # -Wno-unused-label: this KSU pin's own supercall.c has a
-          # `do_umount:` label that becomes unused when a SUS_* sub-option
-          # is off — confirmed benign by direct compile testing, not masking
-          # a real defect.
           export KCFLAGS="-Wno-unused-label $EXTRA_CFLAGS"
           export CLANG_TRIPLE="$CROSS_COMPILE"
 
@@ -892,9 +802,6 @@ jobs:
           rm -rf out
           mkdir -p out
 
-          # security/selinux/ first: drivers/kernelsu/*.o includes the
-          # generated flask.h, and a parallel -j build races its generation
-          # otherwise (confirmed reproducible on this tree).
           make -C . O="out/_selinux_prime" ARCH="$ARCH" exynos9810-star2lte_defconfig >/dev/null
           make -C . -j"$(nproc)" O="out/_selinux_prime" ARCH="$ARCH" \
             CC="$CC" LD="$LD" CROSS_COMPILE="$CROSS_COMPILE" CLANG_TRIPLE="$CLANG_TRIPLE" \
@@ -927,12 +834,12 @@ jobs:
 
             make -C . O="$output_dir" ARCH="$ARCH" olddefconfig
 
-            grep -qx 'CONFIG_KSU=y' "$output_dir/.config" || { echo "::error::CONFIG_KSU did not resolve to y for $variant — drivers/kernelsu wiring did not take effect"; exit 1; }
+            grep -qx 'CONFIG_KSU=y' "$output_dir/.config" || { echo "::error::CONFIG_KSU did not resolve to y for $variant"; exit 1; }
             grep -qx 'CONFIG_KSU_MANUAL_HOOK=y' "$output_dir/.config" || { echo "::error::CONFIG_KSU_MANUAL_HOOK did not resolve to y for $variant"; exit 1; }
-            grep -q '^CONFIG_KSU_KPROBES_HOOK=y$' "$output_dir/.config" && { echo "::error::CONFIG_KSU_KPROBES_HOOK is enabled alongside manual hook for $variant — exactly one method must be active on this kernel"; exit 1; }
+            grep -q '^CONFIG_KSU_KPROBES_HOOK=y$' "$output_dir/.config" && { echo "::error::CONFIG_KSU_KPROBES_HOOK is enabled alongside manual hook for $variant"; exit 1; }
             if [[ "$ENABLE_SUSFS" == "true" ]]; then
               grep -qx 'CONFIG_KSU_SUSFS=y' "$output_dir/.config" || { echo "::error::CONFIG_KSU_SUSFS did not resolve to y for $variant"; exit 1; }
-              grep -q '^CONFIG_KSU_SUSFS_SUS_MEMFD=y$' "$output_dir/.config" && { echo "::error::CONFIG_KSU_SUSFS_SUS_MEMFD is enabled for $variant despite the forced-off default — this SUSFS/KSU pin combination is known-incompatible (see workflow header note [3])"; exit 1; }
+              grep -q '^CONFIG_KSU_SUSFS_SUS_MEMFD=y$' "$output_dir/.config" && { echo "::error::CONFIG_KSU_SUSFS_SUS_MEMFD is enabled for $variant despite the forced-off default"; exit 1; }
             fi
             [[ "$ENABLE_LTO" == "true" ]] && { grep -qx 'CONFIG_LTO_CLANG=y' "$output_dir/.config" || { echo "::error::CONFIG_LTO_CLANG did not resolve to y"; exit 1; }; }
 
@@ -953,7 +860,7 @@ jobs:
             grep -qE '^[0-9a-fA-F]+ [A-Za-z] ksu_handle_execveat$' "artifacts/vmlinux-symbols-$variant.log" || {
               echo "::error::ksu_handle_execveat not found in vmlinux for $variant — manual hook patch did not link"; exit 1; }
             grep -qE '^[0-9a-fA-F]+ [A-Za-z] ksu_handle_sys_reboot$' "artifacts/vmlinux-symbols-$variant.log" || {
-              echo "::error::ksu_handle_sys_reboot not found in vmlinux for $variant — this KSU pin's own Kbuild requires this hook to build at all, so its absence here means something upstream silently regenerated .config without it"; exit 1; }
+              echo "::error::ksu_handle_sys_reboot not found in vmlinux for $variant"; exit 1; }
             if [[ "$ENABLE_SUSFS" == "true" ]]; then
               grep -qE '^[0-9a-fA-F]+ [A-Za-z] susfs_add_sus_path$' "artifacts/vmlinux-symbols-$variant.log" || {
                 echo "::error::susfs_add_sus_path not found in vmlinux for $variant despite CONFIG_KSU_SUSFS=y"; exit 1; }
@@ -974,7 +881,7 @@ jobs:
           echo "::endgroup::"
 
       - name: Create per-variant DTB images
-        if: env.DRY_RUN != 'true' && env.UPLOAD_DTBS == 'true' 
+        if: env.DRY_RUN != 'true' && env.UPLOAD_DTBS == 'true'
         run: |
           set -euo pipefail
           echo "::group::Create per-variant DTB images"
@@ -995,7 +902,7 @@ jobs:
           echo "::endgroup::"
 
       - name: Package AnyKernel3 ZIPs
-        if: env.DRY_RUN != 'true' 
+        if: env.DRY_RUN != 'true'
         run: |
           set -euo pipefail
           echo "::group::Package device-checked AnyKernel3 ZIPs"
@@ -1018,7 +925,6 @@ jobs:
             rsync -a --delete --exclude=.git anykernel3/ "$staging_dir/"
             test -f "$staging_dir/tools/ak3-core.sh"
             test -s "out/Image.gz-$variant"
-
             cat > "$staging_dir/anykernel.sh" <<EOF
           #!/usr/bin/env bash
           properties() { '
@@ -1051,7 +957,7 @@ jobs:
           echo "::endgroup::"
 
       - name: Upload build artifacts
-        if: env.DRY_RUN != 'true' 
+        if: env.DRY_RUN != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: Chimera-KSUN-SUSFS-${{ inputs.toolchain || 'llvm22' }}-${{ github.run_number }}
@@ -1073,10 +979,12 @@ jobs:
           path: |
             out/**/.config
             artifacts/**
+            drivers/kernelsu/Kbuild
+            drivers/kernelsu/Kconfig
           if-no-files-found: ignore
 
       - name: Create GitHub release
-        if: github.event_name == 'workflow_dispatch' && inputs.do_release == true && inputs.dry_run != true
+        if: github.event_name == 'workflow_dispatch' && env.DO_RELEASE == 'true' && env.DRY_RUN != 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: Chimera-KSUN-SUSFS-${{ github.run_number }}
@@ -1084,18 +992,9 @@ jobs:
           files: packages/*.zip
           body: |
             ## Exynos 9810 — KernelSU-Next + SUSFS
-
             - Kernel: Linux 4.9.337
             - Source: Project_Chimera / lineage-24.0
-            - KernelSU-Next: ${{ inputs.ksu_repo }}@${{ inputs.ksu_ref }} (manual hook only — kprobe mode is unsupported on this 4.9.337 base, see workflow header)
-            - SUSFS: ${{ inputs.susfs_repo }}@${{ inputs.susfs_ref }} (enabled: ${{ inputs.enable_susfs }}; CONFIG_KSU_SUSFS_SUS_MEMFD forced off — version mismatch, see workflow header)
+            - KernelSU-Next: ${{ inputs.ksu_repo }}@${{ inputs.ksu_ref }} (manual hook only)
+            - SUSFS: ${{ inputs.susfs_repo }}@${{ inputs.susfs_ref }} (enabled: ${{ inputs.enable_susfs }})
             - Toolchain: ${{ inputs.toolchain }}
-            - Localversion: ${{ inputs.localversion }}
             - Variants: ${{ steps.build.outputs.variants }}
-            - Packaging: plain Image.gz + separate dtb.img (not concatenated)
-
-            Android 17 compatibility here means building the modified Exynos 9810 vendor kernel for potential
-            use with a compatible LineageOS 24 userspace. Runtime compatibility requires physical-device testing.
-            This build is compile/link-verified on the KernelSU driver subtree and the six patched call sites
-            only; a full end-to-end vmlinux link, boot, root grant, and SUSFS runtime behavior have not been
-            verified — see the workflow file header for exactly what has and has not been confirmed.
