@@ -649,6 +649,26 @@ jobs:
           grep -n 'susfs\.c\|susfs\.h\|susfs_def\.h' drivers/kernelsu/Kbuild drivers/kernelsu/Kconfig 2>/dev/null
           echo "::endgroup::"
 
+      - name: Diagnose SUSFS vendoring outcome (post-copy, pre-build)
+        run: |
+          set -euo pipefail
+          echo "::group::Post-vendor file check"
+          echo "ENABLE_SUSFS at this point: '$ENABLE_SUSFS'"
+          if [[ -f fs/susfs.c ]]; then
+            echo "fs/susfs.c: PRESENT ($(wc -l < fs/susfs.c) lines, $(stat -c%s fs/susfs.c) bytes)"
+          else
+            echo "fs/susfs.c: MISSING"
+          fi
+          if [[ -f include/linux/susfs.h ]]; then
+            echo "include/linux/susfs.h: PRESENT"
+            grep -E '^#define SUSFS_VERSION' include/linux/susfs.h || echo "  (no SUSFS_VERSION define found)"
+          else
+            echo "include/linux/susfs.h: MISSING"
+          fi
+          echo "--- realpath of srctree as make will see it ---"
+          pwd
+          echo "::endgroup::"
+
       - name: Resolve toolchain
         run: |
           set -euo pipefail
