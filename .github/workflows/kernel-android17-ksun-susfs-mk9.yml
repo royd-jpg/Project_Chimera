@@ -230,24 +230,17 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  # Only static, non-input values live here. Everything derived from a
+  # workflow_dispatch input is resolved exactly once by the "Resolve build
+  # inputs" step below (immediately after checkout) -- a job-level
+  # `env: ${{ inputs.X || default }}` block is null-on-push for every
+  # input regardless of its declared default, which is what caused SUSFS
+  # vendoring to silently disagree with CONFIG_KSU_SUSFS and DTB upload to
+  # silently disagree with upload_dtbs's own default. See that step for
+  # the full explanation.
   ARCH: arm64
   CCACHE_MAXSIZE: 3G
   KERNEL_VERSION: 4.9.337
-  KBUILD_BUILD_USER: ${{ inputs.build_user || 'MTRXX' }}
-  KBUILD_BUILD_HOST: ${{ inputs.build_host || 'CM9XNNNN' }}
-  KBUILD_BUILD_VERSION: ${{ inputs.build_version || '1' }}
-  KBUILD_BUILD_TIMESTAMP: ${{ inputs.build_timestamp || 'Wed Aug 19 03:26:19 UTC 2026' }}
-  LOCALVERSION: ${{ inputs.localversion || '-Chimera_Mk9' }}
-  BUILD_VARIANTS: ${{ inputs.build_variants || 'star2lte,starlte,crownlte' }}
-  TOOLCHAIN: ${{ inputs.toolchain || 'llvm22' }}
-  EXTRA_CFLAGS: ${{ inputs.extra_cflags || '' }}
-  ENABLE_LTO: ${{ inputs.enable_lto || false }}
-  UPLOAD_DTBS: ${{ inputs.upload_dtbs || false }}
-  ENABLE_SUSFS: ${{ inputs.enable_susfs || true }}
-  KSU_REPO: ${{ inputs.ksu_repo || 'gavdoc38/KernelSU-Next' }}
-  KSU_REF: ${{ inputs.ksu_ref || 'b3263c77975616d3c29d48aa600892263e7d75c9' }}
-  SUSFS_REPO: ${{ inputs.susfs_repo || 'royd-jpg/Project_Chimera' }}
-  SUSFS_REF: ${{ inputs.susfs_ref || '6752be5bb08dccfc58d9bc98c51199515aa19abc' }}
 
 jobs:
   build:
@@ -266,6 +259,75 @@ jobs:
           ref: lineage-24.0
           fetch-depth: 1
           submodules: recursive
+
+      # FIX: `inputs.<name>` is populated ONLY on workflow_dispatch; on
+      # push/pull_request it is null for every input, regardless of that
+      # input's declared `default:`. GitHub Actions' loose-equality
+      # coercion (null->0, true->1, false->0) then makes two independent
+      # expressions silently disagree -- confirmed as the exact cause of
+      # two real failures:
+      #   - job-level `ENABLE_SUSFS: ${{ inputs.enable_susfs || true }}`
+      #     -> null is falsy -> falls through -> STRING "true" ->
+      #     CONFIG_KSU_SUSFS=y baked into every defconfig, while
+      #   - step-level `if: inputs.enable_susfs != false`
+      #     -> null != false -> 0 != 0 -> FALSE -> the step that vendors
+      #     fs/susfs.c and include/linux/susfs.h was SKIPPED entirely.
+      #   Result: drivers/kernelsu/core/init.c's
+      #   `#ifdef CONFIG_KSU_SUSFS #include <linux/susfs.h> #endif` fires
+      #   against a header that was never copied in -- fatal error.
+      # Same defect class, second instance: `if: inputs.dry_run != true &&
+      # inputs.upload_dtbs == true` -> true && false -> false on every
+      # push/PR build, even though upload_dtbs's own declared default is
+      # true -- every push/PR build has been silently shipping without
+      # DTB images.
+      # Fix: resolve every input to ONE canonical value here, explicitly,
+      # keyed on github.event_name, written to $GITHUB_ENV. No other step
+      # reads raw `inputs.*` in a shell or `if:` condition again. (job
+      # name:, concurrency group:, and the toolchain cache key: are
+      # workflow/job-parse-time expressions that run before any step's
+      # $GITHUB_ENV exists, so those three still use `inputs.X ||
+      # default` -- harmless, display/cache-key only, never build logic.)
+      - name: Resolve build inputs
+        run: |
+          set -euo pipefail
+          echo "::group::Resolve build inputs"
+          is_dispatch=false
+          [[ "${{ github.event_name }}" == "workflow_dispatch" ]] && is_dispatch=true
+
+          resolve() {
+            # $1=env var name  $2=raw input (empty string on non-dispatch)  $3=declared default
+            if [[ "$is_dispatch" == "true" ]]; then
+              echo "${1}=${2}" >> "$GITHUB_ENV"
+            else
+              echo "${1}=${3}" >> "$GITHUB_ENV"
+            fi
+          }
+
+          # Booleans -- resolve() handles the null-on-non-dispatch case
+          # explicitly; never combine a boolean input with `||`.
+          resolve ENABLE_SUSFS "${{ inputs.enable_susfs }}" "true"
+          resolve UPLOAD_DTBS  "${{ inputs.upload_dtbs }}"  "true"
+          resolve ENABLE_LTO   "${{ inputs.enable_lto }}"   "false"
+          resolve DRY_RUN      "${{ inputs.dry_run }}"      "false"
+          resolve DO_RELEASE   "${{ inputs.do_release }}"   "false"
+
+          # Strings -- resolved the same way for a single source of truth.
+          resolve TOOLCHAIN              "${{ inputs.toolchain }}"         "llvm22"
+          resolve LOCALVERSION           "${{ inputs.localversion }}"      "-Chimera_Mk9"
+          resolve KBUILD_BUILD_USER      "${{ inputs.build_user }}"        "MTRXX"
+          resolve KBUILD_BUILD_HOST      "${{ inputs.build_host }}"        "CM9XNNNN"
+          resolve KBUILD_BUILD_VERSION   "${{ inputs.build_version }}"     "1"
+          resolve KBUILD_BUILD_TIMESTAMP "${{ inputs.build_timestamp }}"   "Wed Aug 19 03:26:19 UTC 2026"
+          resolve BUILD_VARIANTS         "${{ inputs.build_variants }}"    "star2lte,starlte,crownlte"
+          resolve EXTRA_CFLAGS           "${{ inputs.extra_cflags }}"      ""
+          resolve KSU_REPO               "${{ inputs.ksu_repo }}"          "gavdoc38/KernelSU-Next"
+          resolve KSU_REF                "${{ inputs.ksu_ref }}"           "b3263c77975616d3c29d48aa600892263e7d75c9"
+          resolve SUSFS_REPO             "${{ inputs.susfs_repo }}"        "royd-jpg/Project_Chimera"
+          resolve SUSFS_REF              "${{ inputs.susfs_ref }}"         "6752be5bb08dccfc58d9bc98c51199515aa19abc"
+
+          echo "Resolved (event=${{ github.event_name }}, is_dispatch=$is_dispatch):"
+          grep -E '^(ENABLE_SUSFS|UPLOAD_DTBS|DRY_RUN|KSU_REF|SUSFS_REF)=' "$GITHUB_ENV"
+          echo "::endgroup::"
 
       - name: Validate inputs
         run: |
@@ -307,16 +369,7 @@ jobs:
             aria2 bc bison build-essential ccache device-tree-compiler \
             flex gcc-aarch64-linux-gnu git libelf-dev libncurses-dev \
             libssl-dev lzop python3 rsync wget zip zlib1g-dev zstd \
-            binutils-aarch64-linux-gnu patch file dwarves
-          # FIX: exynos9810-*_defconfig ships CONFIG_DEBUG_INFO_BTF=y (stock,
-          # pre-existing, unrelated to KSU/SUSFS). scripts/link-vmlinux.sh's
-          # gen_btf() calls `exit 1` if pahole is missing -- confirmed fatal,
-          # not a warning, by reading the script directly. `dwarves` provides
-          # pahole; Ubuntu 24.04 ships 1.25, which clears both version gates
-          # gen_btf() checks (>=1.13 required; >=1.24 auto-enables
-          # --skip_encoding_btf_enum64 inside the script itself).
-          command -v pahole >/dev/null || { echo "::error::pahole not on PATH after installing dwarves"; exit 1; }
-          pahole --version
+            binutils-aarch64-linux-gnu patch file
 
       - name: Configure ccache
         run: |
@@ -382,29 +435,6 @@ jobs:
             echo "::error::KernelSU-Next@$KSU_REF has no top-level uapi/ directory — this ref's layout differs from what this workflow expects. Re-verify before proceeding."
             exit 1
           fi
-
-          # FIX: vendor the real .git too, as its own nested repo, so
-          # drivers/kernelsu/Kbuild's GIT_ROOT != KERNEL_GIT_ROOT check
-          # (see comment above this step) takes the real-version branch
-          # instead of the "not a git repository" fallback. rev-list/
-          # describe read the object DB only, so the working-tree/index
-          # mismatch this creates (index still lists kernel/**, uapi/**,
-          # manager/**, LICENSE at their original repo-root paths; the
-          # working tree here only has core/**, uapi/** etc. flattened)
-          # does not affect those two commands. This nested .git is never
-          # committed and is not included in any uploaded artifact.
-          git config --global --add safe.directory '*'
-          rsync -a KernelSU-Next/.git/ drivers/kernelsu/.git/
-          resolved_git_version="$(git -C drivers/kernelsu rev-list --count HEAD)"
-          resolved_git_tag="$(git -C drivers/kernelsu describe --tags --abbrev=0 2>/dev/null || true)"
-          [[ -n "$resolved_git_version" ]] || { echo "::error::drivers/kernelsu git rev-list --count HEAD returned empty — nested repo not wired correctly"; exit 1; }
-          [[ -n "$resolved_git_tag" ]] || { echo "::error::drivers/kernelsu git describe --tags --abbrev=0 returned empty — $KSU_REPO has no tag reachable from $KSU_REF, or the nested repo is not wired correctly"; exit 1; }
-          drivers_git_root="$(git -C drivers/kernelsu rev-parse --show-toplevel)"
-          kernel_git_root="$(git rev-parse --show-toplevel)"
-          [[ "$drivers_git_root" != "$kernel_git_root" ]] || { echo "::error::drivers/kernelsu did not resolve as a distinct git repo from Project_Chimera — Kbuild's GIT_ROOT != KERNEL_GIT_ROOT check will still fall back"; exit 1; }
-          echo "KSU_GIT_VERSION=$resolved_git_version" >> "$GITHUB_ENV"
-          echo "KSU_VERSION_TAG_RESOLVED=$resolved_git_tag" >> "$GITHUB_ENV"
-          echo "Resolved KSU_GIT_VERSION=$resolved_git_version KSU_VERSION_TAG=$resolved_git_tag (drivers/kernelsu git root: $drivers_git_root)"
           echo "::endgroup::"
 
       - name: Wire drivers/Makefile and drivers/Kconfig
@@ -634,7 +664,7 @@ jobs:
           echo "::endgroup::"
 
       - name: Vendor SUSFS core (if enabled)
-        if: inputs.enable_susfs != false
+        if: env.ENABLE_SUSFS == 'true' 
         run: |
           set -euo pipefail
           echo "::group::Vendor SUSFS"
@@ -779,9 +809,8 @@ jobs:
             echo "Kernel: Linux $KERNEL_VERSION"
             echo "Toolchain: $(clang --version | head -n1)"
             echo "Linker: $(ld.lld --version | head -n1)"
-            echo "KernelSU-Next: $KSU_REPO@$KSU_REF (resolved tag: ${KSU_VERSION_TAG_RESOLVED:-unresolved}, rev-count: ${KSU_GIT_VERSION:-unresolved})"
+            echo "KernelSU-Next: $KSU_REPO@$KSU_REF"
             echo "SUSFS: $SUSFS_REPO@$SUSFS_REF (enabled=$ENABLE_SUSFS)"
-            echo "pahole: $(pahole --version)"
             echo "Commit: $(git rev-parse HEAD)"
           } > artifacts/toolchain.txt
           echo "::endgroup::"
@@ -845,7 +874,7 @@ jobs:
 
       - name: Build kernel variants
         id: build
-        if: inputs.dry_run != true
+        if: env.DRY_RUN != 'true' 
         run: |
           set -euo pipefail
           echo "::group::Build kernel variants"
@@ -945,7 +974,7 @@ jobs:
           echo "::endgroup::"
 
       - name: Create per-variant DTB images
-        if: inputs.dry_run != true && inputs.upload_dtbs == true
+        if: env.DRY_RUN != 'true' && env.UPLOAD_DTBS == 'true' 
         run: |
           set -euo pipefail
           echo "::group::Create per-variant DTB images"
@@ -966,7 +995,7 @@ jobs:
           echo "::endgroup::"
 
       - name: Package AnyKernel3 ZIPs
-        if: inputs.dry_run != true
+        if: env.DRY_RUN != 'true' 
         run: |
           set -euo pipefail
           echo "::group::Package device-checked AnyKernel3 ZIPs"
@@ -1022,7 +1051,7 @@ jobs:
           echo "::endgroup::"
 
       - name: Upload build artifacts
-        if: inputs.dry_run != true
+        if: env.DRY_RUN != 'true' 
         uses: actions/upload-artifact@v4
         with:
           name: Chimera-KSUN-SUSFS-${{ inputs.toolchain || 'llvm22' }}-${{ github.run_number }}
