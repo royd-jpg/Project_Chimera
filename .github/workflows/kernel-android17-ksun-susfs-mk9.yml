@@ -379,18 +379,6 @@ jobs:
           grep -RIn 'not integrated susfs' . --include='*' 2>/dev/null | grep -v '^Binary' || true
           echo "::endgroup::"
 
-      - name: Diagnose SUSFS self-check (context around Kbuild:329)
-        run: |
-          set -euo pipefail
-          echo "::group::Kbuild susfs-check context"
-          echo "--- lines 260-360 of drivers/kernelsu/Kbuild ---"
-          sed -n '260,360p' drivers/kernelsu/Kbuild
-          echo "--- every line referencing susfs anywhere in Kbuild, with line numbers ---"
-          grep -n -i susfs drivers/kernelsu/Kbuild
-          echo "--- does Kbuild reference fs/susfs.c by path, or an internal copy? ---"
-          grep -n 'susfs\.c\|susfs\.h\|susfs_def\.h' drivers/kernelsu/Kbuild drivers/kernelsu/Kconfig 2>/dev/null
-          echo "::endgroup::"
-
       - name: Wire drivers/Makefile and drivers/Kconfig
         run: |
           set -euo pipefail
@@ -647,6 +635,18 @@ jobs:
           print("OK: security/selinux/avc.c :: susfs_is_avc_log_spoofing_enabled")
           PYEOF
           fi
+          echo "::endgroup::"
+
+      - name: Diagnose SUSFS self-check (context around Kbuild:329)
+        run: |
+          set -euo pipefail
+          echo "::group::Kbuild susfs-check context"
+          echo "--- lines 260-360 of drivers/kernelsu/Kbuild ---"
+          sed -n '260,360p' drivers/kernelsu/Kbuild
+          echo "--- every line referencing susfs anywhere in Kbuild, with line numbers ---"
+          grep -n -i susfs drivers/kernelsu/Kbuild
+          echo "--- does Kbuild reference fs/susfs.c by path, or an internal copy? ---"
+          grep -n 'susfs\.c\|susfs\.h\|susfs_def\.h' drivers/kernelsu/Kbuild drivers/kernelsu/Kconfig 2>/dev/null
           echo "::endgroup::"
 
       - name: Resolve toolchain
