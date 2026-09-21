@@ -1,4 +1,41 @@
-name: Project Chimera Mk9 — gavdoc38 Canonical Base Build v.20260914
+name: Project Chimera Mk9 — gavdoc38 Canonical Base Build v.20260921
+
+# ─────────────────────────────────────────────────────────────────────────────
+# VERSION HISTORY (append-only — do not delete prior entries)
+#
+# v.20260921 — ThinLTO toggle: workflow rejected at validation, before any
+#   job starts. No change to base_ref/ksu_commit/verify-step patterns/
+#   toolchain matrix/packaging logic.
+#
+#   [1] Workflow-level `env:` defined CHIMERA_KCFLAGS as an expression that
+#       read env.CHIMERA_KCFLAGS_BASE / env.CHIMERA_KCFLAGS_THINLTO — i.e. it
+#       referenced the `env` context from inside the top-level `env:` block.
+#       `env` is not an available context there (top-level env: only gets
+#       github, secrets, inputs, vars), so GitHub rejects the file with
+#       "Unrecognized named-value: 'env'" before scheduling anything.
+#       FIX: CHIMERA_KCFLAGS is now composed from string literals plus the
+#       `inputs` context only:
+#         format('{0}{1}', '<base flags>', inputs.thinlto && ' <lto flags>' || '')
+#       CHIMERA_KCFLAGS_BASE and CHIMERA_KCFLAGS_THINLTO were removed — their
+#       only consumer was that expression (every other reference in this file
+#       uses CHIMERA_KCFLAGS). Base flags now live in exactly one place.
+#       Downstream steps (guards 4a2/4a3, hash 4b, build 18, verify 18b,
+#       manifest, anykernel.sh) already read CHIMERA_KCFLAGS and need no change.
+#       NOT VERIFIED: the literal error text (no run log was supplied — the
+#       diagnosis is from static reading of the env: block plus GitHub's
+#       documented context-availability table); and kernel-side behaviour of
+#       -flto=thin on this 4.9 tree (see KNOWN RISK below).
+#
+#   KNOWN RISK (thinlto=true only, unverified, no edit made): -flto=thin is
+#   injected via KCFLAGS, not via a Kbuild LTO option. If this tree has no
+#   CONFIG_LTO_CLANG/THINLTO Kbuild support, objects become bitcode and only
+#   the final ld.lld link does codegen; step 19 (nm symbol guard) can then
+#   report a ksu_*/susfs_* symbol missing because it was internalized and
+#   inlined. Check before relying on ThinLTO builds:
+#     grep -n 'LTO_CLANG\|THINLTO\|-flto' kernel/Makefile kernel/arch/arm64/Kconfig
+#   and, if step 19 fails only with thinlto=true, look at
+#   logs/vmlinux-symbols.log for '<sym>.llvm.<hash>' variants.
+# ─────────────────────────────────────────────────────────────────────────────
 
 # ─────────────────────────────────────────────────────────────────────────────
 # VERSION HISTORY (append-only — do not delete prior entries)
@@ -626,9 +663,14 @@ env:
   FORCE_REPATCH: ${{ inputs.force_repatch }}
   BASE_REPO: ${{ inputs.base_repo }}
 
-  CHIMERA_KCFLAGS_BASE: -O2 -fcommon -fno-strict-aliasing -Wno-error -Wno-error=unused-but-set-global -Wno-unknown-warning-option -fuse-ld=lld
-  CHIMERA_KCFLAGS_THINLTO: -flto=thin -fsplit-lto-unit
-  CHIMERA_KCFLAGS: ${{ inputs.thinlto && format('{0} {1}', env.CHIMERA_KCFLAGS_BASE, env.CHIMERA_KCFLAGS_THINLTO) || env.CHIMERA_KCFLAGS_BASE }}
+  # NOTE: the top-level env: block cannot read the `env` context (only github,
+  # secrets, inputs, vars are available here), so CHIMERA_KCFLAGS is built from
+  # literals + `inputs` only. Do NOT split the base flags back out into sibling
+  # env vars and reference them as env.X from this expression — the workflow
+  # will fail validation ("Unrecognized named-value: 'env'"). Base flags are
+  # the first format() argument; the ThinLTO suffix (leading space included)
+  # is appended only when inputs.thinlto is true.
+  CHIMERA_KCFLAGS: ${{ format('{0}{1}', '-O2 -fcommon -fno-strict-aliasing -Wno-error -Wno-error=unused-but-set-global -Wno-unknown-warning-option -fuse-ld=lld', inputs.thinlto && ' -flto=thin -fsplit-lto-unit' || '') }}
   CHIMERA_KBUILD_LDFLAGS: "-fuse-ld=lld"
 
 jobs:
