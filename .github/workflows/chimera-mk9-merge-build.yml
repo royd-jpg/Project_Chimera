@@ -1,4 +1,112 @@
-name: Project Chimera Mk9 — gavdoc38 Canonical Base Build v.20260914
+name: Project Chimera Mk9 — gavdoc38 Canonical Base Build v.20260921
+
+# ─────────────────────────────────────────────────────────────────────────────
+# VERSION HISTORY (append-only — do not delete prior entries)
+#
+# v.20260921 — two additions. No change to base_ref/ksu_commit/verify-step
+#   patterns/existing toolchain entries/packaging logic. Step count unchanged.
+#
+#   [1] New toolchain choice `weebx` (XSans0/WeebX-Clang).
+#       URL: what raw.githubusercontent.com/XSans0/WeebX-Clang/main/main/
+#       link.txt resolved to at add time:
+#         https://github.com/XSans0/WeebX-Clang/releases/download/
+#           WeebX-Clang-20.0.0git-release/WeebX-Clang-20.0.0git.tar.gz
+#       Hardcoded rather than resolved dynamically (unlike zyc_stable): the
+#       link file has not moved off this asset, and a dynamic lookup would
+#       defeat the SHA-256 pin below.
+#       VERIFIED (archive downloaded in full and inspected directly, not
+#       inferred from the README):
+#         - size 738640049 bytes, sha256
+#           a2ac878d7f26fc1ac7d90d1330e4e34b62676d3a2326673b78b7799e1d8a0a7c,
+#           HTTP Last-Modified Fri, 06 Dec 2024 20:06:11 GMT.
+#         - Layout: ./bin ./lib ./etc ./share ./aarch64-linux-gnu
+#           ./arm-linux-gnueabi ./x86_64-pc-linux-gnu at archive root, NO
+#           wrapper directory — extracts straight into $ABS_TC, and the
+#           existing shallowest-`bin` finder in "Configure toolchain PATH"
+#           lands on $ABS_TC/bin. Uncompressed size ~2.0 GiB.
+#         - All seven binaries required by "Verify Toolchain and capture
+#           compiler identity" are present: clang, ld.lld, llvm-nm,
+#           llvm-objdump, llvm-ar, llvm-objcopy, llvm-strip.
+#         - `clang --version`: "WeebX clang version 20.0.0git
+#           (https://github.com/llvm/llvm-project
+#           dff47d944dc626eb2d1b846710a18cad6cc1fb22)", target
+#           x86_64-pc-linux-gnu. `ld.lld --version`: "WeebX LLD 20.0.0 (...
+#           dff47d944dc626eb2d1b846710a18cad6cc1fb22)". Resource dir is
+#           lib/clang/20.
+#         - Ships GNU binutils 2.43 under the exact prefixes this workflow
+#           already passes: aarch64-linux-gnu-{as,ld,ar,nm,objcopy,objdump,
+#           strip,...} and arm-linux-gnueabi-{...} — matches
+#           CROSS_COMPILE=aarch64-linux-gnu- / CROSS_COMPILE_ARM32=
+#           arm-linux-gnueabi-. Also ships bare x86_64 ld/as/ar/nm/objdump.
+#         - Smoke test (trivial C file, NOT a kernel build): a freestanding
+#           `--target=aarch64-linux-gnu` object compiled with -O2 -fcommon
+#           -fno-strict-aliasing -Wno-error -Wno-unknown-warning-option
+#           -fuse-ld=lld (CHIMERA_KCFLAGS minus
+#           -Wno-error=unused-but-set-global), `ld.lld -m aarch64linux -r`
+#           linked it, and llvm-objdump disassembled valid AArch64. LLVM's
+#           AArch64 target is enabled; bare `ld` in the archive runs
+#           (GNU ld 2.43).
+#       MAKE CONFIGURATION: no toolchain-specific override is needed. The
+#       `weebx` case uses the same defaults as neutron*/llvm*/zyc_stable:
+#       TC_LLVM_IAS=1, TC_USE_FULL_LLVM=true, TC_HOSTLDFLAGS="" (only
+#       `proton` ever needed a non-empty HOSTLDFLAGS). Every make
+#       invocation keeps passing CC="ccache clang" LLVM=1 LLVM_IAS=1
+#       LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy
+#       OBJDUMP=llvm-objdump STRIP=llvm-strip CLANG_TRIPLE=aarch64-linux-gnu-
+#       CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=
+#       arm-linux-gnueabi- (LLVM=1/LLVM_IAS=1 remain inert on this tree, see
+#       v.20260914 informational note). TC_LLVM_IAS / TC_USE_FULL_LLVM are
+#       exported to $GITHUB_ENV but not consumed by any later step in this
+#       file — pre-existing, unchanged.
+#       *** FROZEN TOOLCHAIN — READ BEFORE USING ***
+#       The asset above was last modified 2024-12-06 and reports
+#       Clang/LLD 20.0.0git — a pre-release LLVM main snapshot, not
+#       llvm-20.1.x. The upstream release list's latest numbered release
+#       seen was 19.1.5 (build date 2024-12-07); no newer asset was found.
+#       This is the same staleness class as `proton` (removed in
+#       v.20260914). It is added here because it was explicitly requested,
+#       and it is NOT the dropdown default. For current LLVM use llvm22 /
+#       llvm21 / zyc_stable / neutron24.
+#       PIN: the release tag is a rolling one (same tag/asset name reused
+#       across rebuilds in the past), so a mutable-URL risk exists.
+#       New optional TC_SHA256 variable added to "Resolve toolchain
+#       configuration"; "Download and extract toolchain" verifies the
+#       downloaded archive against it when non-empty and FATALs on
+#       mismatch. Empty for every other toolchain (no behavior change).
+#       Note the toolchain cache is keyed independently of this check: a
+#       cache hit skips download and verify (the key embeds the build
+#       date 20241206; bump the key if the asset is ever legitimately
+#       replaced).
+#       NOT VERIFIED: an actual full kernel build of the pinned base_ref
+#       with this compiler has not been run — first CI run on `weebx` is
+#       the real test (suggest dry_run:false, cm9, same base_ref as the
+#       last green llvm20 run, and compare against llvm20 output).
+#       GitHub's REST API was rate-limited (HTTP 403) from the audit
+#       sandbox and the repo's commit pages are not fetchable, so the
+#       release list/commit log was not enumerated directly; "frozen" rests
+#       on the asset Last-Modified header, the compiled-in version string,
+#       and the public release listing.
+#
+#   [2] New `brand` choice "-cm9x[git7]".
+#       Resolves in "Resolve build identity inputs" to
+#       "-cm9x" + the first 7 hex characters of inputs.base_ref, e.g.
+#       base_ref f25719cfa1dbf0de6c394e17ae3749f05e10d287 -> "-cm9xf25719c".
+#       Derived from base_ref (already validated as a 40-hex SHA in step
+#       0a, and checked equal to the checked-out HEAD by "Preflight —
+#       verify base ref and clean worktree") rather than from
+#       `git rev-parse`, so it does not depend on step ordering (brand
+#       resolution runs before the base checkout). This is the KERNEL
+#       SOURCE commit, not the
+#       Project_Chimera workflow repo commit (CHIMERA_SHA). To brand from
+#       the workflow repo commit instead, replace BASE_REF_FULL with
+#       "$(git rev-parse HEAD)" run from $GITHUB_WORKSPACE after the
+#       Project_Chimera checkout — that requires moving the brand
+#       resolution after step 2. Resolved brand still passes the '-' prefix
+#       check, the defconfig CONFIG_LOCALVERSION rewrite, scripts/
+#       setlocalversion, localversion, LOCALVERSION= make arg, and the
+#       kernel-release / identity / manifest / anykernel.sh fields
+#       unchanged — all of those already consume the resolved value.
+# ─────────────────────────────────────────────────────────────────────────────
 
 # ─────────────────────────────────────────────────────────────────────────────
 # VERSION HISTORY (append-only — do not delete prior entries)
@@ -470,10 +578,10 @@ on:
         default: cm9
 
       toolchain:
-        description: "Toolchain: llvm22/llvm21/llvm20/aosp22/aosp21/aosp20/aosp19/neutron19/neutron23/neutron24/zyc_stable (proton removed — unmaintained since 2021-05-22, frozen at Clang 13.0.0)"
+        description: "Toolchain: llvm22/llvm21/llvm20/aosp22/aosp21/aosp20/aosp19/neutron19/neutron23/neutron24/zyc_stable/weebx (weebx = Clang 20.0.0git snapshot, frozen since 2024-12-06; proton removed — unmaintained since 2021-05-22, frozen at Clang 13.0.0)"
         required: true
         type: choice
-        options: [llvm22, llvm21, llvm20, aosp22, aosp21, aosp20, aosp19, neutron19, neutron23, neutron24, zyc_stable]
+        options: [llvm22, llvm21, llvm20, aosp22, aosp21, aosp20, aosp19, neutron19, neutron23, neutron24, zyc_stable, weebx]
         default: llvm22
 
       dry_run:
@@ -525,12 +633,13 @@ on:
         default: "vendored in base branch lineage-23.2-ksun3-susfs2"
 
       brand:
-        description: "LOCALVERSION suffix (must start with '-'). Pick 'Other' to type a custom value."
+        description: "LOCALVERSION suffix (must start with '-'). '-cm9x[git7]' resolves to '-cm9x' + first 7 hex chars of base_ref. Pick 'Other' to type a custom value."
         required: true
         type: choice
         options:
           - "-Chimera_Mk9"
           - "-24463729"
+          - "-cm9x[git7]"
           - "Other"
         default: "-Chimera_Mk9"
       custom_brand:
@@ -644,7 +753,7 @@ jobs:
             *) echo "FATAL: profile must be 'cm9' or 'cm9e', got '${{ inputs.profile }}'" >&2; FAIL=1 ;;
           esac
           case "${{ inputs.toolchain }}" in
-            llvm22|llvm21|llvm20|aosp22|aosp21|aosp20|aosp19|neutron19|neutron23|neutron24|zyc_stable|proton) : ;;
+            llvm22|llvm21|llvm20|aosp22|aosp21|aosp20|aosp19|neutron19|neutron23|neutron24|zyc_stable|weebx|proton) : ;;
             *) echo "FATAL: unsupported toolchain '${{ inputs.toolchain }}'" >&2; FAIL=1 ;;
           esac
           if ! [[ "${{ inputs.base_ref }}" =~ ^[0-9a-f]{40}$ ]]; then
@@ -679,9 +788,20 @@ jobs:
         run: |
           set -Eeuo pipefail
 
-          # brand — choice + Other
+          # brand — choice + Other + derived "-cm9x[git7]"
           if [[ "${{ inputs.brand }}" == "Other" ]]; then
             FINAL_BRAND="${{ inputs.custom_brand }}"
+          elif [[ "${{ inputs.brand }}" == "-cm9x[git7]" ]]; then
+            # "-cm9x" + first 7 hex chars of base_ref. base_ref is already
+            # validated as a full 40-hex SHA in step 0a and re-checked
+            # against the checked-out HEAD in the Preflight step, so this
+            # is the kernel-source commit the build actually uses.
+            BASE_REF_FULL="${{ inputs.base_ref }}"
+            [[ "$BASE_REF_FULL" =~ ^[0-9a-f]{40}$ ]] || {
+              echo "FATAL: cannot derive -cm9x[git7] brand — base_ref is not a 40-hex SHA: '$BASE_REF_FULL'" >&2
+              exit 1
+            }
+            FINAL_BRAND="-cm9x${BASE_REF_FULL:0:7}"
           else
             FINAL_BRAND="${{ inputs.brand }}"
           fi
@@ -1252,6 +1372,7 @@ jobs:
           TC_LLVM_IAS="1"
           TC_USE_FULL_LLVM="true"
           TC_HOSTLDFLAGS=""
+          TC_SHA256=""
           case "$TOOLCHAIN" in
             aosp19)
               TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-15.0.0_r10/clang-r536225.tar.gz"
@@ -1325,6 +1446,25 @@ jobs:
                   TC_CACHE_KEY="zyc-clang-ubuntu-24.04-lookup-failed"
                 fi
               ;;
+            weebx)
+              # XSans0/WeebX-Clang — Clang/LLD 20.0.0git snapshot
+              # (llvm-project dff47d944dc6...), archive last modified
+              # 2024-12-06. FROZEN: no newer asset found upstream; see
+              # v.20260921 history entry. URL is what
+              # raw.githubusercontent.com/XSans0/WeebX-Clang/main/main/link.txt
+              # resolved to at add time; hardcoded on purpose so the
+              # SHA-256 pin below stays meaningful. The release tag is a
+              # rolling one, hence the checksum. Archive has NO wrapper
+              # directory (./bin ./lib ... at root) and bundles GNU
+              # binutils 2.43 as aarch64-linux-gnu-* / arm-linux-gnueabi-*,
+              # matching CROSS_COMPILE / CROSS_COMPILE_ARM32 below.
+              # If upstream ever legitimately replaces the asset: re-verify,
+              # update TC_SHA256, and bump the date in TC_CACHE_KEY.
+              TC_URL="https://github.com/XSans0/WeebX-Clang/releases/download/WeebX-Clang-20.0.0git-release/WeebX-Clang-20.0.0git.tar.gz"
+              TC_ARCHIVE_FMT="tar.gz"
+              TC_CACHE_KEY="weebx-clang-20.0.0git-20241206-ubuntu-24.04-v1"
+              TC_SHA256="a2ac878d7f26fc1ac7d90d1330e4e34b62676d3a2326673b78b7799e1d8a0a7c"
+              ;;
             proton)
               TC_URL="https://github.com/kdrag0n/proton-clang.git"
               TC_ARCHIVE_FMT="git"
@@ -1345,6 +1485,7 @@ jobs:
             echo "TC_LLVM_IAS=$TC_LLVM_IAS"
             echo "TC_USE_FULL_LLVM=$TC_USE_FULL_LLVM"
             echo "TC_HOSTLDFLAGS=$TC_HOSTLDFLAGS"
+            echo "TC_SHA256=$TC_SHA256"
           } >> "$GITHUB_ENV"
           echo \
             "TC_CACHE_KEY=$TC_CACHE_KEY" \
@@ -1386,6 +1527,14 @@ jobs:
             if [[ ! -s "$ARCHIVE" ]]; then
               echo "FATAL: aria2c failed to download the toolchain archive, or it is empty." >&2
               exit 1
+            fi
+            if [[ -n "${TC_SHA256:-}" ]]; then
+              ACTUAL_TC_SHA256="$(sha256sum "$ARCHIVE" | cut -d' ' -f1)"
+              if [[ "$ACTUAL_TC_SHA256" != "$TC_SHA256" ]]; then
+                echo "FATAL: toolchain archive SHA-256 mismatch (expected $TC_SHA256, got $ACTUAL_TC_SHA256) — upstream asset was replaced or the download is corrupt" >&2
+                exit 1
+              fi
+              echo "OK: toolchain archive SHA-256 verified ($TC_SHA256)"
             fi
             case "$TC_ARCHIVE_FMT" in
               tar.gz|tar)
