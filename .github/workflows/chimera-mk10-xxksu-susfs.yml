@@ -497,6 +497,20 @@ jobs:
             echo "FATAL: checked-out ref '$ACTUAL_REF' does not match pinned CHIMERA_REF '$CHIMERA_REF'" >&2
             exit 1
           fi
+
+      - name: Copy chimera-xxksu-susfs.cfg to kernel workspace
+        run: |
+          echo "Copying chimera-xxksu-susfs.cfg from Chimera overlay to kernel workspace..."
+          if [[ -f "$GITHUB_WORKSPACE/../chimera_overlay/chimera-xxksu-susfs.cfg" ]]; then
+            cp "$GITHUB_WORKSPACE/../chimera_overlay/chimera-xxksu-susfs.cfg" \
+               "$GITHUB_WORKSPACE/chimera-xxksu-susfs.cfg"
+            echo "OK: File copied successfully"
+            head -20 "$GITHUB_WORKSPACE/chimera-xxksu-susfs.cfg"
+          else
+            echo "FATAL: chimera-xxksu-susfs.cfg not found in chimera_overlay directory" >&2
+            exit 1
+          fi
+
       - name: Verify required repo-local files
         run: |
           set -Eeuo pipefail
