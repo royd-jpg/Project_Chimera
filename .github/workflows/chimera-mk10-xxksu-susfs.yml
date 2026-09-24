@@ -1,185 +1,85 @@
 # ============================================================================
-# CHIMERA MK10 — xxksu v3.3.0 + SUSFS v2.3.0 WORKFLOW (Exynos 9810, LOS 24 /
-# Android 17 track)
-# Derived from: chimera-mk9-merge-build.yml (v.20260921)
+# CHIMERA MK10 — xxksu v3.3.0 + SUSFS v2.3.0 build
+# Samsung Exynos 9810 (star2lte), Linux 4.9.337, LineageOS 24 / Android 17
+# Derived from: chimera-mk9-merge-build.yml — step order/names kept so the two
+# files diff cleanly.
 #
-# Every change below was made against source actually inspected in this pass
-# (git clone of gavdoc38/android_kernel_samsung_exynos9810 @
-# lineage-24.0-xxksu3-susfs2, plus gavdoc38/KernelSU.git @ the pinned
-# submodule commit) — not assumed from the Mk9 file's KernelSU-Next-era
-# comments. See the CHANGES list for what was verified vs. left unverified.
+# WHAT THIS BUILDS
+#   A flashable AnyKernel3 zip (plus Image, dtb.img, manifest.json, SHA256SUMS)
+#   from gavdoc38's xxksu + SUSFS kernel base with the Chimera overlay applied.
 #
-# CHANGES FROM chimera-mk9-merge-build.yml:
+# TWO-REPO LAYOUT (nothing is copied between the two trees)
+#   $GITHUB_WORKSPACE/kernel/           gavdoc38/android_kernel_samsung_exynos9810
+#                                       @ base_ref (pinned SHA), KernelSU
+#                                       submodule @ ksu_commit. This is what is
+#                                       compiled.
+#   $GITHUB_WORKSPACE/chimera_overlay/  royd-jpg/Project_Chimera @ chimera_ref
+#                                       (pinned SHA). SPARSE checkout of only
+#                                       /patches/ and /chimera-*.cfg, because
+#                                       every Project_Chimera branch is a FULL
+#                                       kernel tree (~61k files), not an
+#                                       overlay-only repo. Supplies:
+#                                         patches/apply_chimera_overlay_patches.sh
+#                                         patches/0001-mfd-madera-core-...patch
+#                                         chimera-xxksu-susfs.cfg
+#                                         chimera-device-specific.cfg
+#   The overlay script runs with cwd = kernel/ and edits it in place. The two
+#   Kconfig fragments are merged from chimera_overlay/ (comment-stripped copies
+#   are written to logs/fragments/ — see "Validate Kconfig fragments").
 #
-#   1. base_ref default: f25719cfa1dbf0de6c394e17ae3749f05e10d287 (Mk9,
-#      KernelSU-Next base) -> d6c6d8b40231931d9054c60bc3d8dd55fc81e2c4
-#      (HEAD of lineage-24.0-xxksu3-susfs2 at time of this pass — commit
-#      message: "Add xxksu v3.3.0 + susfs v2.3.0 submodule").
-#      base_branch_hint: lineage-23.2-ksun3-susfs2 -> lineage-24.0-xxksu3-susfs2.
+# KEY DIFFERENCES FROM MK9 (KernelSU-Next -> xxksu)
+#   * Base: gavdoc38 lineage-24.0-xxksu3-susfs2; KernelSU submodule is
+#     gavdoc38/KernelSU.git (xxksu), a different codebase from KernelSU-Next.
+#   * xxksu installs its hooks at runtime (device_initcall(kernelsu_init);
+#     sys_call_table rewrite via CONFIG_KSU_TAMPER_SYSCALL_TABLE, LSM
+#     security_hook_heads rewrite via CONFIG_KSU_LSM_SECURITY_HOOKS). There are
+#     no manual call sites in fs/exec.c, fs/open.c, fs/stat.c, ... so Mk9's
+#     steps 7/7b/8/9 and 14 (hook-mode normalisation) are gone.
+#     CONFIG_KSU_MANUAL_HOOK / CONFIG_KSU_KPROBES_HOOK do not exist in xxksu.
+#   * The Kconfig fragment is chimera-xxksu-susfs.cfg (not chimera-ksu-susfs.cfg).
+#   * The vmlinux symbol guard checks xxksu symbols that survive -O2 (see the
+#     comment on that step). Mk9's ksu_handle_* names do not exist here.
+#   * xxksu is built as ONE translation unit (kernel/ksu.c #includes hook/*.c),
+#     so a static function with a single caller is inlined and has no symbol.
 #
-#   2. ksu_commit default: 685b4a6ba3d2befdf40b3c67cf096d050c7aa6cb
-#      (KernelSU-Next) -> f7d5ee64d3591b9158129774814d0629707dc7ac
-#      (gavdoc38/KernelSU.git — this is the "xxksu" fork, a DIFFERENT
-#      codebase from KernelSU-Next, not a newer commit of the same fork).
-#      Submodule URL is unchanged in form (still a `KernelSU` path per
-#      .gitmodules) but now resolves to gavdoc38/KernelSU.git, confirmed by
-#      reading .gitmodules directly in the cloned tree.
+# SOURCE FACTS CHECKED WHEN WRITING THIS FILE (git clone of the branches below,
+# plus the CI log of run 35862553362 for the same base_ref)
+#   * royd-jpg/Project_Chimera@lineage-24.0-xxksu3-susfs2 = gavdoc38 base
+#     d6c6d8b + 4 commits (this workflow, chimera-xxksu-susfs.cfg, a copy-step
+#     workaround). It has NO patches/ and NO chimera-device-specific.cfg.
+#   * royd-jpg/Project_Chimera@lineage-23.2-ksun3-susfs2 carries patches/,
+#     chimera-device-specific.cfg and a chimera-xxksu-susfs.cfg byte-identical
+#     to the one on the 24.0 branch. The overlay script applied all 9 sections
+#     to the d6c6d8b tree in CI and every marker check passed.
+#   * patches/apply_chimera_overlay_patches.sh has exactly one reference to
+#     $GITHUB_WORKSPACE (the madera patch path); the overlay step scopes that
+#     variable to chimera_overlay/ for that one command.
 #
-#   3. REMOVED steps 7, 7b, 8, 9 (KSU-Next backport/manual-hook-call-site
-#      verification) in their entirety. Root cause: they check for
-#      KernelSU-Next-specific artifacts that do not exist in xxksu —
-#      fs/namespace.c can_umount()/path_umount() signatures, ksu_handle_*()
-#      call sites grepped directly in fs/exec.c|open.c|stat.c|read_write.c|
-#      drivers/input/input.c, and KernelSU-Next/kernel/hook/lsm_hooks.c
-#      symbol names. xxksu has no manual call-site hooks at all in this
-#      base tree: KernelSU/kernel/ksu.c self-registers via
-#      `device_initcall(kernelsu_init)` and installs its hooks at runtime
-#      via sys_call_table pointer rewrite (kernel/hook/
-#      syscall_table_hook_arm64.c, gated by CONFIG_KSU_TAMPER_SYSCALL_TABLE)
-#      and security_hook_heads pointer rewrite (kernel/hook/
-#      lsm_hooks_list.c, gated by CONFIG_KSU_LSM_SECURITY_HOOKS, selected
-#      for this kernel's LINUX_VERSION_CODE 4.2.0<=x<6.8.0 range). Keeping
-#      the old steps would either FATAL on files/symbols that were never
-#      going to exist, or (worse) silently pass on the wrong check.
-#      REPLACED WITH: new step "Verify xxksu build-system wiring" (see #7
-#      below) which checks what actually needs checking for this fork:
-#      that the Kconfig/Makefile plumbing connecting KSU/SUSFS into the
-#      base build is intact.
+# OVERLAY REF STATUS — ACTION REQUIRED (not fixable from this file)
+#   chimera_ref defaults to the tip of lineage-23.2-ksun3-susfs2 (immutable
+#   SHA) because it is the only ref verified to contain all four overlay files.
+#   To move the overlay to the 24.0 branch, commit patches/ and
+#   chimera-device-specific.cfg there, then change the chimera_ref default:
+#       git checkout lineage-24.0-xxksu3-susfs2
+#       git checkout origin/lineage-23.2-ksun3-susfs2 -- patches chimera-device-specific.cfg
+#       git commit -m "Add Chimera overlay patches + device cfg" && git push
+#   Note the SHA of a branch that also contains this workflow moves on every
+#   workflow edit; a dedicated overlay tag/branch is a steadier pin.
 #
-#   4. Step 19 ("Guard pass — verify KSU/SUSFS symbols") REQUIRED symbol
-#      array replaced. Old array (ksu_handle_execveat, ksu_handle_faccessat,
-#      ksu_handle_stat, ksu_handle_sys_read, ksu_handle_input_handle_event,
-#      ksu_handle_setresuid, ksu_handle_sys_reboot, ksu_lsm_hook_init,
-#      ksu_task_fix_setuid, susfs_is_inode_sus_path) is a KernelSU-Next
-#      symbol set; none of ksu_handle_execveat/ksu_handle_faccessat/
-#      ksu_handle_stat/ksu_handle_sys_read/ksu_handle_input_handle_event/
-#      ksu_handle_sys_reboot exist in xxksu under those names (verified by
-#      reading KernelSU/kernel/hook/*.c and KernelSU/kernel/feature/*.c —
-#      no such symbols are defined there). New array uses symbols confirmed
-#      present in this fork's source: ksu_lsm_hook_init (defined in
-#      kernel/hook/lsm_hooks_list.c, called from a static __init
-#      ksu_core_init in that same file), ksu_task_fix_setuid (defined in
-#      the same file, `static __nocfi`), and susfs_is_inode_sus_path
-#      (fs/susfs.c, global). Two functions worth flagging:
-#        - `kernelsu_init` is `static int __init` — it WILL still show in
-#          `nm` output (lowercase type letter, e.g. `t`), which the
-#          existing regex `^[0-9a-fA-F]+ [A-Za-z] ${sym}$` already matches
-#          case-insensitively on the type-letter position — no regex change
-#          needed, just confirming this before relying on it.
-#        - susfs_is_inode_sus_path has TWO conditional definitions in
-#          fs/susfs.c gated by what looks like a struct mnt_idmap
-#          availability check (`#ifdef`/two signatures) — only one will be
-#          compiled per kernel-version branch; the guard only checks for
-#          symbol presence by name, so either compiled variant satisfies it.
-#      NOT VERIFIED: an exhaustive list of every xxksu-exported symbol
-#      worth guarding (e.g. supercall/dispatch.c entry points, throne
-#      tracker symbols) — the four picked are the ones I could confirm are
-#      both (a) real, non-inlined-away functions and (b) meaningfully tied
-#      to "the hooks actually installed", not a claim that this is a
-#      complete guard set.
-#
-#   5. New step "Verify xxksu build-system wiring" (inserted where the
-#      removed steps 7-9 were, i.e. after the base checkout/submodule pin
-#      verification, before Chimera overlay application). Greps directly
-#      for the three build-system connections found in this pass:
-#        - drivers/Kconfig sources drivers/kernelsu/Kconfig
-#        - drivers/Makefile has obj-$(CONFIG_KSU) += kernelsu/
-#        - fs/Makefile has obj-$(CONFIG_KSU_SUSFS) += susfs.o
-#        - drivers/kernelsu resolves (as a symlink) to an existing
-#          KernelSU/kernel directory once the submodule is checked out
-#      This is a materially different and, for this fork, more relevant
-#      check than the old manual-hook-call-site greps: for xxksu the risk
-#      is the build wiring silently breaking (submodule path renamed,
-#      symlink target moved), not a missing call-site in a syscall handler.
-#
-#   6. Defconfig fragment filename/content: chimera-ksu-susfs.cfg (Mk9,
-#      KernelSU-Next symbols: CONFIG_KSU_MANUAL_HOOK, CONFIG_KSU_SUSFS_*)
-#      -> chimera-xxksu-susfs.cfg (this repo's companion file, xxksu
-#      symbols: CONFIG_KSU_TAMPER_SYSCALL_TABLE, CONFIG_KSU_LSM_SECURITY_HOOKS,
-#      no CONFIG_KSU_MANUAL_HOOK/CONFIG_KSU_KPROBES_HOOK — those symbols do
-#      not exist in xxksu's Kconfig at all). Step "Validate Kconfig
-#      fragment" symbol checks updated to match.
-#
-#   7. Step "Normalize KernelSU hook mode" (Mk9's step 14, which forced
-#      CONFIG_KSU_MANUAL_HOOK=y / CONFIG_KSU_KPROBES_HOOK=n post-merge)
-#      REMOVED outright. Rationale: those two symbols do not exist in
-#      xxksu's Kconfig (confirmed — grep of KernelSU/kernel/Kconfig at the
-#      pinned commit). xxksu's actual hook-mode symbols
-#      (CONFIG_KSU_TAMPER_SYSCALL_TABLE / CONFIG_KSU_LSM_SECURITY_HOOKS /
-#      CONFIG_KSU_HACK_ARM64_BRANCH_LINK / CONFIG_KSU_KPROBES_KSUD) are set
-#      directly in the fragment (change #6) and enforced there, so a
-#      separate forcing step post-merge_config is redundant — merge_config
-#      with -m already makes the fragment authoritative for these symbols
-#      and olddefconfig doesn't get to silently downgrade a =y a fragment
-#      set. If you want the belt-and-suspenders re-assert-after-
-#      olddefconfig pattern back, it can be added, but at that point it's
-#      asserting a fragment-set-y stays y through olddefconfig, which is
-#      the merge_config contract, not a genuine independent risk like the
-#      Mk9 kprobes/manual-hook mutual-exclusion knot was.
-#
-#   8. Guard pass "Guard pass — verify security restrictions disabled and
-#      KSU/SUSFS enabled" (Mk9 step 14b) REQUIRED array updated:
-#      CONFIG_KSU_MANUAL_HOOK -> removed (not a real symbol here).
-#      CONFIG_KSU_SUSFS_SUS_PATH / SUS_MAP / SUS_KSTAT kept (real, present,
-#      confirmed identical symbol names in xxksu's Kconfig). FORBIDDEN
-#      array (RKP/TIMA/DEFEX/KNOX/etc.) left unchanged — these are Samsung
-#      security-stack symbols external to KSU/SUSFS and nothing in this
-#      pass suggested they've moved on this branch; NOT independently
-#      re-verified against this specific branch's defconfig/Kconfig in
-#      this pass (they were verified against the Mk9/KSU-Next base in an
-#      earlier audit, not this one) — flagged as
-#      UNVERIFIED — REQUIRES CONFIRMATION for this specific branch, though
-#      low-risk since these are unrelated to the KSU fork swap.
-#
-#   9. CHIMERA_REF (the Project_Chimera *overlay* repo's branch, separate
-#      from the kernel base repo) is LEFT UNCHANGED
-#      (lineage-23.2-ksun3-susfs2) here, deliberately, NOT auto-renamed to
-#      an A17 equivalent. I found no evidence in this pass of an A17/LOS24
-#      branch existing in royd-jpg/Project_Chimera — that repo was not part
-#      of this pass's clone (only the kernel base + KernelSU submodule
-#      were fetched). Per the no-invent constraint: inventing a branch name
-#      there would be fabrication. ACTION REQUIRED (not fixable from this
-#      file alone): confirm whether royd-jpg/Project_Chimera has (or needs)
-#      an A17-targeted branch carrying the Chimera overlay patches, sched
-#      tuning, and CMK9-marker overlay hooks against THIS kernel tree
-#      (fs/proc/base.c, fs/namei.c, drivers/cpufreq/exynos-ufc.c, etc. —
-#      those overlay patches were never re-verified against
-#      lineage-24.0-xxksu3-susfs2's actual file contents in this pass,
-#      only the KSU/SUSFS wiring was). If the overlay patches are unchanged
-#      relative to the KSU-Next-era base, they may or may not still apply
-#      cleanly — UNVERIFIED — REQUIRES CONFIRMATION.
-#
-#  10. anykernel.sh identity block: KSU manual-hook symbol list (previously
-#      ksu_handle_execveat/ksu_handle_faccessat/ksu_handle_setresuid/
-#      ksu_handle_sys_reboot/ksu_lsm_hook_init/ksu_task_fix_setuid) updated
-#      to list only the symbols this workflow now actually guards (change
-#      #4): ksu_lsm_hook_init, ksu_task_fix_setuid, susfs_is_inode_sus_path,
-#      kernelsu_init. KERNEL_NAME changed Chimera Mk9 -> Chimera Mk10.
-#      device.name* / supported.versions / BLOCK path left UNCHANGED — no
-#      evidence in this pass that the star2lte boot partition layout or
-#      supported Android version floor changed; these come from the device
-#      tree / AK3 config, not the kernel fork swap, and were not
-#      re-verified here.
-#
-#  11. Toolchain matrix (llvm22/21/20/aosp*/neutron*/zyc_stable/weebx),
-#      CHIMERA_KCFLAGS/CHIMERA_KBUILD_LDFLAGS, ccache wiring, DTB assembly,
-#      AK3 packaging, manifest/SHA256SUMS generation, and the
-#      -fuse-ld=lld-in-both-KCFLAGS-and-LDFLAGS fix (v.20260822a) are
-#      UNCHANGED from Mk9 — none of that is KSU/SUSFS-fork-specific, and
-#      nothing in this pass found a reason to touch it. Whether the
-#      existing toolchain matrix meets any LOS24/Android-17 minimum
-#      compiler-version requirement was NOT verified in this pass (no LOS24
-#      star2lte BoardConfig or platform AOSP Clang pin was available to
-#      diff against, same gap noted in the Mk9 v.20260914 entry) —
-#      UNVERIFIED — REQUIRES CONFIRMATION.
-#
-#  12. brand default "-Chimera_Mk9" -> "-Chimera_Mk10"; "-cm9x[git7]" choice
-#      -> "-cm10x[git7]" (same derivation logic: "-cm10x" + first 7 hex
-#      chars of base_ref). KERNEL_NAME env "Chimera Mk9" -> "Chimera Mk10".
-#      Everything else in the identity/derivation logic (dash-prefix
-#      validation, Other/custom_* coalescing, build_date ROM-prefix strip)
-#      is copied verbatim from Mk9 — that logic is generic and was not
-#      KSU-fork-dependent.
+# UNVERIFIED — REQUIRES CONFIRMATION
+#   * Warn-only guard symbols (ksu_inode_rename, ksu_bprm_committing_creds,
+#     ksu_syscall_table_restore) were chosen from source (address-taken static
+#     functions cannot be inlined away) but not observed in a built vmlinux;
+#     only kernelsu_init, susfs_is_inode_sus_path and ksu_task_fix_setuid are
+#     fatal.
+#   * Whether the toolchain matrix meets any LOS24 / Android 17 minimum
+#     compiler requirement (no star2lte BoardConfig or AOSP Clang pin was
+#     available to diff against).
+#   * device.name* / supported.versions / BLOCK in anykernel.sh (copied from
+#     Mk9; not re-verified against the star2lte boot layout).
+#   * CI log shows two "LLVM ERROR: IO failure on output stream: Broken pipe"
+#     lines during the kernel build. The build continued past them; source not
+#     investigated.
 # ============================================================================
 
 permissions:
@@ -200,7 +100,7 @@ on:
         default: cm9
 
       toolchain:
-        description: "Toolchain: llvm22/llvm21/llvm20/aosp22/aosp21/aosp20/aosp19/neutron19/neutron23/neutron24/zyc_stable/weebx (weebx = Clang 20.0.0git snapshot, frozen since 2024-12-06; proton removed — unmaintained since 2021-05-22, frozen at Clang 13.0.0). UNVERIFIED whether this matrix satisfies an LOS24/A17 minimum compiler requirement — see header note 11."
+        description: "Toolchain: llvm22/llvm21/llvm20/aosp22/aosp21/aosp20/aosp19/neutron19/neutron23/neutron24/zyc_stable/weebx (weebx = Clang 20.0.0git snapshot, frozen since 2024-12-06; proton removed — unmaintained since 2021-05-22, frozen at Clang 13.0.0). UNVERIFIED whether this matrix satisfies an LOS24/A17 minimum compiler requirement (see header)."
         required: true
         type: choice
         options: [llvm22, llvm21, llvm20, aosp22, aosp21, aosp20, aosp19, neutron19, neutron23, neutron24, zyc_stable, weebx]
@@ -224,6 +124,18 @@ on:
         type: boolean
         default: false
 
+      chimera_repo:
+        description: "Chimera overlay repo (owner/repo) — sparse-checked-out to chimera_overlay/ for patches/ and chimera-*.cfg"
+        required: false
+        type: string
+        default: "royd-jpg/Project_Chimera"
+
+      chimera_ref:
+        description: "Chimera overlay ref: full 40-hex commit SHA only. Default = tip of lineage-23.2-ksun3-susfs2, the only ref verified to carry patches/, chimera-xxksu-susfs.cfg AND chimera-device-specific.cfg (lineage-24.0-xxksu3-susfs2 currently lacks patches/ and the device cfg — see header)."
+        required: false
+        type: string
+        default: "0b73f89888824c3be2e55ec1c65e3803b05590db"
+
       base_repo:
         description: "xxksu + SUSFS integration base (owner/repo)"
         required: false
@@ -231,7 +143,7 @@ on:
         default: "gavdoc38/android_kernel_samsung_exynos9810"
 
       base_ref:
-        description: "Base ref: full 40-hex commit SHA only. Default is HEAD of lineage-24.0-xxksu3-susfs2 as of this pass — verified via git clone, not assumed."
+        description: "Base ref: full 40-hex commit SHA only. Default = tip of gavdoc38 lineage-24.0-xxksu3-susfs2 (d6c6d8b, verified with git ls-remote)."
         required: false
         type: string
         default: "d6c6d8b40231931d9054c60bc3d8dd55fc81e2c4"
@@ -321,10 +233,13 @@ on:
         type: string
 
 env:
-  # Header note 9: LEFT UNCHANGED from Mk9 — no A17-targeted
-  # Project_Chimera branch confirmed to exist. ACTION REQUIRED before use.
-  CHIMERA_REPO: "https://github.com/royd-jpg/Project_Chimera.git"
-  CHIMERA_REF: "lineage-23.2-ksun3-susfs2"
+  # Two-repo layout — see header. Both trees live directly under the workspace.
+  #   kernel/           = base repo (compiled)
+  #   chimera_overlay/  = overlay repo, sparse (patches/ + chimera-*.cfg)
+  CHIMERA_REPO: "https://github.com/${{ inputs.chimera_repo }}.git"
+  CHIMERA_REF: ${{ inputs.chimera_ref }}
+  OVERLAY_DIR: "chimera_overlay"
+  ABS_OVERLAY: ${{ github.workspace }}/chimera_overlay
 
   KERNEL_DIR: "kernel"
   OUT_DIR: "kernel-out"
@@ -386,6 +301,14 @@ jobs:
           fi
           if ! [[ "${{ inputs.ksu_commit }}" =~ ^[0-9a-f]{40}$ ]]; then
             echo "FATAL: ksu_commit must be a full 40-hex commit SHA, got '${{ inputs.ksu_commit }}'" >&2
+            FAIL=1
+          fi
+          if ! [[ "${{ inputs.chimera_ref }}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "FATAL: chimera_ref must be a full 40-hex commit SHA, got '${{ inputs.chimera_ref }}'" >&2
+            FAIL=1
+          fi
+          if [[ -z "${{ inputs.chimera_repo }}" || "${{ inputs.chimera_repo }}" != */* ]]; then
+            echo "FATAL: chimera_repo must be 'owner/repo', got '${{ inputs.chimera_repo }}'" >&2
             FAIL=1
           fi
           if [[ -z "${{ inputs.base_repo }}" || "${{ inputs.base_repo }}" != */* ]]; then
@@ -474,50 +397,75 @@ jobs:
             libelf-dev libssl-dev lz4 lzop python3 rsync zstd cpio pahole zip
           python3 --version
           curl --version | head -1
-      # ── 2. Checkout Project_Chimera (workflow repo — overlay + Kconfig fragment) ──
-      # See header note 9: CHIMERA_REF unchanged, UNVERIFIED against A17.
-      - name: Checkout Project_Chimera (workflow repo — overlay + Kconfig fragment)
+      # ── 2. Checkout Chimera overlay (sparse) → chimera_overlay/ ──────────────
+      # Only /patches/ and /chimera-*.cfg are materialised (~116 KB instead of a
+      # ~61k-file kernel tree). See header for why the overlay repo is sparse.
+      - name: Checkout Chimera overlay (sparse — patches/ + chimera-*.cfg)
         uses: actions/checkout@v4
         with:
-          path: .
-          ref: ${{ env.CHIMERA_REF }}
+          repository: ${{ inputs.chimera_repo }}
+          ref: ${{ inputs.chimera_ref }}
+          path: ${{ env.OVERLAY_DIR }}
           fetch-depth: 1
+          sparse-checkout: |
+            /patches/
+            /chimera-*.cfg
+          sparse-checkout-cone-mode: false
           clean: false
 
-      - name: Validate checked-out Project_Chimera revision
+      - name: Validate checked-out Chimera overlay revision
+        working-directory: ${{ env.OVERLAY_DIR }}
         run: |
           set -Eeuo pipefail
-          ACTUAL_REF="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo 'DETACHED')"
           ACTUAL_SHA="$(git rev-parse HEAD)"
-          echo "CHIMERA_REF (pinned):      $CHIMERA_REF"
-          echo "Checked-out branch/ref:    $ACTUAL_REF"
+          echo "Overlay repo:              $CHIMERA_REPO"
+          echo "CHIMERA_REF (pinned SHA):  $CHIMERA_REF"
           echo "Checked-out commit:        $ACTUAL_SHA"
-          echo "CHIMERA_SHA=$ACTUAL_SHA" >> "$GITHUB_ENV"
-          if [[ "$ACTUAL_REF" != "$CHIMERA_REF" && "$ACTUAL_REF" != "DETACHED" ]]; then
-            echo "FATAL: checked-out ref '$ACTUAL_REF' does not match pinned CHIMERA_REF '$CHIMERA_REF'" >&2
+          if [[ "$ACTUAL_SHA" != "$CHIMERA_REF" ]]; then
+            echo "FATAL: checked-out overlay commit '$ACTUAL_SHA' does not match pinned chimera_ref '$CHIMERA_REF'" >&2
             exit 1
           fi
+          echo "CHIMERA_SHA=$ACTUAL_SHA" >> "$GITHUB_ENV"
 
-      - name: Verify required repo-local files
+      - name: Verify required overlay files (two-repo layout)
         run: |
           set -Eeuo pipefail
           MISSING=0
           for f in \
             patches/apply_chimera_overlay_patches.sh \
+            patches/0001-mfd-madera-core-settle-delay-after-reset-release.patch \
             chimera-xxksu-susfs.cfg \
             chimera-device-specific.cfg; do
-            if [[ ! -f "$GITHUB_WORKSPACE/$f" ]]; then
-              echo "FATAL: required file missing: $f" >&2
-              MISSING=1
+            if [[ -f "$ABS_OVERLAY/$f" ]]; then
+              echo "OK: $OVERLAY_DIR/$f"
             else
-              echo "OK: $f"
+              echo "FATAL: required overlay file missing: $OVERLAY_DIR/$f" >&2
+              MISSING=1
             fi
           done
-          if [[ -f "$GITHUB_WORKSPACE/patches/apply_chimera_overlay_patches.sh" ]]; then
-            chmod +x "$GITHUB_WORKSPACE/patches/apply_chimera_overlay_patches.sh"
+          if [[ "$MISSING" -ne 0 ]]; then
+            echo >&2
+            echo "Files present in the sparse overlay checkout of ${CHIMERA_REPO} @ ${CHIMERA_REF}:" >&2
+            ( cd "$ABS_OVERLAY" && find . -path ./.git -prune -o -type f -print | sort ) >&2 || true
+            echo >&2
+            echo "The chimera_ref commit does not carry the overlay files. Either pass a chimera_ref that does," >&2
+            echo "or commit patches/ and chimera-device-specific.cfg to that branch (see workflow header)." >&2
+            exit 1
           fi
-          [[ "$MISSING" -eq 0 ]] || exit 1
-      # ── 3. Checkout gavdoc38 xxksu+SUSFS base ─────────────────────────────────
+          SCRIPT="$ABS_OVERLAY/patches/apply_chimera_overlay_patches.sh"
+          chmod +x "$SCRIPT"
+          # The overlay step scopes GITHUB_WORKSPACE to chimera_overlay/ when it runs
+          # the script, which is only correct while the script's sole use of that
+          # variable is "$GITHUB_WORKSPACE/patches/...". Fail early if that changes.
+          BAD="$(grep -n 'GITHUB_WORKSPACE' "$SCRIPT" | grep -v 'GITHUB_WORKSPACE/patches/' || true)"
+          if [[ -n "$BAD" ]]; then
+            echo "FATAL: $SCRIPT references GITHUB_WORKSPACE outside patches/ — review its layout assumptions:" >&2
+            echo "$BAD" >&2
+            exit 1
+          fi
+          echo "PASS: overlay files present; overlay script's GITHUB_WORKSPACE use is patches/-only"
+
+      # ── 3. Checkout gavdoc38 xxksu+SUSFS base → kernel/ ───────────────────────
       - name: Checkout gavdoc38 base (xxksu + SUSFS v2.3.0 integration)
         uses: actions/checkout@v4
         with:
@@ -694,9 +642,9 @@ jobs:
       # no manual call site in fs/exec.c, fs/open.c, fs/stat.c, kernel/sys.c,
       # etc. to verify, unlike KernelSU-Next. What CAN silently break for
       # this fork is the Kconfig/Makefile plumbing that connects the
-      # submodule into the build at all, so that's what this step checks —
-      # every grep pattern below was matched directly against this base
-      # tree's actual drivers/Kconfig, drivers/Makefile, and fs/Makefile.
+      # submodule into the build, so that is what this step checks. All paths
+      # are relative to kernel/ (the base repo); nothing here looks at
+      # chimera_overlay/.
       - name: Verify xxksu build-system wiring
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
@@ -717,6 +665,8 @@ jobs:
             'obj-\$\(CONFIG_KSU\) \+= kernelsu/' drivers/Makefile
           check "fs/Makefile builds susfs.o under CONFIG_KSU_SUSFS" \
             'obj-\$\(CONFIG_KSU_SUSFS\) \+= susfs.o' fs/Makefile
+          check ".gitmodules maps KernelSU to gavdoc38/KernelSU (xxksu)" \
+            'url = https://github.com/gavdoc38/KernelSU(\.git)?$' .gitmodules
 
           if [[ -L drivers/kernelsu ]]; then
             LINK_TARGET="$(readlink drivers/kernelsu)"
@@ -732,10 +682,14 @@ jobs:
             FAIL=1
           fi
 
-          [[ -f KernelSU/kernel/ksu.c ]] || {
-            echo "FATAL: KernelSU/kernel/ksu.c not found — submodule content missing" >&2
-            FAIL=1
-          }
+          for f in KernelSU/kernel/ksu.c KernelSU/kernel/Kconfig KernelSU/kernel/hook/lsm_hooks_list.c KernelSU/kernel/hook/syscall_table_hook_arm64.c; do
+            if [[ -f "$f" ]]; then
+              echo "OK:    $f"
+            else
+              echo "FATAL: $f not found — submodule content missing or xxksu layout changed" >&2
+              FAIL=1
+            fi
+          done
           grep -qE 'device_initcall\(kernelsu_init\)' KernelSU/kernel/ksu.c || {
             echo "FATAL: kernelsu_init is not registered via device_initcall — xxksu's self-hooking entry point may have moved" >&2
             FAIL=1
@@ -749,14 +703,19 @@ jobs:
           echo
           echo "PASS: xxksu build-system wiring intact — no manual hook call-sites required for this fork"
       # ── 11. Chimera overlay ───────────────────────────────────────────────────
-      # UNVERIFIED (header note 9): overlay patch content was not
-      # re-diffed against this branch's actual file contents in this pass.
+      # Runs chimera_overlay/patches/apply_chimera_overlay_patches.sh with
+      # cwd = kernel/. The script's single $GITHUB_WORKSPACE reference is the
+      # madera patch path ("$GITHUB_WORKSPACE/patches/..."); scoping the
+      # variable to the overlay checkout for this one command (VAR=x cmd, not
+      # exported) makes that resolve to chimera_overlay/patches/ without
+      # copying or symlinking anything. Coupling is guarded in step 2.
       - name: Apply Chimera overlay
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
           LOG="$ABS_LOG/overlay.log"
           echo "Chimera overlay started at $(date -u)" > "$LOG"
+          echo "Overlay source: $CHIMERA_REPO @ $CHIMERA_SHA" | tee -a "$LOG"
           sed -i \
             '/^CONFIG_LOCALVERSION=/d;/^CONFIG_DEFAULT_HOSTNAME=/d;/^CONFIG_CC_STACKPROTECTOR_STRONG=/d;/^CONFIG_CC_STACKPROTECTOR=/d' \
             "$DEFCONFIG"
@@ -771,14 +730,15 @@ jobs:
             > scripts/setlocalversion
           chmod +x scripts/setlocalversion
           echo "$BRAND" > localversion
-          bash "$GITHUB_WORKSPACE/patches/apply_chimera_overlay_patches.sh" \
+          GITHUB_WORKSPACE="$ABS_OVERLAY" \
+            bash "$ABS_OVERLAY/patches/apply_chimera_overlay_patches.sh" \
             2>&1 | tee -a "$LOG"
           echo \
             "Overlay applied (profile=$PROFILE, brand=$BRAND)" \
             | tee -a "$LOG"
       # ── 11b. Verify Chimera overlay landed completely ────────────────────────
-      # Markers/paths UNCHANGED from Mk9 — NOT re-verified against this
-      # branch's actual file contents in this pass (header note 9).
+      # Markers/paths unchanged from Mk9. All of them were observed passing on
+      # the d6c6d8b base in CI run 35862553362.
       - name: Verify Chimera overlay markers
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
@@ -811,7 +771,7 @@ jobs:
           }
           echo
           echo "PASS: all Chimera overlay markers present"
-      # ── 11c. Toolchain resolution — UNCHANGED from Mk9 (header note 11) ──────
+      # ── 11c. Toolchain resolution — UNCHANGED from Mk9 ──────────────────────
       - name: Resolve toolchain configuration
         id: tc-resolve
         run: |
@@ -983,39 +943,77 @@ jobs:
             echo "$CLANG_VERSION"
             echo "$LLD_VERSION"
           } > "$ABS_LOG/toolchain-identity.txt"
-      # ── 12. Kconfig fragment normalization ───────────────────────────────────
-      # Fragment renamed + symbol set updated for xxksu (header note 6).
-      - name: Validate Kconfig fragment
+      # ── 12. Kconfig fragments: sanitize + validate ───────────────────────────
+      # Sources: chimera_overlay/chimera-xxksu-susfs.cfg and
+      #          chimera_overlay/chimera-device-specific.cfg.
+      # merge_config.sh (this 4.9 tree's copy) finds symbols with `grep -w`, so
+      # a COMMENT that merely mentions "CONFIG_KSU_TAMPER_SYSCALL_TABLE" is
+      # treated as a redefinition and appended to .config as junk (the CI log
+      # showed "Value of CONFIG_KSU is redefined ... New value: # symbol names
+      # overlap (CONFIG_KSU ..." and ~80 stray comment lines land in .config).
+      # Final values were still right, but that is luck. So the merge consumes
+      # comment-stripped copies (only `CONFIG_X=...` and `# CONFIG_X is not set`
+      # lines are kept) written to logs/fragments/ for audit. The overlay files
+      # themselves are never modified.
+      - name: Validate Kconfig fragments (sanitize, symbol-check)
         run: |
           set -Eeuo pipefail
-          CFG="$GITHUB_WORKSPACE/chimera-xxksu-susfs.cfg"
-          grep -q '^CONFIG_KSU=y$' "$CFG"
-          grep -q '^CONFIG_KSU_SUSFS=y$' "$CFG"
-          # xxksu-specific hook-mode symbols (no MANUAL_HOOK/KPROBES_HOOK
-          # equivalents exist in this fork's Kconfig):
-          grep -q '^CONFIG_KSU_TAMPER_SYSCALL_TABLE=y$' "$CFG" || \
-            grep -q '^CONFIG_KSU_LSM_SECURITY_HOOKS=y$' "$CFG" || {
+          FRAG_DIR="$ABS_LOG/fragments"
+          mkdir -p "$FRAG_DIR"
+          sanitize_frag() {
+            grep -E '^(CONFIG_[A-Za-z0-9_]+=.*|# CONFIG_[A-Za-z0-9_]+ is not set)[[:space:]]*$' "$1" \
+              | sed 's/[[:space:]]*$//' || true
+          }
+          for name in chimera-xxksu-susfs chimera-device-specific; do
+            SRC="$ABS_OVERLAY/$name.cfg"
+            [[ -s "$SRC" ]] || { echo "FATAL: $SRC missing or empty" >&2; exit 1; }
+            sanitize_frag "$SRC" > "$FRAG_DIR/$name.cfg"
+            [[ -s "$FRAG_DIR/$name.cfg" ]] || { echo "FATAL: $name.cfg has no CONFIG_ lines after sanitizing" >&2; exit 1; }
+            echo "$name.cfg: kept $(wc -l < "$FRAG_DIR/$name.cfg") of $(wc -l < "$SRC") lines"
+          done
+          echo "FRAG_DIR=$FRAG_DIR" >> "$GITHUB_ENV"
+
+          CFG="$FRAG_DIR/chimera-xxksu-susfs.cfg"
+          grep -qx 'CONFIG_KSU=y' "$CFG"      || { echo "FATAL: CONFIG_KSU=y missing from chimera-xxksu-susfs.cfg" >&2; exit 1; }
+          grep -qx 'CONFIG_KSU_SUSFS=y' "$CFG" || { echo "FATAL: CONFIG_KSU_SUSFS=y missing from chimera-xxksu-susfs.cfg" >&2; exit 1; }
+          # xxksu hook-mode symbols (no MANUAL_HOOK/KPROBES_HOOK equivalents exist
+          # in this fork's Kconfig):
+          if ! grep -qxE 'CONFIG_KSU_TAMPER_SYSCALL_TABLE=y|CONFIG_KSU_LSM_SECURITY_HOOKS=y' "$CFG"; then
             echo "FATAL: neither CONFIG_KSU_TAMPER_SYSCALL_TABLE nor CONFIG_KSU_LSM_SECURITY_HOOKS is set — xxksu would have no active hook path" >&2
             exit 1
-          }
-          if grep -qE '^CONFIG_KSU_MANUAL_HOOK|^CONFIG_KSU_KPROBES_HOOK' "$CFG"; then
-            echo "FATAL: CONFIG_KSU_MANUAL_HOOK / CONFIG_KSU_KPROBES_HOOK are KernelSU-Next symbols, not valid in xxksu's Kconfig — remove from fragment" >&2
+          fi
+          if grep -qhE 'CONFIG_KSU_MANUAL_HOOK|CONFIG_KSU_KPROBES_HOOK' "$FRAG_DIR"/*.cfg; then
+            echo "FATAL: CONFIG_KSU_MANUAL_HOOK / CONFIG_KSU_KPROBES_HOOK are KernelSU-Next symbols, not valid in xxksu's Kconfig — remove from the overlay fragments" >&2
             exit 1
           fi
+
+          # Every CONFIG_KSU* symbol a fragment sets must exist in the pinned
+          # xxksu Kconfig; otherwise Kconfig silently drops it (the failure mode
+          # of pasting a KernelSU-Next fragment onto xxksu).
+          KSU_KCONFIGS="$ABS_KERNEL/KernelSU/kernel"
+          FAIL=0
+          while IFS= read -r sym; do
+            if grep -rqE "^(menu)?config ${sym#CONFIG_}[[:space:]]*$" "$KSU_KCONFIGS" --include='Kconfig*'; then
+              echo "OK:    $sym defined in xxksu Kconfig"
+            else
+              echo "FATAL: $sym is set by a fragment but not defined in KernelSU/kernel Kconfig*" >&2
+              FAIL=1
+            fi
+          done < <(grep -ohE '^(# )?CONFIG_KSU[A-Za-z0-9_]*' "$FRAG_DIR"/*.cfg | sed 's/^# //' | sort -u)
+          [[ "$FAIL" -eq 0 ]] || exit 1
           cat "$CFG"
+
       # ── 13. Merge Kconfig ────────────────────────────────────────────────────
-      # References chimera-xxksu-susfs.cfg instead of chimera-ksu-susfs.cfg.
-      # Step 14 ("Normalize KernelSU hook mode") REMOVED — see header note 7.
-      - name: Merge Kconfig fragment
+      # Mk9 step 14 ("Normalize KernelSU hook mode") is intentionally absent:
+      # xxksu has no CONFIG_KSU_MANUAL_HOOK / CONFIG_KSU_KPROBES_HOOK, and
+      # merge_config -m already makes the fragment authoritative. Instead, after
+      # olddefconfig, every symbol the fragments set is compared with the final
+      # .config and any drift is reported (warning-only; the hard guards are the
+      # next step and the vmlinux symbol guard).
+      - name: Merge Kconfig fragments
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
-          cp \
-            "$GITHUB_WORKSPACE/chimera-xxksu-susfs.cfg" \
-            /tmp/chimera-xxksu-susfs.cfg
-          cp \
-            "$GITHUB_WORKSPACE/chimera-device-specific.cfg" \
-            /tmp/chimera-device-specific.cfg
           make \
             O="$ABS_OUT" \
             ARCH=arm64 \
@@ -1034,8 +1032,8 @@ jobs:
             -m \
             -O "$ABS_OUT" \
             "$ABS_OUT/.config" \
-            /tmp/chimera-xxksu-susfs.cfg \
-            /tmp/chimera-device-specific.cfg \
+            "$FRAG_DIR/chimera-xxksu-susfs.cfg" \
+            "$FRAG_DIR/chimera-device-specific.cfg" \
             | tee "$ABS_LOG/merge-config.log"
           make \
             O="$ABS_OUT" \
@@ -1055,10 +1053,42 @@ jobs:
           echo "========== xxksu hook-mode symbols after merge+olddefconfig =========="
           grep '^CONFIG_KSU' "$ABS_OUT/.config" || true
           cp "$ABS_OUT/.config" "$ABS_LOG/post-merge.config"
+
+          # Fragment intent vs final .config (warning-only).
+          DRIFT=0
+          : > "$ABS_LOG/fragment-drift.log"
+          re_unset='^# (CONFIG_[A-Za-z0-9_]+) is not set$'
+          re_set='^(CONFIG_[A-Za-z0-9_]+)=(.*)$'
+          for frag in "$FRAG_DIR/chimera-xxksu-susfs.cfg" "$FRAG_DIR/chimera-device-specific.cfg"; do
+            while IFS= read -r line; do
+              if [[ "$line" =~ $re_set ]]; then
+                sym="${BASH_REMATCH[1]}"; want="${BASH_REMATCH[2]}"
+              elif [[ "$line" =~ $re_unset ]]; then
+                sym="${BASH_REMATCH[1]}"; want="n"
+              else
+                continue
+              fi
+              if [[ "$want" == "n" ]]; then
+                if grep -qE "^${sym}=[ym]$" "$ABS_OUT/.config"; then
+                  echo "DRIFT: $(basename "$frag") wants ${sym} off, final .config has it on" | tee -a "$ABS_LOG/fragment-drift.log"
+                  DRIFT=$((DRIFT + 1))
+                fi
+              elif ! grep -qxF "${sym}=${want}" "$ABS_OUT/.config"; then
+                echo "DRIFT: $(basename "$frag") wants ${sym}=${want}, final .config has: $(grep -E "^(# )?${sym}[= ]" "$ABS_OUT/.config" | head -1 || true)" | tee -a "$ABS_LOG/fragment-drift.log"
+                DRIFT=$((DRIFT + 1))
+              fi
+            done < "$frag"
+          done
+          if [[ "$DRIFT" -gt 0 ]]; then
+            echo "::warning::$DRIFT fragment symbol(s) did not survive olddefconfig — see logs/fragment-drift.log (missing dependency or symbol not in this tree's Kconfig)"
+          else
+            echo "OK: every fragment symbol is present in the final .config as requested"
+          fi
       # ── 14b. Security/config guard ────────────────────────────────────────────
-      # REQUIRED array: CONFIG_KSU_MANUAL_HOOK removed (not a real symbol
-      # in xxksu). FORBIDDEN array UNCHANGED — UNVERIFIED against this
-      # specific branch's defconfig in this pass (header note 8).
+      # REQUIRED array: CONFIG_KSU_MANUAL_HOOK removed (not a real symbol in
+      # xxksu). FORBIDDEN array unchanged from Mk9; none of those symbols are
+      # forced =y by this base's defconfig, and this guard passed on the
+      # d6c6d8b tree in CI run 35862553362.
       - name: Guard pass — verify security restrictions disabled and KSU/SUSFS enabled
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
@@ -1239,16 +1269,36 @@ jobs:
           echo "Identity: $KERNEL_IDENTITY"
           echo "KCFLAGS: $CHIMERA_KCFLAGS"
           echo "KCFLAGS SHA-256: $KCFLAGS_HASH"
-      # ── 19. vmlinux KSU/SUSFS symbol guard — REQUIRED array rewritten ────────
-      # See header note 4 for exactly why each old symbol was dropped and
-      # each new one was chosen, and what remains unverified about
-      # guard-set completeness.
+      # ── 19. vmlinux xxksu/SUSFS symbol guard ─────────────────────────────────
+      # Why the Mk9 / first-Mk10 list failed: xxksu is one translation unit
+      # (kernel/ksu.c #includes hook/*.c). ksu_lsm_hook_init() is
+      # `static __init` with a single caller (ksu_core_init(), itself static,
+      # single caller kernelsu_init()), so Clang -O2 inlines it and no symbol is
+      # emitted — CI run 35862553362 failed here with "missing symbol:
+      # ksu_lsm_hook_init" while the other three passed.
+      # Symbols below cannot be inlined away because their address is taken
+      # (stored into an LSM slot, passed to kthread_run, or placed in the
+      # initcall table), each gated on the config that compiles it:
+      #   FATAL if missing (observed in CI run 35862553362):
+      #     kernelsu_init             device_initcall entry
+      #     susfs_is_inode_sus_path   fs/susfs.c
+      #     ksu_task_fix_setuid       LSM_HACK_INIT arg (LSM_SECURITY_HOOKS=y)
+      #   WARN only (chosen from source, NOT yet observed in a built vmlinux —
+      #   UNVERIFIED, REQUIRES CONFIRMATION; promote to REQUIRED once a CI run
+      #   shows them):
+      #     ksu_inode_rename          LSM_HACK_INIT arg (LSM_SECURITY_HOOKS=y)
+      #     ksu_bprm_committing_creds LSM_HACK_INIT arg (+ KSU_FEATURE_SULOG=y)
+      #     ksu_syscall_table_restore kthread_run arg (TAMPER_SYSCALL_TABLE=y)
+      # On any miss the step prints every ksu_/susfs_/kernelsu symbol found so
+      # the list can be corrected. Name matching tolerates an LTO-style
+      # ".llvm.<n>" suffix.
       - name: Guard pass — verify xxksu/SUSFS symbols
         if: ${{ inputs.dry_run != true }}
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
           VMLINUX="$ABS_OUT/vmlinux"
+          CFG="$ABS_OUT/.config"
           [[ -f "$VMLINUX" ]] || {
             echo "FATAL: vmlinux not found" >&2
             exit 1
@@ -1267,22 +1317,45 @@ jobs:
             || true
           REQUIRED=(
             kernelsu_init
-            ksu_lsm_hook_init
-            ksu_task_fix_setuid
             susfs_is_inode_sus_path
           )
+          EXPECTED=()   # warn-only until observed in a real build
+          if grep -qx 'CONFIG_KSU_LSM_SECURITY_HOOKS=y' "$CFG"; then
+            REQUIRED+=(ksu_task_fix_setuid)
+            EXPECTED+=(ksu_inode_rename)
+            if grep -qx 'CONFIG_KSU_FEATURE_SULOG=y' "$CFG"; then
+              EXPECTED+=(ksu_bprm_committing_creds)
+            fi
+          fi
+          if grep -qx 'CONFIG_KSU_TAMPER_SYSCALL_TABLE=y' "$CFG"; then
+            EXPECTED+=(ksu_syscall_table_restore)
+          fi
+          have_sym() {
+            grep -qE "^[0-9a-fA-F]+ [A-Za-z] ${1}(\.llvm\.[0-9]+)?$" "$ABS_LOG/vmlinux-symbols.log"
+          }
           FAIL=0
+          WARN=0
           for sym in "${REQUIRED[@]}"; do
-            if grep -q \
-              -E \
-              "^[0-9a-fA-F]+ [A-Za-z] ${sym}$" \
-              "$ABS_LOG/vmlinux-symbols.log"; then
+            if have_sym "$sym"; then
               echo "OK: $sym"
             else
               echo "FATAL: missing symbol: $sym"
               FAIL=1
             fi
           done
+          for sym in "${EXPECTED[@]}"; do
+            if have_sym "$sym"; then
+              echo "OK (observed): $sym"
+            else
+              echo "::warning::expected symbol not found in vmlinux: $sym (UNVERIFIED guard entry — check the symbol list below)"
+              WARN=1
+            fi
+          done
+          if [[ "$FAIL" -ne 0 || "$WARN" -ne 0 ]]; then
+            echo
+            echo "ksu_/susfs_/kernelsu symbols actually present in vmlinux:"
+            grep -E ' (ksu_|susfs_|kernelsu)' "$ABS_LOG/vmlinux-symbols.log" | head -80 || true
+          fi
           [[ "$FAIL" -eq 0 ]] || exit 1
       # ── 20. Assemble legacy Samsung dtb.img ──────────────────────────────────
       - name: Assemble dtb.img from star2lte device DTBs
@@ -1348,7 +1421,7 @@ jobs:
           echo "ACTUAL_KERNEL_RELEASE=$ACTUAL_RELEASE" >> "$GITHUB_ENV"
           echo "Actual kernel release: $ACTUAL_RELEASE"
       # ── 20b. Generate identity-aware anykernel.sh ─────────────────────────────
-      # Symbol list + KERNEL_NAME updated per header note 10.
+      # Symbol list mirrors the vmlinux guard (step 19).
       - name: Generate identity-aware anykernel.sh
         if: ${{ inputs.dry_run != true }}
         run: |
@@ -1374,7 +1447,7 @@ jobs:
           #   Base repo:               ${BASE_REPO}
           #   Base commit:             ${BASE_COMMIT}
           #   xxksu (KernelSU) commit: ${KSU_GIT_VERSION}
-          #   Chimera ref/commit:      ${CHIMERA_REF} / ${CHIMERA_SHA}
+          #   Chimera overlay:         ${CHIMERA_REPO} @ ${CHIMERA_SHA}
           #
           # Build:
           #   Timestamp:               ${KBUILD_BUILD_TIMESTAMP}
@@ -1386,9 +1459,8 @@ jobs:
           # xxksu/SUSFS symbols verified present in vmlinux (self-hooking
           # fork — no manual call-site patches applied to fs/exec.c et al.):
           #   kernelsu_init (device_initcall entry point)
-          #   ksu_lsm_hook_init
-          #   ksu_task_fix_setuid
           #   susfs_is_inode_sus_path
+          #   ksu_task_fix_setuid
           #
           properties() { '
           kernel.string=${UNAME_PREVIEW} ${KERNEL_IDENTITY} by AegisDevLabs | compiler=${CLANG_VERSION} | cfg_sha256=${FINAL_CONFIG_HASH:0:12} | base=${BASE_COMMIT:0:8} | ksu=${KSU_GIT_VERSION}
@@ -1602,7 +1674,7 @@ jobs:
             | Base repo | `${{ inputs.base_repo }}` |
             | Base commit | `${{ env.BASE_COMMIT }}` |
             | xxksu (KernelSU) | `${{ env.KSU_GIT_VERSION }}` |
-            | Chimera ref/commit | `${{ env.CHIMERA_REF }}` / `${{ env.CHIMERA_SHA }}` |
+            | Chimera overlay | `${{ inputs.chimera_repo }}` @ `${{ env.CHIMERA_SHA }}` |
             | Profile | `${{ inputs.profile }}` |
             | Toolchain | `${{ inputs.toolchain }}` |
             | Compiler | `${{ env.CLANG_VERSION }}` |
@@ -1616,9 +1688,8 @@ jobs:
             xxksu/SUSFS symbols verified in vmlinux (self-hooking fork —
             no manual patches to fs/exec.c/fs/open.c/fs/stat.c/kernel/sys.c):
             - kernelsu_init
-            - ksu_lsm_hook_init
-            - ksu_task_fix_setuid
             - susfs_is_inode_sus_path
+            - ksu_task_fix_setuid
             Image and dtb.img are packaged and attached separately. See
             SHA256SUMS / manifest.json for exact artifact hashes and full
             build provenance.
