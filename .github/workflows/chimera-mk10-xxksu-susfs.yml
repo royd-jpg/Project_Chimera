@@ -180,13 +180,13 @@ on:
         default: "vendored in base branch lineage-24.0-xxksu3-susfs2"
 
       brand:
-        description: "LOCALVERSION suffix (must start with '-'). '-cm10x[git7]' resolves to '-cm10x' + first 7 hex chars of base_ref. Pick 'Other' to type a custom value."
+        description: "LOCALVERSION suffix (must start with '-'). '-c10x[git7]' resolves to '-c10x' + first 7 hex chars of base_ref. Pick 'Other' to type a custom value."
         required: true
         type: choice
         options:
           - "-Chimera_Mk10"
           - "-24463729"
-          - "-cm10x[git7]"
+          - "-c10x[git7]"
           - "Other"
         default: "-Chimera_Mk10"
       custom_brand:
@@ -343,13 +343,13 @@ jobs:
           set -Eeuo pipefail
           if [[ "${{ inputs.brand }}" == "Other" ]]; then
             FINAL_BRAND="${{ inputs.custom_brand }}"
-          elif [[ "${{ inputs.brand }}" == "-cm10x[git7]" ]]; then
+          elif [[ "${{ inputs.brand }}" == "-c10x[git7]" ]]; then
             BASE_REF_FULL="${{ inputs.base_ref }}"
             [[ "$BASE_REF_FULL" =~ ^[0-9a-f]{40}$ ]] || {
-              echo "FATAL: cannot derive -cm10x[git7] brand — base_ref is not a 40-hex SHA: '$BASE_REF_FULL'" >&2
+              echo "FATAL: cannot derive -c10x[git7] brand — base_ref is not a 40-hex SHA: '$BASE_REF_FULL'" >&2
               exit 1
             }
-            FINAL_BRAND="-cm10x${BASE_REF_FULL:0:7}"
+            FINAL_BRAND="-c10x${BASE_REF_FULL:0:7}"
           else
             FINAL_BRAND="${{ inputs.brand }}"
           fi
@@ -899,12 +899,32 @@ jobs:
             echo "FATAL: TC_URL is empty (zyc_stable's dynamic link lookup may have failed upstream)" >&2
             exit 1
           fi
-          aria2c -x 16 -s 16 -k 1M -c \
-            --max-tries=5 --retry-wait=5 --timeout=60 \
-            --dir="/tmp" --out="clang_archive" \
-            "$TC_URL"
+          DL_HOST="$(printf '%s' "$TC_URL" | sed -E 's#^[a-z]+://([^/]+)/.*#\1#')"
+          if [[ "$DL_HOST" == "android.googlesource.com" ]]; then
+            # android.googlesource.com's +archive endpoint returns 503 under
+            # aria2's default 16-connection range-request mode (observed:
+            # run aborted with "response status is not successful. status=503"
+            # after exhausting aria2's 5-try budget). UNVERIFIED root cause —
+            # inferred from the 503 pattern, not confirmed with Google; this
+            # sandbox cannot reach the host to test. Fall back to a single
+            # connection with its own longer backoff.
+            echo "android.googlesource.com detected — using single-connection curl (see comment)"
+            for attempt in $(seq 1 8); do
+              if curl -fL --connect-timeout 30 --max-time 300 -o "$ARCHIVE" "$TC_URL"; then
+                break
+              fi
+              echo "curl attempt $attempt/8 failed (likely 503 throttle); backing off $((attempt * 10))s" >&2
+              rm -f "$ARCHIVE"
+              sleep $((attempt * 10))
+            done
+          else
+            aria2c -x 16 -s 16 -k 1M -c \
+              --max-tries=5 --retry-wait=5 --timeout=60 \
+              --dir="/tmp" --out="clang_archive" \
+              "$TC_URL"
+          fi
           if [[ ! -s "$ARCHIVE" ]]; then
-            echo "FATAL: aria2c failed to download the toolchain archive, or it is empty." >&2
+            echo "FATAL: failed to download the toolchain archive (host: ${DL_HOST:-unknown}), or it is empty." >&2
             exit 1
           fi
           if [[ -n "${TC_SHA256:-}" ]]; then
@@ -926,6 +946,7 @@ jobs:
             exit 1
           fi
           echo "Toolchain ready: $(find "$ABS_TC" -type f | wc -l) file(s)"
+          
       - name: Configure toolchain PATH
         run: |
           set -Eeuo pipefail
