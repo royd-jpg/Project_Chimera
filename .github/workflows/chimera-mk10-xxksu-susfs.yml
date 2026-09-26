@@ -225,7 +225,7 @@ on:
           - "EVOXGMS: Tue Aug 11 13:18:57 UTC 2026"
           - "HLCYN: Tue Aug 18 13:16:25 UTC 2026"
           - "DRPFST: Tue Aug 11 07:06:26 UTC 2026"
-          - "EVOX18: Tue Sep 22 09:04:29 UTC 2026"
+          - "EVOX18: Tue Sep 22 01:04:29 UTC 2026"
           - "Other"
         default: "LOS24: Sun Sep 13 14:21:50 CEST 2026"
       custom_build_date:
