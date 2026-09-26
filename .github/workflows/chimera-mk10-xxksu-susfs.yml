@@ -208,8 +208,8 @@ on:
           - "GA"
           - "RC0"
           - "Other"
-        default: "MTRXX"
-      custom_build_user:
+        default: "Other"
+      custom_build_user: 
         description: "Custom build user — only used if 'build_user' above is set to 'Other'"
         required: false
         type: string
@@ -218,7 +218,7 @@ on:
         description: "KBUILD_BUILD_HOST"
         required: false
         type: string
-        default: "CM10XNNNN"
+        default: "AegisDevLabs"
 
       build_version:
         description: "KBUILD_BUILD_VERSION (#N token)"
@@ -233,14 +233,14 @@ on:
         options:
           - "MTRXX: Wed Aug 19 03:26:19 UTC 2026"
           - "LOS232: Sat Sep 12 23:46:37 CEST 2026"
-          - "LOS24: Sun Sep 13 14:21:50 CEST 2026"
+          - "LOS24: Fri Sep 25 23:58:24 CEST 2026"
           - "EVOXV: Tue Aug 11 10:23:04 UTC 2026"
           - "EVOXGMS: Tue Aug 11 13:18:57 UTC 2026"
           - "HLCYN: Tue Aug 18 13:16:25 UTC 2026"
           - "DRPFST: Tue Aug 11 07:06:26 UTC 2026"
           - "EVOX18: Tue Sep 22 01:04:29 UTC 2026"
           - "Other"
-        default: "LOS24: Sun Sep 13 14:21:50 CEST 2026"
+        default: "LOS24: Fri Sep 25 23:58:24 CEST 2026"
       custom_build_date:
         description: "Custom build timestamp — only used if 'build_date' above is set to 'Other' (no ROM prefix needed here)"
         required: false
