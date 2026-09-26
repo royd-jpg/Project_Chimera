@@ -143,10 +143,10 @@ on:
         default: "gavdoc38/android_kernel_samsung_exynos9810"
 
       base_ref:
-        description: "Base ref: full 40-hex commit SHA only. Default = tip of gavdoc38 lineage-24.0-xxksu3-susfs2 (d6c6d8b, verified with git ls-remote)."
+        description: "Base ref: full 40-hex commit SHA only. Default = tip of gavdoc38 lineage-24.0-xxksu3-susfs2 (4140f60, verified with git ls-remote)."
         required: false
         type: string
-        default: "d6c6d8b40231931d9054c60bc3d8dd55fc81e2c4"
+        default: "4140f60361c1196ea8d500c265fb171d4627e15c"
 
       ksu_commit:
         description: "xxksu (gavdoc38/KernelSU.git) exact commit SHA — this is a DIFFERENT fork from KernelSU-Next, not a newer pin of it. Must be bumped together with base_ref."
@@ -225,6 +225,7 @@ on:
           - "EVOXGMS: Tue Aug 11 13:18:57 UTC 2026"
           - "HLCYN: Tue Aug 18 13:16:25 UTC 2026"
           - "DRPFST: Tue Aug 11 07:06:26 UTC 2026"
+          - "EVOX18: Tue Sep 22 09:04:29 UTC 2026"
           - "Other"
         default: "LOS24: Sun Sep 13 14:21:50 CEST 2026"
       custom_build_date:
