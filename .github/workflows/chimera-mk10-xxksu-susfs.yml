@@ -167,15 +167,15 @@ on:
         default: "vendored in base branch lineage-24.0-xxksu3-susfs2"
 
       brand:
-        description: "LOCALVERSION suffix (must start with '-'). '-cm10x[git7]' resolves to '-cm10x' + first 7 hex chars of base_ref. Pick 'Other' to type a custom value."
+        description: "LOCALVERSION suffix (must start with '-'). '-c10x[git7]' resolves to '-cm10x' + first 7 hex chars of base_ref. Pick 'Other' to type a custom value."
         required: true
         type: choice
         options:
           - "-Chimera_Mk10"
           - "-24463729"
-          - "-cm10x[git7]"
+          - "-c10x[git7]"
           - "Other"
-        default: "-cm10x[git7]"
+        default: "-c10x[git7]"
       custom_brand:
         description: "Custom brand — only used if 'brand' above is set to 'Other' (must start with '-')"
         required: false
@@ -253,8 +253,8 @@ env:
   CCACHE_MAXSIZE: "3G"
 
   BRAND_DEFAULT: "-Chimera_Mk10"
-  BUILD_USER_DEFAULT: "GA"
-  BUILD_HOST_DEFAULT: "CM10XNNNN"
+  BUILD_USER_DEFAULT: "C10XNNNNNNN"
+  BUILD_HOST_DEFAULT: "AegisDevLabs"
   BUILD_VERSION_DEFAULT: "1"
   KBUILD_BUILD_TIMESTAMP_DEFAULT: "Mon 1 Jan 00:00:00 UTC 2026"
 
