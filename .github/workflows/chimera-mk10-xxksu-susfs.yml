@@ -175,7 +175,7 @@ on:
           - "-24463729"
           - "-cm10x[git7]"
           - "Other"
-        default: "-Chimera_Mk10"
+        default: "-cm10x[git7]"
       custom_brand:
         description: "Custom brand — only used if 'brand' above is set to 'Other' (must start with '-')"
         required: false
@@ -195,7 +195,7 @@ on:
           - "GA"
           - "RC0"
           - "Other"
-        default: "MTRXX"
+        default: "Other"
       custom_build_user:
         description: "Custom build user — only used if 'build_user' above is set to 'Other'"
         required: false
@@ -205,7 +205,7 @@ on:
         description: "KBUILD_BUILD_HOST"
         required: false
         type: string
-        default: "CM10XNNNN"
+        default: "AegisDevLabs"
 
       build_version:
         description: "KBUILD_BUILD_VERSION (#N token)"
@@ -227,7 +227,7 @@ on:
           - "DRPFST: Tue Aug 11 07:06:26 UTC 2026"
           - "EVOX18: Tue Sep 22 01:04:29 UTC 2026"
           - "Other"
-        default: "LOS24: Sun Sep 13 14:21:50 CEST 2026"
+        default: "EVOX18: Tue Sep 22 01:04:29 UTC 2026"
       custom_build_date:
         description: "Custom build timestamp — only used if 'build_date' above is set to 'Other' (no ROM prefix needed here)"
         required: false
