@@ -80,6 +80,19 @@
 #   * CI log shows two "LLVM ERROR: IO failure on output stream: Broken pipe"
 #     lines during the kernel build. The build continued past them; source not
 #     investigated.
+#   * aosp23 toolchain entry (added below): the archive URL was supplied
+#     directly by the user, not discovered/verified by this workflow's usual
+#     audit process. android.googlesource.com is unreachable from the sandbox
+#     that maintains this file (blocked by robots.txt for the fetch tool, and
+#     not present in the sandbox's outbound network allowlist), so — unlike
+#     weebx's pinned SHA-256 in the Mk9 dossier — NONE of the following were
+#     checked: archive downloads/extracts cleanly, its internal layout matches
+#     the "find a bin/ dir" logic in "Configure toolchain PATH", it actually
+#     reports as Clang 23.0.1, or its cross binutils prefixes match
+#     CROSS_COMPILE/CROSS_COMPILE_ARM32. No TC_SHA256 pin is set for this
+#     entry (unlike weebx) because no checksum was ever computed. Treat the
+#     first CI run on aosp23 as the real validation, same caveat this file
+#     already carries for weebx.
 # ============================================================================
 
 permissions:
@@ -100,10 +113,10 @@ on:
         default: cm9
 
       toolchain:
-        description: "Toolchain: llvm22/llvm21/llvm20/aosp22/aosp21/aosp20/aosp19/neutron19/neutron23/neutron24/zyc_stable/weebx (weebx = Clang 20.0.0git snapshot, frozen since 2024-12-06; proton removed — unmaintained since 2021-05-22, frozen at Clang 13.0.0). UNVERIFIED whether this matrix satisfies an LOS24/A17 minimum compiler requirement (see header)."
+        description: "Toolchain: llvm22/llvm21/llvm20/aosp23/aosp22/aosp21/aosp20/aosp19/neutron19/neutron23/neutron24/zyc_stable/weebx (weebx = Clang 20.0.0git snapshot, frozen since 2024-12-06; proton removed — unmaintained since 2021-05-22, frozen at Clang 13.0.0; aosp23 = Clang r614150 (23.0.1) per user-supplied archive URL — UNVERIFIED, see header). UNVERIFIED whether this matrix satisfies an LOS24/A17 minimum compiler requirement (see header)."
         required: true
         type: choice
-        options: [llvm22, llvm21, llvm20, aosp22, aosp21, aosp20, aosp19, neutron19, neutron23, neutron24, zyc_stable, weebx]
+        options: [llvm22, llvm21, llvm20, aosp23, aosp22, aosp21, aosp20, aosp19, neutron19, neutron23, neutron24, zyc_stable, weebx]
         default: llvm22
 
       dry_run:
@@ -167,15 +180,15 @@ on:
         default: "vendored in base branch lineage-24.0-xxksu3-susfs2"
 
       brand:
-        description: "LOCALVERSION suffix (must start with '-'). '-c10x[git7]' resolves to '-cm10x' + first 7 hex chars of base_ref. Pick 'Other' to type a custom value."
+        description: "LOCALVERSION suffix (must start with '-'). '-cm10x[git7]' resolves to '-cm10x' + first 7 hex chars of base_ref. Pick 'Other' to type a custom value."
         required: true
         type: choice
         options:
           - "-Chimera_Mk10"
           - "-24463729"
-          - "-c10x[git7]"
+          - "-cm10x[git7]"
           - "Other"
-        default: "-c10x[git7]"
+        default: "-Chimera_Mk10"
       custom_brand:
         description: "Custom brand — only used if 'brand' above is set to 'Other' (must start with '-')"
         required: false
@@ -195,7 +208,7 @@ on:
           - "GA"
           - "RC0"
           - "Other"
-        default: "Other"
+        default: "MTRXX"
       custom_build_user:
         description: "Custom build user — only used if 'build_user' above is set to 'Other'"
         required: false
@@ -205,7 +218,7 @@ on:
         description: "KBUILD_BUILD_HOST"
         required: false
         type: string
-        default: "AegisDevLabs"
+        default: "CM10XNNNN"
 
       build_version:
         description: "KBUILD_BUILD_VERSION (#N token)"
@@ -227,7 +240,7 @@ on:
           - "DRPFST: Tue Aug 11 07:06:26 UTC 2026"
           - "EVOX18: Tue Sep 22 01:04:29 UTC 2026"
           - "Other"
-        default: "EVOX18: Tue Sep 22 01:04:29 UTC 2026"
+        default: "LOS24: Sun Sep 13 14:21:50 CEST 2026"
       custom_build_date:
         description: "Custom build timestamp — only used if 'build_date' above is set to 'Other' (no ROM prefix needed here)"
         required: false
@@ -253,8 +266,8 @@ env:
   CCACHE_MAXSIZE: "3G"
 
   BRAND_DEFAULT: "-Chimera_Mk10"
-  BUILD_USER_DEFAULT: "C10XNNNNNNN"
-  BUILD_HOST_DEFAULT: "AegisDevLabs"
+  BUILD_USER_DEFAULT: "GA"
+  BUILD_HOST_DEFAULT: "CM10XNNNN"
   BUILD_VERSION_DEFAULT: "1"
   KBUILD_BUILD_TIMESTAMP_DEFAULT: "Mon 1 Jan 00:00:00 UTC 2026"
 
@@ -293,7 +306,7 @@ jobs:
             *) echo "FATAL: profile must be 'cm9' or 'cm9e', got '${{ inputs.profile }}'" >&2; FAIL=1 ;;
           esac
           case "${{ inputs.toolchain }}" in
-            llvm22|llvm21|llvm20|aosp22|aosp21|aosp20|aosp19|neutron19|neutron23|neutron24|zyc_stable|weebx) : ;;
+            llvm22|llvm21|llvm20|aosp23|aosp22|aosp21|aosp20|aosp19|neutron19|neutron23|neutron24|zyc_stable|weebx) : ;;
             *) echo "FATAL: unsupported toolchain '${{ inputs.toolchain }}'" >&2; FAIL=1 ;;
           esac
           if ! [[ "${{ inputs.base_ref }}" =~ ^[0-9a-f]{40}$ ]]; then
@@ -328,7 +341,6 @@ jobs:
       - name: Resolve build identity inputs (choice + Other + ROM-prefix strip)
         run: |
           set -Eeuo pipefail
-
           if [[ "${{ inputs.brand }}" == "Other" ]]; then
             FINAL_BRAND="${{ inputs.custom_brand }}"
           elif [[ "${{ inputs.brand }}" == "-cm10x[git7]" ]]; then
@@ -345,30 +357,25 @@ jobs:
             echo "FATAL: resolved brand must start with '-', got '$FINAL_BRAND'" >&2
             exit 1
           }
-
           if [[ "${{ inputs.build_user }}" == "Other" ]]; then
             FINAL_BUILD_USER="${{ inputs.custom_build_user }}"
           else
             FINAL_BUILD_USER="${{ inputs.build_user }}"
           fi
-
           FINAL_BUILD_HOST="${{ inputs.build_host }}"
           FINAL_BUILD_VERSION="${{ inputs.build_version }}"
-
           if [[ "${{ inputs.build_date }}" == "Other" ]]; then
             FINAL_BUILD_DATE="${{ inputs.custom_build_date }}"
           else
             RAW_DATE="${{ inputs.build_date }}"
             FINAL_BUILD_DATE="${RAW_DATE#*: }"
           fi
-
           for name in FINAL_BRAND FINAL_BUILD_USER FINAL_BUILD_HOST FINAL_BUILD_VERSION FINAL_BUILD_DATE; do
             [[ -n "${!name}" ]] || {
               echo "FATAL: $name resolved empty — 'Other' selected with an empty custom_* field?" >&2
               exit 1
             }
           done
-
           {
             echo "FINAL_BRAND=$FINAL_BRAND"
             echo "FINAL_BUILD_USER=$FINAL_BUILD_USER"
@@ -376,7 +383,6 @@ jobs:
             echo "FINAL_BUILD_VERSION=$FINAL_BUILD_VERSION"
             echo "FINAL_BUILD_DATE=$FINAL_BUILD_DATE"
           } >> "$GITHUB_ENV"
-
           echo "Resolved brand:         $FINAL_BRAND"
           echo "Resolved build_user:    $FINAL_BUILD_USER"
           echo "Resolved build_host:    $FINAL_BUILD_HOST"
@@ -427,7 +433,6 @@ jobs:
             exit 1
           fi
           echo "CHIMERA_SHA=$ACTUAL_SHA" >> "$GITHUB_ENV"
-
       - name: Verify required overlay files (two-repo layout)
         run: |
           set -Eeuo pipefail
@@ -465,7 +470,6 @@ jobs:
             exit 1
           fi
           echo "PASS: overlay files present; overlay script's GITHUB_WORKSPACE use is patches/-only"
-
       # ── 3. Checkout gavdoc38 xxksu+SUSFS base → kernel/ ───────────────────────
       - name: Checkout gavdoc38 base (xxksu + SUSFS v2.3.0 integration)
         uses: actions/checkout@v4
@@ -582,7 +586,6 @@ jobs:
           echo "Kernel identity: $KERNEL_IDENTITY"
           echo "KCFLAGS: $CHIMERA_KCFLAGS"
           echo "KCFLAGS SHA-256: $KCFLAGS_HASH"
-
       # ── 5. Validate base ─────────────────────────────────────────────────────
       - name: Preflight — verify base ref and clean worktree
         working-directory: ${{ env.KERNEL_DIR }}
@@ -668,7 +671,6 @@ jobs:
             'obj-\$\(CONFIG_KSU_SUSFS\) \+= susfs.o' fs/Makefile
           check ".gitmodules maps KernelSU to gavdoc38/KernelSU (xxksu)" \
             'url = https://github.com/gavdoc38/KernelSU(\.git)?$' .gitmodules
-
           if [[ -L drivers/kernelsu ]]; then
             LINK_TARGET="$(readlink drivers/kernelsu)"
             echo "OK:    drivers/kernelsu is a symlink -> $LINK_TARGET"
@@ -682,7 +684,6 @@ jobs:
             echo "FATAL: drivers/kernelsu is not a symlink (expected -> ../KernelSU/kernel) — layout may have changed upstream" >&2
             FAIL=1
           fi
-
           for f in KernelSU/kernel/ksu.c KernelSU/kernel/Kconfig KernelSU/kernel/hook/lsm_hooks_list.c KernelSU/kernel/hook/syscall_table_hook_arm64.c; do
             if [[ -f "$f" ]]; then
               echo "OK:    $f"
@@ -695,7 +696,6 @@ jobs:
             echo "FATAL: kernelsu_init is not registered via device_initcall — xxksu's self-hooking entry point may have moved" >&2
             FAIL=1
           }
-
           [[ "$FAIL" -eq 0 ]] || {
             echo
             echo "One or more xxksu build-wiring connections expected from base_ref=${{ inputs.base_ref }} were not found."
@@ -772,7 +772,8 @@ jobs:
           }
           echo
           echo "PASS: all Chimera overlay markers present"
-      # ── 11c. Toolchain resolution — UNCHANGED from Mk9 ──────────────────────
+      # ── 11c. Toolchain resolution ────────────────────────────────────────────
+      # aosp23 added per user-supplied URL — UNVERIFIED, see header.
       - name: Resolve toolchain configuration
         id: tc-resolve
         run: |
@@ -801,6 +802,23 @@ jobs:
             aosp22)
               TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/mirror-goog-main-llvm-toolchain-source/clang-r596125.tar.gz"
               TC_CACHE_KEY="aosp-clang-r596125-ubuntu-24.04-v2"
+              ;;
+            aosp23)
+              # AOSP Clang r614150 (reported as Clang 23.0.1) — archive URL
+              # supplied directly by the user, NOT discovered/verified by this
+              # workflow's usual source-audit process. android.googlesource.com
+              # was unreachable from the environment that edited this file
+              # (blocked by robots.txt for its fetch tool, and not present in
+              # its sandboxed outbound network allowlist), so none of the
+              # following were checked: the archive downloads/extracts, its
+              # internal layout has a bin/ dir the "Configure toolchain PATH"
+              # step's shallowest-match logic can find, it actually reports as
+              # Clang 23.0.1, or its bundled binutils prefixes match
+              # CROSS_COMPILE/CROSS_COMPILE_ARM32 below. No TC_SHA256 is pinned
+              # here (unlike weebx) because no checksum was computed — treat
+              # the first CI run on this entry as the real validation.
+              TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/28337064939c0b4bb5804cddf35fb03d860edcf6/clang-r614150.tar.gz"
+              TC_CACHE_KEY="aosp-clang-r614150-ubuntu-24.04-v1"
               ;;
             llvm20)
               TC_URL="https://mirrors.edge.kernel.org/pub/tools/llvm/files/llvm-20.1.8-x86_64.tar.xz"
@@ -973,7 +991,6 @@ jobs:
             echo "$name.cfg: kept $(wc -l < "$FRAG_DIR/$name.cfg") of $(wc -l < "$SRC") lines"
           done
           echo "FRAG_DIR=$FRAG_DIR" >> "$GITHUB_ENV"
-
           CFG="$FRAG_DIR/chimera-xxksu-susfs.cfg"
           grep -qx 'CONFIG_KSU=y' "$CFG"      || { echo "FATAL: CONFIG_KSU=y missing from chimera-xxksu-susfs.cfg" >&2; exit 1; }
           grep -qx 'CONFIG_KSU_SUSFS=y' "$CFG" || { echo "FATAL: CONFIG_KSU_SUSFS=y missing from chimera-xxksu-susfs.cfg" >&2; exit 1; }
@@ -987,7 +1004,6 @@ jobs:
             echo "FATAL: CONFIG_KSU_MANUAL_HOOK / CONFIG_KSU_KPROBES_HOOK are KernelSU-Next symbols, not valid in xxksu's Kconfig — remove from the overlay fragments" >&2
             exit 1
           fi
-
           # Every CONFIG_KSU* symbol a fragment sets must exist in the pinned
           # xxksu Kconfig; otherwise Kconfig silently drops it (the failure mode
           # of pasting a KernelSU-Next fragment onto xxksu).
@@ -1003,7 +1019,6 @@ jobs:
           done < <(grep -ohE '^(# )?CONFIG_KSU[A-Za-z0-9_]*' "$FRAG_DIR"/*.cfg | sed 's/^# //' | sort -u)
           [[ "$FAIL" -eq 0 ]] || exit 1
           cat "$CFG"
-
       # ── 13. Merge Kconfig ────────────────────────────────────────────────────
       # Mk9 step 14 ("Normalize KernelSU hook mode") is intentionally absent:
       # xxksu has no CONFIG_KSU_MANUAL_HOOK / CONFIG_KSU_KPROBES_HOOK, and
@@ -1054,7 +1069,6 @@ jobs:
           echo "========== xxksu hook-mode symbols after merge+olddefconfig =========="
           grep '^CONFIG_KSU' "$ABS_OUT/.config" || true
           cp "$ABS_OUT/.config" "$ABS_LOG/post-merge.config"
-
           # Fragment intent vs final .config (warning-only).
           DRIFT=0
           : > "$ABS_LOG/fragment-drift.log"
@@ -1623,7 +1637,6 @@ jobs:
           }
           echo "AnyKernel3 zip: $ZIP_PATH ($(stat -c%s "$ZIP_PATH") bytes)"
           echo "anykernel_zip_path=$ZIP_PATH" >> "$GITHUB_OUTPUT"
-
       # ── 22-23c. Upload artifacts — UNCHANGED from Mk9, name prefix mk10 ──────
       - name: Upload Image artifact
         if: ${{ inputs.dry_run != true }}
