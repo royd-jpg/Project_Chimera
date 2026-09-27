@@ -67,6 +67,32 @@
 #   workflow edit; a dedicated overlay tag/branch is a steadier pin.
 #
 # UNVERIFIED — REQUIRES CONFIRMATION
+#   * JingMatrix zygote-injection demo scan (2026-09-27, org.matrix.demo, one
+#     device sample): "native-integrity" technique flagged "Soinfo block
+#     gaps" (2 soinfo blocks freed/reused out of load order, dlpi_subs
+#     stayed at 0 — the unload counter was not incremented for the free).
+#     This is a bionic linker/dl_iterate_phdr ledger inconsistency caused by
+#     SOME userspace component dlopen()ing then dlclose()ing a library
+#     inside the target process at runtime. gavdoc38/KernelSU (xxksu, this
+#     fork's KSU submodule) has no CONFIG_KSU_ZYGISK-class symbol in its
+#     Kconfig (confirmed absent from chimera-xxksu-susfs.cfg and this
+#     file's own source-audit notes above), so this workflow does not build
+#     anything that performs that dlopen/dlclose. Root cause is therefore
+#     most likely a separately installed KSU/Magisk module (e.g. a
+#     Zygisk-Next/ReZygisk-class loader) on the test device, NOT this
+#     kernel build — NOT FIXABLE from this YML.
+#     Separately, the "native" technique (pre-fork/zygote-adjacent process)
+#     flagged 4 hidden-mount reconciliation gaps (/system/etc/hosts,
+#     /system/etc, /system/fonts, /product/overlay — kernel stat sees an
+#     ext4 mount, mountinfo does not) and a "shared:1" mount-propagation
+#     class vs. "master:1" on the isolated-app scan. TRY_UMOUNT/SUS_MOUNT
+#     etc. are requested by chimera-xxksu-susfs.cfg but were NOT in this
+#     workflow's "Guard pass" REQUIRED array before this revision — see the
+#     "Security/config guard" step for the fix and its limits (it can only
+#     fail the build if the symbol didn't survive olddefconfig; it cannot
+#     prove the runtime mount-hide list itself is complete, which is
+#     chimera-device-specific.cfg / KSU manager configuration, not this
+#     workflow).
 #   * Warn-only guard symbols (ksu_inode_rename, ksu_bprm_committing_creds,
 #     ksu_syscall_table_restore) were chosen from source (address-taken static
 #     functions cannot be inlined away) but not observed in a built vmlinux;
@@ -1125,6 +1151,23 @@ jobs:
       # xxksu). FORBIDDEN array unchanged from Mk9; none of those symbols are
       # forced =y by this base's defconfig, and this guard passed on the
       # d6c6d8b tree in CI run 35862553362.
+      #
+      # SUSFS anti-detection symbols added to REQUIRED (2026-09-27): the
+      # "Merge Kconfig fragments" step only WARNS (::warning::, non-fatal) if
+      # a fragment symbol does not survive olddefconfig — e.g. because an
+      # unmet Kconfig `depends on` silently drops it. Every SUSFS symbol
+      # chimera-xxksu-susfs.cfg sets to =y is therefore promoted here from
+      # silent-drift to build-FATAL, so a build can no longer ship with a
+      # mount/path/uname/symbol hide silently disabled while still reporting
+      # success. This does not fix the demo-app zygote-injection scan's
+      # "Soinfo block gaps" finding (native-integrity technique) — that
+      # finding is a bionic-linker soinfo-ledger inconsistency (dlpi_subs not
+      # incremented for a freed block) produced by a runtime dlopen/dlclose
+      # of a helper library inside the target process. It is not gated by
+      # any CONFIG_KSU_SUSFS_* symbol in this fork's Kconfig (no
+      # CONFIG_KSU_ZYGISK-class symbol exists in gavdoc38/KernelSU per this
+      # workflow's own header notes), so it cannot be closed by a kernel
+      # Kconfig change — UNVERIFIED root cause, see chat reply.
       - name: Guard pass — verify security restrictions disabled and KSU/SUSFS enabled
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
@@ -1157,6 +1200,15 @@ jobs:
             CONFIG_KSU_SUSFS_SUS_PATH
             CONFIG_KSU_SUSFS_SUS_MAP
             CONFIG_KSU_SUSFS_SUS_KSTAT
+            # --- promoted from warn-only fragment-drift (see step header) ---
+            CONFIG_KSU_SUSFS_SUS_MOUNT
+            CONFIG_KSU_SUSFS_TRY_UMOUNT
+            CONFIG_KSU_SUSFS_SPOOF_UNAME
+            CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
+            CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
+            CONFIG_KSU_SUSFS_OPEN_REDIRECT
+            CONFIG_KSU_SUSFS_SUS_MEMFD
+            # --- unchanged ---
             CONFIG_HZ_300
             CONFIG_TCP_CONG_ADVANCED
             CONFIG_TCP_CONG_BBR
@@ -1178,6 +1230,22 @@ jobs:
           if ! grep -qE '^CONFIG_KSU_TAMPER_SYSCALL_TABLE=y|^CONFIG_KSU_LSM_SECURITY_HOOKS=y' "$CFG"; then
             echo "FATAL: no xxksu hook-mode symbol enabled in final .config" | tee -a "$ABS_LOG/config-guard.log"
             FAIL=1
+          fi
+          # CONFIG_KSU_SUSFS_ENABLE_LOG=y is bring-up-only per the overlay
+          # cfg's own comment (dmesg noise = a detection/leak surface). Not
+          # in REQUIRED (it must stay ON for bring-up profiles); instead
+          # this is a hard fail specifically for do_release=true builds, and
+          # a non-fatal warning otherwise so bring-up runs are unaffected.
+          if grep -qE '^CONFIG_KSU_SUSFS_ENABLE_LOG=y' "$CFG"; then
+            if [[ "${{ inputs.do_release }}" == "true" ]]; then
+              echo "FATAL: CONFIG_KSU_SUSFS_ENABLE_LOG=y on a do_release=true build — dmesg SUSFS logging is a detection/leak surface for a release artifact" | tee -a "$ABS_LOG/config-guard.log"
+              FAIL=1
+            else
+              echo "::warning::CONFIG_KSU_SUSFS_ENABLE_LOG=y (expected for bring-up; disable before a release build)"
+              echo "WARN: CONFIG_KSU_SUSFS_ENABLE_LOG=y (bring-up profile)" | tee -a "$ABS_LOG/config-guard.log"
+            fi
+          else
+            echo "OK: CONFIG_KSU_SUSFS_ENABLE_LOG not set" | tee -a "$ABS_LOG/config-guard.log"
           fi
           [[ "$FAIL" -eq 0 ]] || exit 1
       # ── 16. ccache ───────────────────────────────────────────────────────────
