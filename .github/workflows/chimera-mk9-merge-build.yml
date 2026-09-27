@@ -657,7 +657,7 @@ on:
           - "-24463729"
           - "-cm9x[git7]"
           - "Other"
-        default: "-Chimera_Mk9"
+        default: "-cm9x[git7]"
       custom_brand:
         description: "Custom brand — only used if 'brand' above is set to 'Other' (must start with '-')"
         required: false
@@ -677,17 +677,18 @@ on:
           - "GA"
           - "RC0"
           - "Other"
-        default: "MTRXX"
+        default: "Other"
       custom_build_user:
         description: "Custom build user — only used if 'build_user' above is set to 'Other'"
         required: false
         type: string
+        default: "CM9XNNNN"
 
       build_host:
         description: "KBUILD_BUILD_HOST"
         required: false
         type: string
-        default: "CM9XNNNN"
+        default: "AegisDevLabs"
 
       build_version:
         description: "KBUILD_BUILD_VERSION (#N token)"
@@ -706,9 +707,10 @@ on:
           - "EVOXGMS: Tue Aug 11 13:18:57 UTC 2026"
           - "HLCYN: Tue Aug 18 13:16:25 UTC 2026"
           - "DRPFST: Tue Aug 11 07:06:26 UTC 2026"
-          - "CRDROID: Fri Aug 7 19:06:04 PKT 2026"
+          - "CRDROID 12.11: Fri Aug 7 19:06:04 PKT 2026"
+          - "CRDROID 12.12: Sat Sep 26 21:05:43 PKT 2026"
           - "Other"
-        default: "MTRXX: Wed Aug 19 03:26:19 UTC 2026"
+        default: "Other"
       custom_build_date:
         description: "Custom build timestamp — only used if 'build_date' above is set to 'Other' (no ROM prefix needed here)"
         required: false
