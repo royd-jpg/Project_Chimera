@@ -517,12 +517,16 @@ jobs:
             echo "uname_preview=$UNAME_PREVIEW"
           } > "$ABS_LOG/inputs.env"
       # ── 4a2. Guard — required Chimera build-flag env vars present ───────────
-       - name: Guard required Chimera build-flag env vars present
+      - name: Guard required Chimera build-flag env vars present
         run: |
           set -Eeuo pipefail
 
-          : "${CHIMERA_KCFLAGS:?CHIMERA_KCFLAGS is empty or unset; check the workflow env block}"
-          : "${CHIMERA_KBUILD_LDFLAGS:?CHIMERA_KBUILD_LDFLAGS is empty or unset; check the workflow env block}"
+          : "${CHIMERA_KCFLAGS:?CHIMERA_KCFLAGS is unset or empty; check the workflow env block}"
+
+          if [[ -z "${CHIMERA_KBUILD_LDFLAGS+x}" ]]; then
+            echo "FATAL: CHIMERA_KBUILD_LDFLAGS is unset; define it in the workflow env block" >&2
+            exit 1
+          fi
 
           if [[ "$TOOLCHAIN" == "gcc" ]]; then
             EFFECTIVE_KCFLAGS="-O2 -fcommon -fno-strict-aliasing -Wno-error"
@@ -541,15 +545,25 @@ jobs:
           } | tee "$ABS_LOG/build-flag-env-guard.txt"
 
           if [[ "$TOOLCHAIN" == "gcc" ]]; then
-            for forbidden in \
-              "-fuse-ld=lld" \
-              "-Wno-unknown-warning-option" \
-              "-Wno-error=unused-but-set-global"; do
-              if [[ " $EFFECTIVE_KCFLAGS $EFFECTIVE_KBUILD_LDFLAGS " == *" $forbidden "* ]]; then
-                echo "FATAL: Clang-only flag leaked into GCC mode: $forbidden" >&2
-                exit 1
-              fi
-            done
+            [[ "$EFFECTIVE_KCFLAGS" != *"-fuse-ld=lld"* ]] || {
+              echo "FATAL: -fuse-ld=lld leaked into GCC KCFLAGS" >&2
+              exit 1
+            }
+
+            [[ "$EFFECTIVE_KCFLAGS" != *"-Wno-unknown-warning-option"* ]] || {
+              echo "FATAL: Clang-only warning flag leaked into GCC KCFLAGS" >&2
+              exit 1
+            }
+
+            [[ "$EFFECTIVE_KCFLAGS" != *"-Wno-error=unused-but-set-global"* ]] || {
+              echo "FATAL: Clang-only warning flag leaked into GCC KCFLAGS" >&2
+              exit 1
+            }
+
+            [[ -z "$EFFECTIVE_KBUILD_LDFLAGS" ]] || {
+              echo "FATAL: GCC effective KBUILD_LDFLAGS must be empty" >&2
+              exit 1
+            }
 
             echo "PASS: GCC mode has no Clang-only flags"
           else
