@@ -1,580 +1,71 @@
-name: Project Chimera Mk9 — gavdoc38 Canonical Base Build v.20260927
+name: Project Chimera Mk9 — gavdoc38 Canonical Base Build v.20260928
 # ─────────────────────────────────────────────────────────────────────────────
 # VERSION HISTORY (append-only — do not delete prior entries)
 #
-# v.20260927 - aosp23 toolchain entry (added below): the archive URL was supplied
-#     directly by the user, not discovered/verified by this workflow's usual
-#     audit process. android.googlesource.com is unreachable from the sandbox
-#     that maintains this file (blocked by robots.txt for the fetch tool, and
-#     not present in the sandbox's outbound network allowlist), so — unlike
-#     weebx's pinned SHA-256 in the Mk9 dossier — NONE of the following were
-#     checked: archive downloads/extracts cleanly, its internal layout matches
-#     the "find a bin/ dir" logic in "Configure toolchain PATH", it actually
-#     reports as Clang 23.0.1, or its cross binutils prefixes match
-#     CROSS_COMPILE/CROSS_COMPILE_ARM32. No TC_SHA256 pin is set for this
-#     entry (unlike weebx) because no checksum was ever computed. Treat the
-#     first CI run on aosp23 as the real validation, same caveat this file
-#     already carries for weebx.
-# ─────────────────────────────────────────────────────────────────────────────
-# ─────────────────────────────────────────────────────────────────────────────
-# VERSION HISTORY (append-only — do not delete prior entries)
+# v.20260928 — Added GCC cross-toolchain support.
+#   Kconfig, kernelrelease, and kernel-build invocations now select GCC or
+#   LLVM arguments dynamically. GCC mode uses the system AArch64 and ARM
+#   cross-tools with LLVM=0 and LLVM_IAS=0. LLVM modes retain their resolved
+#   LLVM settings. Compiler and linker identity are captured and validated.
+#   KernelSU manual-hook normalization and actual kernel-release detection no
+#   longer contain hard-coded LLVM-only make arguments.
 #
-# v.20260921 — two additions. No change to base_ref/ksu_commit/verify-step
-#   patterns/existing toolchain entries/packaging logic. Step count unchanged.
+# v.20260927 — Added the aosp23 toolchain option.
+#   Uses the supplied AOSP Clang r614150 archive URL. The archive URL,
+#   extraction layout, reported compiler version, cross-binutils prefixes,
+#   and download integrity were not independently verified. No SHA-256 pin
+#   is present. The first aosp23 CI run is the required validation.
 #
-#   [1] New toolchain choice `weebx` (XSans0/WeebX-Clang).
-#       URL: what raw.githubusercontent.com/XSans0/WeebX-Clang/main/main/
-#       link.txt resolved to at add time:
-#         https://github.com/XSans0/WeebX-Clang/releases/download/
-#           WeebX-Clang-20.0.0git-release/WeebX-Clang-20.0.0git.tar.gz
-#       Hardcoded rather than resolved dynamically (unlike zyc_stable): the
-#       link file has not moved off this asset, and a dynamic lookup would
-#       defeat the SHA-256 pin below.
-#       VERIFIED (archive downloaded in full and inspected directly, not
-#       inferred from the README):
-#         - size 738640049 bytes, sha256
-#           a2ac878d7f26fc1ac7d90d1330e4e34b62676d3a2326673b78b7799e1d8a0a7c,
-#           HTTP Last-Modified Fri, 06 Dec 2024 20:06:11 GMT.
-#         - Layout: ./bin ./lib ./etc ./share ./aarch64-linux-gnu
-#           ./arm-linux-gnueabi ./x86_64-pc-linux-gnu at archive root, NO
-#           wrapper directory — extracts straight into $ABS_TC, and the
-#           existing shallowest-`bin` finder in "Configure toolchain PATH"
-#           lands on $ABS_TC/bin. Uncompressed size ~2.0 GiB.
-#         - All seven binaries required by "Verify Toolchain and capture
-#           compiler identity" are present: clang, ld.lld, llvm-nm,
-#           llvm-objdump, llvm-ar, llvm-objcopy, llvm-strip.
-#         - `clang --version`: "WeebX clang version 20.0.0git
-#           (https://github.com/llvm/llvm-project
-#           dff47d944dc626eb2d1b846710a18cad6cc1fb22)", target
-#           x86_64-pc-linux-gnu. `ld.lld --version`: "WeebX LLD 20.0.0 (...
-#           dff47d944dc626eb2d1b846710a18cad6cc1fb22)". Resource dir is
-#           lib/clang/20.
-#         - Ships GNU binutils 2.43 under the exact prefixes this workflow
-#           already passes: aarch64-linux-gnu-{as,ld,ar,nm,objcopy,objdump,
-#           strip,...} and arm-linux-gnueabi-{...} — matches
-#           CROSS_COMPILE=aarch64-linux-gnu- / CROSS_COMPILE_ARM32=
-#           arm-linux-gnueabi-. Also ships bare x86_64 ld/as/ar/nm/objdump.
-#         - Smoke test (trivial C file, NOT a kernel build): a freestanding
-#           `--target=aarch64-linux-gnu` object compiled with -O2 -fcommon
-#           -fno-strict-aliasing -Wno-error -Wno-unknown-warning-option
-#           -fuse-ld=lld (CHIMERA_KCFLAGS minus
-#           -Wno-error=unused-but-set-global), `ld.lld -m aarch64linux -r`
-#           linked it, and llvm-objdump disassembled valid AArch64. LLVM's
-#           AArch64 target is enabled; bare `ld` in the archive runs
-#           (GNU ld 2.43).
-#       MAKE CONFIGURATION: no toolchain-specific override is needed. The
-#       `weebx` case uses the same defaults as neutron*/llvm*/zyc_stable:
-#       TC_LLVM_IAS=1, TC_USE_FULL_LLVM=true, TC_HOSTLDFLAGS="" (only
-#       `proton` ever needed a non-empty HOSTLDFLAGS). Every make
-#       invocation keeps passing CC="ccache clang" LLVM=1 LLVM_IAS=1
-#       LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy
-#       OBJDUMP=llvm-objdump STRIP=llvm-strip CLANG_TRIPLE=aarch64-linux-gnu-
-#       CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=
-#       arm-linux-gnueabi- (LLVM=1/LLVM_IAS=1 remain inert on this tree, see
-#       v.20260914 informational note). TC_LLVM_IAS / TC_USE_FULL_LLVM are
-#       exported to $GITHUB_ENV but not consumed by any later step in this
-#       file — pre-existing, unchanged.
-#       *** FROZEN TOOLCHAIN — READ BEFORE USING ***
-#       The asset above was last modified 2024-12-06 and reports
-#       Clang/LLD 20.0.0git — a pre-release LLVM main snapshot, not
-#       llvm-20.1.x. The upstream release list's latest numbered release
-#       seen was 19.1.5 (build date 2024-12-07); no newer asset was found.
-#       This is the same staleness class as `proton` (removed in
-#       v.20260914). It is added here because it was explicitly requested,
-#       and it is NOT the dropdown default. For current LLVM use llvm22 /
-#       llvm21 / zyc_stable / neutron24.
-#       PIN: the release tag is a rolling one (same tag/asset name reused
-#       across rebuilds in the past), so a mutable-URL risk exists.
-#       New optional TC_SHA256 variable added to "Resolve toolchain
-#       configuration"; "Download and extract toolchain" verifies the
-#       downloaded archive against it when non-empty and FATALs on
-#       mismatch. Empty for every other toolchain (no behavior change).
-#       Note the toolchain cache is keyed independently of this check: a
-#       cache hit skips download and verify (the key embeds the build
-#       date 20241206; bump the key if the asset is ever legitimately
-#       replaced).
-#       NOT VERIFIED: an actual full kernel build of the pinned base_ref
-#       with this compiler has not been run — first CI run on `weebx` is
-#       the real test (suggest dry_run:false, cm9, same base_ref as the
-#       last green llvm20 run, and compare against llvm20 output).
-#       GitHub's REST API was rate-limited (HTTP 403) from the audit
-#       sandbox and the repo's commit pages are not fetchable, so the
-#       release list/commit log was not enumerated directly; "frozen" rests
-#       on the asset Last-Modified header, the compiled-in version string,
-#       and the public release listing.
+# v.20260921 — Added the weebx toolchain option and base_ref-derived branding.
+#   WeebX-Clang is pinned by archive SHA-256 and its archive layout,
+#   compiler binaries, LLVM target, and cross-binutils prefixes were checked.
+#   A full kernel build with this compiler remains unverified; the first
+#   successful CI build is the definitive validation.
 #
-#   [2] New `brand` choice "-cm9x[git7]".
-#       Resolves in "Resolve build identity inputs" to
-#       "-cm9x" + the first 7 hex characters of inputs.base_ref, e.g.
-#       base_ref f25719cfa1dbf0de6c394e17ae3749f05e10d287 -> "-cm9xf25719c".
-#       Derived from base_ref (already validated as a 40-hex SHA in step
-#       0a, and checked equal to the checked-out HEAD by "Preflight —
-#       verify base ref and clean worktree") rather than from
-#       `git rev-parse`, so it does not depend on step ordering (brand
-#       resolution runs before the base checkout). This is the KERNEL
-#       SOURCE commit, not the
-#       Project_Chimera workflow repo commit (CHIMERA_SHA). To brand from
-#       the workflow repo commit instead, replace BASE_REF_FULL with
-#       "$(git rev-parse HEAD)" run from $GITHUB_WORKSPACE after the
-#       Project_Chimera checkout — that requires moving the brand
-#       resolution after step 2. Resolved brand still passes the '-' prefix
-#       check, the defconfig CONFIG_LOCALVERSION rewrite, scripts/
-#       setlocalversion, localversion, LOCALVERSION= make arg, and the
-#       kernel-release / identity / manifest / anykernel.sh fields
-#       unchanged — all of those already consume the resolved value.
-# ─────────────────────────────────────────────────────────────────────────────
-
-# ─────────────────────────────────────────────────────────────────────────────
-# VERSION HISTORY (append-only — do not delete prior entries)
+#   Added the -cm9x[git7] brand option. The suffix is derived from the first
+#   seven characters of the validated kernel base_ref and is propagated
+#   through CONFIG_LOCALVERSION, LOCALVERSION, kernel-release metadata,
+#   manifest fields, and AnyKernel identity data.
 #
-# v.20260914 — external audit: KSU-Next manual-hook wiring was unverified for
-#   3 of 5 hook sites; three toolchain-matrix entries carried unpinned/stale/
-#   silently-frozen risk. No change to base_ref/ksu_commit/kernel identity
-#   generation/packaging logic. All four items verified directly against
-#   live source at the pinned SHAs, not assumed.
+# v.20260914 — Completed an external audit of KernelSU-Next hook wiring and
+#   toolchain reproducibility.
+#   Added direct verification of all five required manual-hook call sites in
+#   fs/exec.c, fs/open.c, fs/stat.c, fs/read_write.c, and
+#   drivers/input/input.c. Extended the vmlinux symbol guard with the
+#   corresponding KSU handler symbols.
 #
-#   [1] Step 19 ("Guard pass — verify KSU/SUSFS symbols") only proved
-#       ksu_handle_*() symbols are LINKED into vmlinux. KernelSU-Next
-#       defines these functions unconditionally inside its own submodule
-#       (kernel/feature/sucompat.c, kernel/runtime/ksud_integration.c), so
-#       they appear in the binary regardless of whether any hooked syscall
-#       path in the BASE kernel actually calls them. A future base_ref
-#       repin that silently drops a #ifdef CONFIG_KSU call site in
-#       fs/exec.c / fs/open.c / fs/stat.c / fs/read_write.c /
-#       drivers/input/input.c would still build, link, and boot — root
-#       grant or file-hiding on that specific path just quietly stops
-#       working, with CI staying green throughout.
-#       FIX: new step "Verify KSU-Next manual hook call sites are wired
-#       into base tree" (renumbered 7b, inserted between steps 7 and 8)
-#       greps each of the five files directly for its call site, not just
-#       the symbol's existence in vmlinux. Step 19's REQUIRED symbol array
-#       also extended with the three hook symbols it was missing entirely
-#       (ksu_handle_stat, ksu_handle_sys_read,
-#       ksu_handle_input_handle_event) — kept as defense-in-depth alongside
-#       7b, not a replacement for it, since symbol-in-vmlinux and
-#       symbol-called-from-hook-site are different guarantees.
-#       VERIFIED: cloned gavdoc38/android_kernel_samsung_exynos9810 at the
-#       exact pinned base_ref (f25719cfa1dbf0de6c394e17ae3749f05e10d287) —
-#       all five call sites present, each behind #ifdef CONFIG_KSU. Cloned
-#       gavdoc38/KernelSU-Next at the exact pinned ksu_commit
-#       (685b4a6ba3d2befdf40b3c67cf096d050c7aa6cb) — ksu_handle_execveat,
-#       ksu_handle_faccessat, ksu_handle_stat defined in
-#       kernel/feature/sucompat.{c,h}; ksu_handle_sys_read and
-#       ksu_handle_input_handle_event (plus their ksu_vfs_read_hook /
-#       ksu_input_hook enable flags) defined in
-#       kernel/runtime/ksud_integration.c. New step 7b re-run against this
-#       exact pin passes 5/5.
+#   Removed proton from the selectable toolchain options because its upstream
+#   default branch was stale. Kept the case branch as inert compatibility
+#   code. Added an explicit warning that aosp20 uses a mutable third-party
+#   mirror and still requires immutable commit pinning.
 #
-#   [2] `proton` toolchain entry pointed at kdrag0n/proton-clang, whose
-#       default branch's last commit is 2021-05-22 (Clang 13.0.0) — five
-#       major LLVM versions behind this file's own llvm20 entry, with no
-#       activity since. Selectable in the workflow_dispatch dropdown with
-#       no indication of staleness.
-#       FIX: removed from the `toolchain` input's `options:` list and from
-#       its description string. The case-statement branch under "Resolve
-#       toolchain configuration" is left in place (harmless dead code if
-#       unselected) rather than deleted, in case a maintained fork is
-#       adopted under the same key later.
-#       VERIFIED: GitHub API `GET /repos/kdrag0n/proton-clang/commits/master`
-#       returns commit date 2021-05-22T23:33:16Z as the tip.
+#   Changed zyc_stable cache-key generation to hash the dynamically resolved
+#   archive URL, preventing a static cache key from silently freezing an
+#   outdated LLVM snapshot.
 #
-#   [3] `aosp20` was the only toolchain-matrix entry NOT pinned to an
-#       immutable ref — every other AOSP entry pins a commit SHA or tag in
-#       its android.googlesource.com archive URL; aosp20 pointed at
-#       gitlab.com/kei-space/clang/r547379/-/archive/**master**/... — a
-#       third-party re-host on a mutable branch that can change contents
-#       without notice, silently breaking reproducibility for that one
-#       toolchain choice.
-#       FIX: inline TODO comment added with the exact command to resolve
-#       and pin the current tip commit. NOT RE-PINNED in this pass —
-#       gitlab.com is not on this workflow-runner's audit sandbox's network
-#       egress allowlist (only github.com and language-package registries
-#       were reachable from there), so a commit SHA could not be
-#       independently resolved as part of this fix. Re-pin manually via:
-#         git ls-remote https://gitlab.com/kei-space/clang/r547379.git master
-#       then point TC_URL at
-#       .../archive/<SHA>/r547379-<SHA>.tar.gz.
+# v.20260902 — Fixed three CI and packaging issues.
+#   Corrected the DTB packaging path so the generated dtb.img is included in
+#   the AnyKernel archive.
 #
-#   [4] `zyc_stable`'s cache key was a static string
-#       ("zyc-clang-ubuntu-24.04-v3") while its TC_URL is resolved
-#       dynamically from ZyCromerZ/Clang's Clang-main-link.txt on every
-#       run. A static key means actions/cache returns the FIRST run's
-#       cached toolchain on every subsequent run, forever, regardless of
-#       what the link file points to afterward — silently defeating the
-#       toolchain's entire "track latest LLVM main" design intent. The
-#       "_stable" suffix in the input name is misleading either way: the
-#       resolved link currently points at Clang-23.0.0git-20260130, an
-#       LLVM-main dev snapshot, not a numbered stable release.
-#       FIX: cache key changed to `zyc-clang-ubuntu-24.04-<sha256(TC_URL)[:16]>`
-#       (falls back to a literal "-lookup-failed" suffix if the curl to
-#       Clang-main-link.txt fails, so a lookup failure can't collide with
-#       or accidentally reuse a previously-cached real toolchain). Cache
-#       now self-busts whenever upstream updates the link file.
-#       VERIFIED: live curl of
-#       https://raw.githubusercontent.com/ZyCromerZ/Clang/main/Clang-main-link.txt
-#       at fix time returned a URL for Clang-23.0.0git-20260130.
+#   Moved toolchain setup before all Kconfig steps so configuration probes use
+#   the selected compiler rather than an absent or unrelated system compiler.
 #
-#   NOT IN SCOPE FOR THIS PASS (checked, no defect found):
-#     - No forced-compiler-bump requirement was found tying this vendor
-#       4.9 BSP kernel's toolchain to LineageOS 24's platform-side AOSP
-#       Clang version — GKI-style compiler pinning applies to
-#       android-kernel/common, not this out-of-tree fork, and LineageOS 24
-#       (Android 17) has no star2lte device tree yet (lineage-24.0 branch
-#       only began receiving commits June 2026) against which to check a
-#       concrete minimum. Left unchanged pending either a stated minimum
-#       Clang version from a specific KSU-Next/SUSFS commit, or an actual
-#       LOS 24 star2lte BoardConfig to diff against.
-#     - CONFIG_KPROBES=y / CONFIG_OVERLAY_FS=y already unconditionally set
-#       in the base defconfig (not the merge fragment) — confirmed present
-#       at the pinned base_ref; CONFIG_KSU=y correctly lives in
-#       chimera-ksu-susfs.cfg by design (validated by existing step 12).
-#       No change.
-#     - actions/checkout@v4, actions/cache@v4, actions/upload-artifact@v4,
-#       softprops/action-gh-release@v2 are all current, non-deprecated
-#       action versions. No change.
-#     - Confirmed (informational only, no functional bug): this Makefile
-#       has no `ifdef LLVM` block (pre-5.6 ClangBuiltLinux style, tool
-#       selection driven entirely by the explicit CC=/LD=/AR=/... overrides
-#       already passed on every make invocation) — LLVM=1/LLVM_IAS=1 are
-#       inert on this tree. Left as-is; documented here so a future editor
-#       doesn't expect LLVM_IAS to toggle the integrated assembler here.
-# ─────────────────────────────────────────────────────────────────────────────
-
-# ─────────────────────────────────────────────────────────────────────────────
-# VERSION HISTORY (append-only — do not delete prior entries)
+#   Wired ccache into the compiler command and retained post-build verification
+#   of the configured compiler flags.
 #
-# v.20260902 — four independent fixes, none touching base_ref/ksu_commit/
-#   verify-step patterns/toolchain matrix. Each verified individually
-#   against either live source or an actual completed run, not assumed.
+#   Updated the Project Chimera branch reference after its upstream branch
+#   rename. Existing historical references remain unchanged because this log
+#   is append-only.
 #
-#   [1] AK3 flashable zip always shipped without a DTB (unconditional,
-#       every non-dry-run build). Step 20 ("Assemble dtb.img...") writes
-#       $ART_DIR/dtb.img; step 21c's SPLIT_DTB previously pointed at
-#       $ART_DIR/dtb (no extension), which no step ever created. The
-#       `elif [[ -f "$SPLIT_DTB" ]]` check therefore always fell through
-#       to the "WARN...packaging Image only" branch — the zip's `dtb`
-#       entry was never populated.
-#       FIX: SPLIT_DTB now points at the real source file, $ART_DIR/dtb.img;
-#       destination inside the zip is still named `dtb` (what
-#       tools/ak3-core.sh's dump_boot/write_boot expects for this legacy
-#       raw-DTB device).
-#       VERIFIED: run 33556553795 (commit 54fb561c, cm9/llvm20) — the
-#       uploaded chimera-mk9-cm9-llvm20-...-AnyKernel3.zip contains a
-#       `dtb` entry, 301716 bytes, `file` identifies it as a valid
-#       "Device Tree Blob version 17, size=301716, boot CPU=0" — not
-#       empty/corrupt. anykernel.sh's embedded identity header in that
-#       zip confirms it was built from this exact commit.
+# v.20260822b — Fixed AnyKernel identity parity.
+#   Added compiler identity, expected kernel release, final configuration
+#   SHA-256, uname data, and KernelSU manual-hook information to the generated
+#   AnyKernel header. Corrected the stray closing brace in kernel.string.
 #
-#   [2] Kconfig steps (12–14b: "Validate/Merge Kconfig fragment",
-#       "Normalize KernelSU hook mode") invoked `make CC=clang ...`
-#       before the toolchain was ever placed on $PATH — "Configure
-#       toolchain PATH" ran later, under the old step 15 block. clang/
-#       llvm-* are not apt-installed (step 1's package list has no LLVM),
-#       so at steps 13/14 CC=clang resolved to nothing on $PATH. Kbuild's
-#       `conf` tool doesn't hard-fail on a missing $(CC) — $(cc-option,...)
-#       probes in arch/arm64 Kconfig just silently evaluate false — and
-#       step 17's later olddefconfig (run after the real toolchain is on
-#       $PATH) re-derives everything, which is why this never surfaced as
-#       a visible failure. Still fragile: any future edit that trusts the
-#       .config between steps 14 and 17, or drops step 17, inherits a
-#       .config resolved against the wrong/absent compiler.
-#       FIX: moved toolchain resolution/cache/download/PATH-config/verify
-#       (old steps 15/15b) to run immediately after step 11b, renumbered
-#       11c/11d, so every Kconfig-touching step from 12 onward sees the
-#       real target clang in $PATH. No step content changed, only order;
-#       step count unchanged (47 steps before and after).
-#       VERIFIED: YAML re-parses cleanly post-move; run 33556553795 on
-#       this exact reordered file succeeded end-to-end on cm9/llvm20.
-#       NOT INDEPENDENTLY CONFIRMED: whether the pre-fix ordering could
-#       ever have hard-failed make (vs. only silently mis-resolving
-#       cc-option probes) on toolchains other than llvm20 was not
-#       exhaustively tested across all 12 toolchain variants — the reorder
-#       removes the ambiguity rather than relying on the soft-fail
-#       behavior holding.
-#
-#   [3] ccache was configured (hendrikmuhs/ccache-action, CCACHE_MAXSIZE)
-#       but never wired into the actual compiler invocation — the build
-#       step passed CC=clang, not CC="ccache clang", so the action was
-#       priming/saving an empty GH Actions cache on every run with zero
-#       build-time benefit.
-#       FIX: CC=clang -> CC="ccache clang" in both the build step's env:
-#       block and its MAKE_ARGS array.
-#       VERIFICATION STILL OPEN: run 33556553795 was the first build on
-#       this fix (necessarily a cold-cache run — build step took 8m38s).
-#       Confirming an actual hit rate requires a second run on the same
-#       profile/toolchain/base_ref/KCFLAGS and reading that run's "Post
-#       Set up ccache" step (ccache -s output); not yet done as of this
-#       entry. NOTE: the ccache cache key (step "Set up ccache") includes
-#       ${{ github.sha }} — the workflow repo's own commit SHA — which
-#       changes on every push to this file. Iterating on this workflow
-#       between builds will defeat the cache even with identical
-#       toolchain/profile/base_ref; if a second same-profile run still
-#       shows ~0% hits, check that first.
-#
-#   [4] CHIMERA_REF branch rename: the Project_Chimera branch this
-#       workflow self-checks out from was renamed chimera-mk8 ->
-#       lineage-23.2-ksun3-susfs2 (git branch -m + push under the new
-#       name + delete old, done externally — this file cannot rename its
-#       own hosting branch). CHIMERA_REF updated to match; this is the
-#       only functional reference to the old name in the file. All other
-#       "chimera-mk8" occurrences are inside the append-only version-
-#       history comments below/above (commit-diff descriptions from past
-#       entries) and are left untouched, per this section's own
-#       do-not-delete-prior-entries rule.
-#       VERIFIED: `git ls-remote --heads` against royd-jpg/Project_Chimera
-#       shows lineage-23.2-ksun3-susfs2 present and chimera-mk8 absent;
-#       live fetch of this file at that ref shows CHIMERA_REF already
-#       matching. Order dependency noted at fix time: the rename must land
-#       before/together with this CHIMERA_REF edit, or the "Validate
-#       checked-out Project_Chimera revision" step's ref-mismatch check
-#       (line ~750) FATALs on the next run.
-# ─────────────────────────────────────────────────────────────────────────────
-
-# ─────────────────────────────────────────────────────────────────────────────
-# VERSION HISTORY (append-only — do not delete prior entries)
-#
-# v.20260822b — anykernel.sh identity parity with GitHub Release body.
-#   Previous anykernel.sh header omitted fields present in the Release
-#   table (Compiler, expected kernel release, Final config SHA-256,
-#   uname, KSU manual-hook symbol list) and had a stray "}" in
-#   kernel.string (${KERNEL_IDENTITY}} — extra closing brace, no matching
-#   open). Fixed both: the generated header now carries every field that
-#   appears in the "Create GitHub Release" step's body 1:1, and
-#   kernel.string is corrected and extended with a short compiler/config
-#   hash suffix so the identity is visible during flashing (recovery UI),
-#   not just to someone who opens the script. No other step changed —
-#   see the verification block below for why no further refactor was
-#   needed against upstream sources.
-#
-#   VERIFICATION PERFORMED AGAINST LIVE UPSTREAM (this pass):
-#     - base_ref (a97f1411ef0e44ae1f1c78506c202809ef47f55e) confirmed to
-#       be the exact live tip of gavdoc38's lineage-23.2-ksun3-susfs2 —
-#       zero drift.
-#     - ksu_commit (ffdff69a2cbea4378c09d915022fea9850a21696) confirmed
-#       reachable in gavdoc38/KernelSU-Next (raw content fetch at that
-#       SHA returns 200); it is behind that fork's current branch tips,
-#       which is expected and correct for a pin.
-#     - Fix-log items [A], [B], [C], [G] re-verified directly against
-#       live source at the pinned SHAs (LSM task_fix_setuid hook present
-#       and kernel/sys.c clean of a duplicate call; can_umount/
-#       path_umount carry check_mnt/MNT_LOCKED/CAP_SYS_ADMIN semantics;
-#       susfs_is_avc_log_spoofing_enabled defined exactly once in
-#       avc.c; hooks.c's selinux_determine_inode_label(...) call sites
-#       are ALL already converted to selinux_cred(...) at this exact
-#       pin, and KernelSU-Next's own Kbuild guard is the corrected
-#       grep -Eq 'selinux_cred\(.*\)' form — step 10's "zero remaining
-#       sites = success" branch is accurate as written, not stale).
-#     - KSU_MANUAL_HOOK / KSU_KPROBES_HOOK confirmed as the only real
-#       Kconfig symbols; KSU_NON_KPROBE confirmed not a real symbol.
-#     - neutron19/23/24 and zyc_stable's dynamic link resolution
-#       confirmed live (HTTP 200; zyc's txt file resolves to a real
-#       release asset).
-#     - android.googlesource.com / gitlab.com / mirrors.edge.kernel.org
-#       (aosp19-22, llvm20-22) could NOT be checked from this session's
-#       network sandbox (those hosts are not reachable from here) — this
-#       is a limitation of the verification environment, not a finding
-#       that those URLs are broken. Nothing about them was changed.
-#   CONCLUSION: no change to base_ref, ksu_commit, verify-step patterns,
-#   or the toolchain matrix. The anykernel.sh generation step is the only
-#   diff in this revision.
-# ─────────────────────────────────────────────────────────────────────────────
-
-# ─────────────────────────────────────────────────────────────────────────────
-# VERSION HISTORY (append-only — do not delete prior entries)
-#
-# v.20260822a — CI incident: "unrecognised emulation mode: aarch64linux" at
-#   VDSOL arch/arm64/kernel/vdso/vdso.so.dbg (run failed with exit code 2 at
-#   vdso_prepare, before vmlinux link is ever reached).
-#   Root cause: arch/arm64/kernel/vdso/Makefile's VDSOL rule links
-#   vdso.so.dbg via its own $(CC) invocation and does not reliably inherit
-#   the top-level KBUILD_LDFLAGS make variable on this 4.9.337 tree. Prior
-#   to v.20260821b, -fuse-ld=lld lived in CHIMERA_KCFLAGS, which IS exported
-#   to every clang invocation including this one, so it worked. The
-#   2026-08-21 refactor (see that entry below, item 3) moved -fuse-ld=lld
-#   out of KCFLAGS and into KBUILD_LDFLAGS only, on the reasoning that it's
-#   "a linker flag". That's true for the final vmlinux link (which does
-#   correctly receive KBUILD_LDFLAGS), but the vdso sub-make's link step
-#   does not consume KBUILD_LDFLAGS the same way, so it silently fell back
-#   to whatever `ld` is first on $PATH — the host runner's default
-#   /usr/bin/ld (GNU bfd, x86_64-only emulations: elf_x86_64, elf32_x86_64,
-#   elf_i386, elf_iamcu, i386pep, i386pe) — which cannot emit
-#   aarch64linux and fails immediately.
-#   FIX: -fuse-ld=lld restored to CHIMERA_KCFLAGS (kept in
-#   CHIMERA_KBUILD_LDFLAGS too — harmless duplication, and still correct
-#   for the final vmlinux link). KCFLAGS reaches every clang invocation in
-#   this build, including host tools, vdso, and the main kernel objects,
-#   so this closes the gap unconditionally rather than only for the
-#   top-level make target.
-#   VERIFICATION: re-run with dry_run:false, same profile/toolchain that
-#   failed; confirm "VDSOL arch/arm64/kernel/vdso/vdso.so.dbg" no longer
-#   emits "unrecognised emulation mode" and the build proceeds into normal
-#   object compilation. Step 18b ("Verify build identity and KCFLAGS")
-#   requires no changes — it hashes whatever CHIMERA_KCFLAGS currently is,
-#   not a hardcoded value, so the manifest/identity/hash all pick up the
-#   new flag automatically.
-#   NOT INDEPENDENTLY CONFIRMED: the exact LDFLAGS variable name consumed
-#   by arch/arm64/kernel/vdso/Makefile on the gavdoc38 base was not read
-#   directly as part of this fix (inferred from the failure point in the
-#   log plus the 2026-08-21 changelog entry that introduced the
-#   regression). If this recurs, run
-#     grep -n 'LDFLAGS\|fuse-ld' kernel/arch/arm64/kernel/vdso/Makefile
-#   against the checked-out base to confirm/correct this diagnosis against
-#   the actual Makefile text.
-# ─────────────────────────────────────────────────────────────────────────────
-
-# ─────────────────────────────────────────────────────────────────────────────
-# VERSION HISTORY (append-only — do not delete prior entries)
-#
-# v.20260821b — CI incident: "line 21: KCFLAGS: unbound variable"
-#   Root cause (verified against the failed run's env dump, not assumed):
-#   the job that failed had a "Generate kernel identity and hash flags"
-#   step whose kernel-identity.txt/echo lines referenced bare $KCFLAGS /
-#   $KBUILD_LDFLAGS. Those names are NOT exported anywhere in this workflow
-#   (only CHIMERA_KCFLAGS / CHIMERA_KBUILD_LDFLAGS are, deliberately — see
-#   the CHIMERA_KCFLAGS/CHIMERA_KBUILD_LDFLAGS env: comment below), and
-#   `set -Eeuo pipefail` treats a bare unset reference as fatal.
-#   VERIFIED: this exact source file's "Generate kernel identity and hash
-#   flags" step already references $CHIMERA_KCFLAGS / $CHIMERA_KBUILD_LDFLAGS
-#   throughout, with no bare $KCFLAGS/$KBUILD_LDFLAGS anywhere in the file
-#   (checked every occurrence). The failed run's logged script body does not
-#   match this file's step body — the run executed an older/stale copy of
-#   this workflow (bare-variable form) rather than this version. This is a
-#   deploy/branch-sync issue, not a defect in the source below.
-#   HARDENING ADDED (defense in depth, independent of the above): a new
-#   "Guard — required Chimera build-flag env vars present" step runs
-#   immediately after identity resolution and fails fast, by name, if
-#   CHIMERA_KCFLAGS or CHIMERA_KBUILD_LDFLAGS are ever empty/unset — so if a
-#   future edit reintroduces a bare-variable typo, it is caught at an
-#   attributable guard step instead of surfacing as an opaque "unbound
-#   variable" deep inside an unrelated step.
-#   ACTION REQUIRED (not fixable from this file alone): confirm the branch
-#   this workflow_dispatch actually reads from (chimera-mk8) has THIS
-#   version pushed. Verify with:
-#     git fetch origin chimera-mk8
-#     git show origin/chimera-mk8:.github/workflows/<file>.yml | grep -n 'echo "KCFLAGS'
-#   If that still prints the bare $KCFLAGS form, the fix has not been
-#   pushed/merged to the ref GitHub Actions is running from.
-# ─────────────────────────────────────────────────────────────────────────────
-
-# ─────────────────────────────────────────────────────────────────────────────
-# REFACTOR RATIONALE / BASE PIN HISTORY (corrected — the previous revision
-# of this comment claimed a re-pin to e0710943f1c00397054e5d9995376195
-# ce38d58e and then to 4d8c9e7c675b77d8b00fa0080b2aa61474fd21c4, with
-# KernelSU-Next moved to 8ff37831ecea3e5a00dd3940c0c658e81f27c202. Neither
-# of those SHAs matches the base_ref/ksu_commit defaults actually declared
-# below, so that narrative was stale relative to this file and has been
-# removed rather than repeated).
-#
-# CURRENT PIN OF RECORD (matches base_ref/ksu_commit input defaults below,
-# corrected 2026-08-21 — a prior revision of this header cited
-# 73892fe0c3b2462195e7558737c2feab2416422a here, which did NOT match the
-# actual input default below; that was a documentation bug, not a repin.
-# The value below is simply a transcription of the current input default —
-# it has NOT been independently re-verified fetchable/mergeable against
-# this exact SHA as part of this refactor. Re-run steps 7/8/9/11b against
-# it before relying on the fix-log items verbatim):
-#   base_ref (gavdoc38/android_kernel_samsung_exynos9810, branch
-#   lineage-23.2-ksun3-susfs2): 4428629dc94ab9d55eba804dfda846d8563d56e5
-#   ksu_commit (KernelSU-Next submodule):
-#   ffdff69a2cbea4378c09d915022fea9850a21696
-#
-# NOTE (v.20260822b): the above SHA (4428629d...) was itself already
-# stale relative to base_ref's actual input default further down this
-# file (a97f1411ef0e44ae1f1c78506c202809ef47f55e) — a second instance of
-# this same documentation-drift pattern the 2026-08-21 refactor called
-# out once already. a97f1411ef0e44ae1f1c78506c202809ef47f55e has now been
-# independently confirmed (this pass, via live git ls-remote) to be the
-# exact current tip of lineage-23.2-ksun3-susfs2, so it is not stale
-# against upstream — only this comment block's transcription was stale
-# against the file's own input default. Left uncorrected in place above
-# deliberately (append-only history), documented here instead so the
-# actual input default below remains the single source of truth.
-#
-# NOTE ON UPSTREAM STABILITY: base_ref pins a specific commit, not a
-# branch name, because gavdoc38 has force-pushed this branch before. A
-# pinned SHA can still go stale if the upstream repo rewrites history
-# again or if GitHub eventually garbage-collects an orphaned commit. This
-# workflow's "Detect base branch-tip drift" step logs whenever the live
-# branch tip differs from base_ref — it does NOT advance the pin
-# automatically. If a build fails at the "Preflight — verify base ref"
-# step with a checkout/fetch error, check
-# https://github.com/gavdoc38/android_kernel_samsung_exynos9810/commits/lineage-23.2-ksun3-susfs2
-# for the current tip and re-pin both base_ref and ksu_commit together
-# (verifying the new tip's files match the fix-log items above before
-# assuming it's a drop-in replacement — do not assume drift alone means
-# the new tip is safe to adopt).
-#
-# TOOLCHAIN MERGE (2026-07-30): llvm20/llvm21 (korg-hosted LLVM release
-# tarballs) restored into this version's toolchain matrix — present in an
-# earlier draft of this workflow but missing from this v.20260730 base.
-# URLs/cache keys carried over unchanged; zyc_stable's dynamic
-# Clang-main-link.txt lookup (this version's own approach, not the older
-# hardcoded-URL one) is left as-is.
-#
-# WORKFLOW REFACTOR (2026-08-21): fixed a real packaging failure and a
-# silent-drift risk, both unrelated to the kernel source itself:
-#   1. anykernel.sh was generated at $AK3_DIR/anykernel.sh (clone time)
-#      but step 21c read it from $GITHUB_WORKSPACE/anykernel.sh — that
-#      root-level file never existed, so every non-dry-run build failed
-#      at packaging. Generation now happens once, at the workspace root,
-#      after the build (so it can embed the real `make kernelrelease`
-#      output), and 21c's existing copy-into-AK3_DIR step now finds it.
-#   2. KCFLAGS was inlined as a literal string in the build step only —
-#      never exported, never in the manifest, never checked post-build.
-#      A future refactor could silently change compiler flags with no
-#      trace. KCFLAGS/KBUILD_LDFLAGS are now global env vars, hashed once,
-#      and re-verified against the build log after compilation.
-#   3. -fuse-ld=lld was folded into KCFLAGS. It's a linker flag; moved to
-#      KBUILD_LDFLAGS.
-#      *** SEE v.20260822a ABOVE: this specific change (item 3) was a
-#      *** regression — -fuse-ld=lld had to be restored to KCFLAGS because
-#      *** the vdso sub-make's link step does not reliably inherit
-#      *** KBUILD_LDFLAGS on this tree. It is now present in BOTH
-#      *** CHIMERA_KCFLAGS and CHIMERA_KBUILD_LDFLAGS.
-#   4. base_ref documentation corrected (see pin-of-record note above) —
-#      this is a docs fix only, not a repin; the SHA is unchanged from the
-#      prior file's actual input default.
-#   5. (2026-08-21b) "Capture actual kernel release" wrote a multi-line
-#      value into $GITHUB_ENV. `make O=... kernelrelease` recurses via
-#      `$(MAKE) -C $(KBUILD_OUTPUT) ...`, and GNU Make auto-prints
-#      "Entering directory"/"Leaving directory" around any -C-based
-#      recursive invocation unless --no-print-directory is passed. Those
-#      lines were captured into ACTUAL_RELEASE alongside the real release
-#      string, and a plain `KEY=$VALUE` append of a multi-line value is
-#      invalid for the GITHUB_ENV file command — this produced runner
-#      errors "Unable to process file command 'env' successfully" /
-#      "Invalid format '<release>'" and failed the run. Fixed by adding
-#      --no-print-directory, piping through `tail -n1`, and failing fast
-#      with an explicit check if the captured value ever contains a
-#      newline (defense in depth against a future toolchain/Make version
-#      reintroducing stray stdout here).
-# ─────────────────────────────────────────────────────────────────────────────
-
-# ARCHITECTURE CHANGE
-#   Previous Mk9 iterations took a vanilla ExyHyperBrick base and hand-rolled
-#   the entire KSU-Next + SUSFS wiring via ad hoc python/sed patches applied
-#   in-workflow. That approach was the source of every bug below. gavdoc38 has
-#   since published a canonical, working integration commit with the
-#   KernelSU-Next submodule pinned and every required backport already
-#   applied correctly. This workflow now takes that commit as BASE_REPO,
-#   eliminating the hand-rolled patches entirely and replacing them with
-#   fail-fast verification steps. Chimera-specific overlay work (scheduler
-#   tuning, defconfig branding, SUS_MAP/sus_path Chimera patches) is
-#   unaffected and still applies on top.
-#
-# (— all CONFIRMED BUGS FIXED [A]–[I] commentary unchanged, omitted here
-#    only for message length; keep as-is in your actual file —)
-# ─────────────────────────────────────────────────────────────────────────────
-# PACKAGING
-#
-# Image and DTBs are built and uploaded separately:
-#
-#   - chimera-mk9-Image-<profile>-<toolchain>
-#   - chimera-mk9-dtb-<profile>-<toolchain>
-#
-# dtb.img is a raw concatenation of the built star2lte DTBs, matching the
-# legacy Samsung DTB image format used by this device generation.
-# ─────────────────────────────────────────────────────────────────────────────
+# v.20260822a — Fixed the AArch64 VDSO linker failure.
+#   Restored -fuse-ld=lld to CHIMERA_KCFLAGS so VDSO sub-builds receive the
+#   linker selection on this Linux 4.9 tree. The flag remains in
+#   CHIMERA_KBUILD_LDFLAGS for the top-level ke
 
 permissions:
   contents: write
@@ -594,10 +85,10 @@ on:
         default: cm9
 
       toolchain:
-        description: "Toolchain: llvm22/llvm21/llvm20/aosp23/aosp22/aosp21/aosp20/aosp19/neutron19/neutron23/neutron24/zyc_stable/weebx (weebx = Clang 20.0.0git snapshot, frozen since 2024-12-06; proton removed — unmaintained since 2021-05-22, frozen at Clang 13.0.0; aosp23 = Clang r614150 (23.0.1) per user-supplied archive URL — UNVERIFIED, see header). UNVERIFIED whether this matrix satisfies an LOS24/A17 minimum compiler requirement (see header)."
+        description: "Toolchain: gcc/llvm22/llvm21/llvm20/aosp23/aosp22/aosp21/aosp20/aosp19/neutron19/neutron23/neutron24/zyc_stable/weebx (weebx = Clang 20.0.0git snapshot, frozen since 2024-12-06; proton removed — unmaintained since 2021-05-22, frozen at Clang 13.0.0; aosp23 = Clang r614150 (23.0.1) per user-supplied archive URL — UNVERIFIED, see header). UNVERIFIED whether this matrix satisfies an LOS24/A17 minimum compiler requirement (see header)."
         required: true
         type: choice
-        options: [llvm22, llvm21, llvm20, aosp23, aosp22, aosp21, aosp20, aosp19, neutron19, neutron23, neutron24, zyc_stable, weebx]
+        options: [gcc, llvm22, llvm21, llvm20, aosp23, aosp22, aosp21, aosp20, aosp19, neutron19, neutron23, neutron24, zyc_stable, weebx]
         default: llvm22
 
       dry_run:
@@ -881,7 +372,9 @@ jobs:
       - name: Install build dependencies
         run: |
           set -Eeuo pipefail
+
           sudo apt-get update -qq
+
           sudo apt-get install -y --no-install-recommends \
             aria2 \
             bc \
@@ -890,7 +383,11 @@ jobs:
             ccache \
             curl \
             flex \
+            gcc-aarch64-linux-gnu \
+            gcc-arm-linux-gnueabi \
             git \
+            libc6-dev-arm64-cross \
+            libc6-dev-armel-cross \
             libelf-dev \
             libssl-dev \
             lz4 \
@@ -901,8 +398,11 @@ jobs:
             cpio \
             pahole \
             zip
+
           python3 --version
-          curl --version | head -1
+          curl --version | head -n1
+          aarch64-linux-gnu-gcc --version | head -n1
+          arm-linux-gnueabi-gcc --version | head -n1
       # ── 2. Checkout Project_Chimera (workflow repo — overlay patches + Kconfig) ──
       - name: Checkout Project_Chimera (workflow repo — overlay + Kconfig fragment)
         uses: actions/checkout@v4
@@ -1383,7 +883,9 @@ jobs:
         id: tc-resolve
         run: |
           set -Eeuo pipefail
+
           TOOLCHAIN="${{ inputs.toolchain }}"
+
           TC_URL=""
           TC_ARCHIVE_FMT="tar.gz"
           TC_CACHE_KEY=""
@@ -1391,128 +893,139 @@ jobs:
           TC_USE_FULL_LLVM="true"
           TC_HOSTLDFLAGS=""
           TC_SHA256=""
+
+          TC_CC="ccache clang"
+          TC_LD="ld.lld"
+          TC_AR="llvm-ar"
+          TC_NM="llvm-nm"
+          TC_OBJCOPY="llvm-objcopy"
+          TC_OBJDUMP="llvm-objdump"
+          TC_STRIP="llvm-strip"
+
+          TC_CLANG_TRIPLE="aarch64-linux-gnu-"
+          TC_CROSS_COMPILE="aarch64-linux-gnu-"
+          TC_CROSS_COMPILE_ARM32="arm-linux-gnueabi-"
+
           case "$TOOLCHAIN" in
+            gcc)
+              # System cross-GCC supplied by the Ubuntu runner.
+              TC_URL="system"
+              TC_ARCHIVE_FMT="system"
+              TC_CACHE_KEY="gcc-cross-ubuntu-24.04-v1"
+
+              TC_LLVM_IAS="0"
+              TC_USE_FULL_LLVM="false"
+
+              TC_CC="ccache aarch64-linux-gnu-gcc"
+              TC_LD="aarch64-linux-gnu-ld"
+              TC_AR="aarch64-linux-gnu-ar"
+              TC_NM="aarch64-linux-gnu-nm"
+              TC_OBJCOPY="aarch64-linux-gnu-objcopy"
+              TC_OBJDUMP="aarch64-linux-gnu-objdump"
+              TC_STRIP="aarch64-linux-gnu-strip"
+
+              TC_CLANG_TRIPLE=""
+              TC_CROSS_COMPILE="aarch64-linux-gnu-"
+              TC_CROSS_COMPILE_ARM32="arm-linux-gnueabi-"
+              ;;
+
             aosp19)
               TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-15.0.0_r10/clang-r536225.tar.gz"
               TC_CACHE_KEY="aosp-clang-r536225-ubuntu-24.04-v2"
               ;;
+
             aosp20)
-              # UNPINNED MIRROR: every other entry in this matrix pins an
-              # immutable commit/tag. This one points at kei-space's gitlab
-              # `master` branch, which can move without notice (it is a
-              # third-party re-host, not an android.googlesource.com archive
-              # like aosp19/21/22 below). TODO: resolve the current tip
-              # commit and pin the archive URL to that SHA, e.g.:
-              #   git ls-remote https://gitlab.com/kei-space/clang/r547379.git master
-              #   https://gitlab.com/kei-space/clang/r547379/-/archive/<SHA>/r547379-<SHA>.tar.gz
-              # until then, treat aosp20 builds as non-reproducible.
+              # UNPINNED MIRROR: this remains mutable until the current
+              # GitLab commit is independently resolved and pinned.
               TC_URL="https://gitlab.com/kei-space/clang/r547379/-/archive/master/r547379-master.tar.gz"
               TC_CACHE_KEY="aosp-clang-r547379-ubuntu-24.04-v2"
               ;;
+
             aosp21)
               TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/21b19c041de1f1df9b97fd9902ae5405c6cf8eb9/clang-r563880c.tar.gz"
               TC_CACHE_KEY="aosp-clang-r563880c-ubuntu-24.04-v2"
               ;;
+
             aosp22)
               TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/mirror-goog-main-llvm-toolchain-source/clang-r596125.tar.gz"
               TC_CACHE_KEY="aosp-clang-r596125-ubuntu-24.04-v2"
               ;;
+
             aosp23)
-              # AOSP Clang r614150 (reported as Clang 23.0.1) — archive URL
-              # supplied directly by the user, NOT discovered/verified by this
-              # workflow's usual source-audit process. android.googlesource.com
-              # was unreachable from the environment that edited this file
-              # (blocked by robots.txt for its fetch tool, and not present in
-              # its sandboxed outbound network allowlist), so none of the
-              # following were checked: the archive downloads/extracts, its
-              # internal layout has a bin/ dir the "Configure toolchain PATH"
-              # step's shallowest-match logic can find, it actually reports as
-              # Clang 23.0.1, or its bundled binutils prefixes match
-              # CROSS_COMPILE/CROSS_COMPILE_ARM32 below. No TC_SHA256 is pinned
-              # here (unlike weebx) because no checksum was computed — treat
-              # the first CI run on this entry as the real validation.
+              # User-supplied archive URL. Checksum intentionally remains
+              # empty until the archive is independently verified.
               TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/28337064939c0b4bb5804cddf35fb03d860edcf6/clang-r614150.tar.gz"
               TC_CACHE_KEY="aosp-clang-r614150-ubuntu-24.04-v1"
               ;;
+
             llvm20)
               TC_URL="https://mirrors.edge.kernel.org/pub/tools/llvm/files/llvm-20.1.8-x86_64.tar.xz"
               TC_ARCHIVE_FMT="tar.xz"
               TC_CACHE_KEY="korg-clang-20.1.8-ubuntu-24.04-v1"
               ;;
+
             llvm21)
               TC_URL="https://mirrors.edge.kernel.org/pub/tools/llvm/files/llvm-21.1.0-x86_64.tar.xz"
               TC_ARCHIVE_FMT="tar.xz"
               TC_CACHE_KEY="llvm-clang-21.1.0-ubuntu-24.04-v1"
               ;;
+
             llvm22)
               TC_URL="https://mirrors.edge.kernel.org/pub/tools/llvm/files/llvm-22.1.7-x86_64.tar.xz"
               TC_ARCHIVE_FMT="tar.xz"
               TC_CACHE_KEY="llvm-clang-22.1.7-ubuntu-24.04-v1"
               ;;
+
             neutron19)
               TC_URL="https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/10032024/neutron-clang-10032024.tar.zst"
               TC_ARCHIVE_FMT="tar.zst"
               TC_CACHE_KEY="neutron-clang-10032024-ubuntu-24.04-v2"
               ;;
+
             neutron23)
               TC_URL="https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/30062026/neutron-clang-30062026.tar.zst"
               TC_ARCHIVE_FMT="tar.zst"
               TC_CACHE_KEY="neutron-clang-30062026-ubuntu-24.04-v2"
               ;;
+
             neutron24)
               TC_URL="https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/30072026/neutron-clang-30072026.tar.zst"
               TC_ARCHIVE_FMT="tar.zst"
               TC_CACHE_KEY="neutron-clang-30072026-ubuntu-24.04-v2"
               ;;
-              zyc_stable)
-                TC_URL=$(curl -fsSL \
+
+            zyc_stable)
+              TC_URL="$(
+                curl -fsSL \
                   "https://raw.githubusercontent.com/ZyCromerZ/Clang/main/Clang-main-link.txt" \
-                  || true)
-                # Cache key derived FROM the resolved URL (not a static
-                # "-v3" suffix). zyc's link file is a moving target — a
-                # static key means the cache silently freezes on whatever
-                # snapshot was fetched on the FIRST run and never picks up
-                # a newer upstream build without a manual key bump. Hashing
-                # TC_URL makes the cache bust automatically whenever
-                # upstream updates Clang-main-link.txt.
-                if [[ -n "$TC_URL" ]]; then
-                  TC_CACHE_KEY="zyc-clang-ubuntu-24.04-$(printf '%s' "$TC_URL" | sha256sum | cut -c1-16)"
-                else
-                  TC_CACHE_KEY="zyc-clang-ubuntu-24.04-lookup-failed"
-                fi
+                  || true
+              )"
+
+              if [[ -z "$TC_URL" ]]; then
+                echo "FATAL: zyc_stable URL lookup failed" >&2
+                exit 1
+              fi
+
+              TC_CACHE_KEY="zyc-clang-ubuntu-24.04-$(printf '%s' "$TC_URL" | sha256sum | cut -c1-16)"
               ;;
+
             weebx)
-              # XSans0/WeebX-Clang — Clang/LLD 20.0.0git snapshot
-              # (llvm-project dff47d944dc6...), archive last modified
-              # 2024-12-06. FROZEN: no newer asset found upstream; see
-              # v.20260921 history entry. URL is what
-              # raw.githubusercontent.com/XSans0/WeebX-Clang/main/main/link.txt
-              # resolved to at add time; hardcoded on purpose so the
-              # SHA-256 pin below stays meaningful. The release tag is a
-              # rolling one, hence the checksum. Archive has NO wrapper
-              # directory (./bin ./lib ... at root) and bundles GNU
-              # binutils 2.43 as aarch64-linux-gnu-* / arm-linux-gnueabi-*,
-              # matching CROSS_COMPILE / CROSS_COMPILE_ARM32 below.
-              # If upstream ever legitimately replaces the asset: re-verify,
-              # update TC_SHA256, and bump the date in TC_CACHE_KEY.
               TC_URL="https://github.com/XSans0/WeebX-Clang/releases/download/WeebX-Clang-20.0.0git-release/WeebX-Clang-20.0.0git.tar.gz"
-              TC_ARCHIVE_FMT="tar.gz"
               TC_CACHE_KEY="weebx-clang-20.0.0git-20241206-ubuntu-24.04-v1"
               TC_SHA256="a2ac878d7f26fc1ac7d90d1330e4e34b62676d3a2326673b78b7799e1d8a0a7c"
               ;;
+
             proton)
-              TC_URL="https://github.com/kdrag0n/proton-clang.git"
-              TC_ARCHIVE_FMT="git"
-              TC_CACHE_KEY="proton-clang-master-ubuntu-24.04-v1"
-              TC_HOSTLDFLAGS="-fuse-ld=lld"
+              echo "FATAL: proton is unsupported and intentionally removed" >&2
+              exit 1
               ;;
+
             *)
-              echo \
-                "ERROR: unsupported toolchain '$TOOLCHAIN'" \
-                >&2
+              echo "FATAL: unsupported toolchain '$TOOLCHAIN'" >&2
               exit 1
               ;;
           esac
+
           {
             echo "TC_URL=$TC_URL"
             echo "TC_ARCHIVE_FMT=$TC_ARCHIVE_FMT"
@@ -1521,10 +1034,22 @@ jobs:
             echo "TC_USE_FULL_LLVM=$TC_USE_FULL_LLVM"
             echo "TC_HOSTLDFLAGS=$TC_HOSTLDFLAGS"
             echo "TC_SHA256=$TC_SHA256"
+
+            echo "TC_CC=$TC_CC"
+            echo "TC_LD=$TC_LD"
+            echo "TC_AR=$TC_AR"
+            echo "TC_NM=$TC_NM"
+            echo "TC_OBJCOPY=$TC_OBJCOPY"
+            echo "TC_OBJDUMP=$TC_OBJDUMP"
+            echo "TC_STRIP=$TC_STRIP"
+
+            echo "TC_CLANG_TRIPLE=$TC_CLANG_TRIPLE"
+            echo "TC_CROSS_COMPILE=$TC_CROSS_COMPILE"
+            echo "TC_CROSS_COMPILE_ARM32=$TC_CROSS_COMPILE_ARM32"
           } >> "$GITHUB_ENV"
-          echo \
-            "TC_CACHE_KEY=$TC_CACHE_KEY" \
-            >> "$GITHUB_OUTPUT"
+
+          echo "TC_CACHE_KEY=$TC_CACHE_KEY" >> "$GITHUB_OUTPUT"
+
       - name: Cache toolchain
         uses: actions/cache@v4
         id: tc-cache
@@ -1533,106 +1058,222 @@ jobs:
           key: ${{ env.TC_CACHE_KEY }}
 
       - name: Download and extract toolchain
-        if: steps.tc-cache.outputs.cache-hit != 'true'
+        if: steps.tc-cache.outputs.cache-hit != 'true' && inputs.toolchain != 'gcc'
         run: |
           set -Eeuo pipefail
+
           rm -rf "$ABS_TC"
           mkdir -p "$ABS_TC"
 
-          if [[ "$TC_ARCHIVE_FMT" == "git" ]]; then
-            [[ -n "$TC_URL" ]] || {
-              echo "FATAL: TC_URL is empty for git-based toolchain fetch" >&2
-              exit 1
-            }
-            git clone --depth=1 --single-branch "$TC_URL" "$ABS_TC"
-            rm -rf "$ABS_TC/.git"
-          else
-            ARCHIVE="/tmp/clang_archive"
-            if [[ -z "$TC_URL" ]]; then
-              echo "FATAL: TC_URL is empty (zyc_stable's dynamic link lookup may have failed upstream)" >&2
+          ARCHIVE="/tmp/clang_archive"
+
+          [[ -n "$TC_URL" ]] || {
+            echo "FATAL: TC_URL is empty" >&2
+            exit 1
+          }
+
+          aria2c \
+            -x 16 \
+            -s 16 \
+            -k 1M \
+            -c \
+            --max-tries=5 \
+            --retry-wait=5 \
+            --timeout=60 \
+            --dir="/tmp" \
+            --out="clang_archive" \
+            "$TC_URL"
+
+          [[ -s "$ARCHIVE" ]] || {
+            echo "FATAL: toolchain archive is missing or empty" >&2
+            exit 1
+          }
+
+          if [[ -n "${TC_SHA256:-}" ]]; then
+            ACTUAL_TC_SHA256="$(sha256sum "$ARCHIVE" | cut -d' ' -f1)"
+
+            if [[ "$ACTUAL_TC_SHA256" != "$TC_SHA256" ]]; then
+              echo "FATAL: toolchain archive SHA-256 mismatch" >&2
+              echo "Expected: $TC_SHA256" >&2
+              echo "Actual:   $ACTUAL_TC_SHA256" >&2
               exit 1
             fi
-            aria2c -x 16 -s 16 -k 1M -c \
-              --max-tries=5 \
-              --retry-wait=5 \
-              --timeout=60 \
-              --dir="/tmp" \
-              --out="clang_archive" \
-              "$TC_URL"
-            if [[ ! -s "$ARCHIVE" ]]; then
-              echo "FATAL: aria2c failed to download the toolchain archive, or it is empty." >&2
-              exit 1
-            fi
-            if [[ -n "${TC_SHA256:-}" ]]; then
-              ACTUAL_TC_SHA256="$(sha256sum "$ARCHIVE" | cut -d' ' -f1)"
-              if [[ "$ACTUAL_TC_SHA256" != "$TC_SHA256" ]]; then
-                echo "FATAL: toolchain archive SHA-256 mismatch (expected $TC_SHA256, got $ACTUAL_TC_SHA256) — upstream asset was replaced or the download is corrupt" >&2
-                exit 1
-              fi
-              echo "OK: toolchain archive SHA-256 verified ($TC_SHA256)"
-            fi
-            case "$TC_ARCHIVE_FMT" in
-              tar.gz|tar)
-                tar -C "$ABS_TC" -xzf "$ARCHIVE"
-                ;;
-              tar.xz)
-                tar -C "$ABS_TC" -xJf "$ARCHIVE"
-                ;;
-              tar.zst)
-                zstd -d "$ARCHIVE" -o /tmp/clang.tar --force
-                tar -C "$ABS_TC" -xf /tmp/clang.tar
-                ;;
-              *)
-                echo "FATAL: unrecognized TC_ARCHIVE_FMT '$TC_ARCHIVE_FMT' — cannot extract" >&2
-                exit 1
-                ;;
-            esac
+
+            echo "PASS: toolchain archive SHA-256 verified"
           fi
 
-          if [[ -z "$(find "$ABS_TC" -type f -print -quit)" ]]; then
-            echo "FATAL: extraction/clone reported success but $ABS_TC contains no files" >&2
+          case "$TC_ARCHIVE_FMT" in
+            tar.gz|tar)
+              tar -C "$ABS_TC" -xzf "$ARCHIVE"
+              ;;
+
+            tar.xz)
+              tar -C "$ABS_TC" -xJf "$ARCHIVE"
+              ;;
+
+            tar.zst)
+              zstd -d "$ARCHIVE" -o /tmp/clang.tar --force
+              tar -C "$ABS_TC" -xf /tmp/clang.tar
+              ;;
+
+            *)
+              echo "FATAL: unsupported archive format '$TC_ARCHIVE_FMT'" >&2
+              exit 1
+              ;;
+          esac
+
+          [[ -n "$(find "$ABS_TC" -type f -print -quit)" ]] || {
+            echo "FATAL: extracted toolchain contains no files" >&2
             exit 1
-          fi
+          }
+
           echo "Toolchain ready: $(find "$ABS_TC" -type f | wc -l) file(s)"
+
       - name: Configure toolchain PATH
         run: |
           set -Eeuo pipefail
-          ACTUAL_BIN=$(find "$ABS_TC" -type d -name "bin" -printf "%d\t%p\n" | sort -n | cut -f2 | head -n 1)
+
+          if [[ "$TOOLCHAIN" == "gcc" ]]; then
+            REQUIRED_GCC_TOOLS=(
+              aarch64-linux-gnu-gcc
+              aarch64-linux-gnu-ld
+              aarch64-linux-gnu-ar
+              aarch64-linux-gnu-nm
+              aarch64-linux-gnu-objcopy
+              aarch64-linux-gnu-objdump
+              aarch64-linux-gnu-strip
+              arm-linux-gnueabi-gcc
+              arm-linux-gnueabi-ld
+              arm-linux-gnueabi-ar
+              arm-linux-gnueabi-nm
+              arm-linux-gnueabi-objcopy
+              arm-linux-gnueabi-objdump
+              arm-linux-gnueabi-strip
+            )
+
+            for bin in "${REQUIRED_GCC_TOOLS[@]}"; do
+              command -v "$bin" >/dev/null 2>&1 || {
+                echo "FATAL: required GCC tool '$bin' was not found" >&2
+                exit 1
+              }
+            done
+
+            echo "Using system GCC cross-toolchain"
+            exit 0
+          fi
+
+          ACTUAL_BIN="$(
+            find "$ABS_TC" \
+              -type d \
+              -name "bin" \
+              -printf "%d\t%p\n" \
+              | sort -n \
+              | cut -f2 \
+              | head -n1
+          )"
+
           if [[ -z "$ACTUAL_BIN" || ! -d "$ACTUAL_BIN" ]]; then
-            echo "FATAL: Could not find 'bin' directory inside extracted toolchain ($ABS_TC)."
+            echo "FATAL: no bin directory found under $ABS_TC" >&2
             exit 1
           fi
+
           echo "Found toolchain bin: $ACTUAL_BIN"
           chmod +x "$ACTUAL_BIN"/* 2>/dev/null || true
           echo "$ACTUAL_BIN" >> "$GITHUB_PATH"
+
       # ── 11d. Validate compiler binaries/versions, capture real identity ──────
       - name: Verify Toolchain and capture compiler identity
         run: |
           set -Eeuo pipefail
-          echo "Validating toolchain in PATH..."
-          for bin in clang llvm-nm llvm-objdump llvm-ar llvm-objcopy llvm-strip ld.lld; do
-            command -v "$bin" >/dev/null 2>&1 || {
-              echo "FATAL: required toolchain binary '$bin' not found in PATH" >&2
-              exit 1
-            }
-          done
-          CLANG_VERSION="$(clang --version | head -1)"
-          LLD_VERSION="$(ld.lld --version | head -1)"
-          echo "$CLANG_VERSION"
-          llvm-nm --version | head -1
-          llvm-objdump --version | head -1
-          echo "$LLD_VERSION"
-          [[ -n "$CLANG_VERSION" ]] || { echo "FATAL: clang --version produced no output" >&2; exit 1; }
-          TC_IDENTITY_HASH="$(printf '%s\n%s\n' "$CLANG_VERSION" "$LLD_VERSION" | sha256sum | cut -d' ' -f1 | head -c 16)"
+
+          if [[ "$TOOLCHAIN" == "gcc" ]]; then
+            echo "Validating GCC cross-toolchain..."
+
+            for bin in \
+              aarch64-linux-gnu-gcc \
+              aarch64-linux-gnu-ld \
+              aarch64-linux-gnu-ar \
+              aarch64-linux-gnu-nm \
+              aarch64-linux-gnu-objdump \
+              aarch64-linux-gnu-objcopy \
+              aarch64-linux-gnu-strip \
+              arm-linux-gnueabi-gcc \
+              arm-linux-gnueabi-ld \
+              arm-linux-gnueabi-ar \
+              arm-linux-gnueabi-objcopy; do
+              command -v "$bin" >/dev/null 2>&1 || {
+                echo "FATAL: required GCC binary '$bin' not found in PATH" >&2
+                exit 1
+              }
+            done
+
+            COMPILER_VERSION="$(aarch64-linux-gnu-gcc --version | head -n1)"
+            LINKER_VERSION="$(aarch64-linux-gnu-ld --version | head -n1)"
+            COMPILER_KIND="gcc"
+            CLANG_VERSION="not-applicable"
+
+          else
+            echo "Validating LLVM toolchain..."
+
+            for bin in \
+              clang \
+              llvm-nm \
+              llvm-objdump \
+              llvm-ar \
+              llvm-objcopy \
+              llvm-strip \
+              ld.lld; do
+              command -v "$bin" >/dev/null 2>&1 || {
+                echo "FATAL: required LLVM binary '$bin' not found in PATH" >&2
+                exit 1
+              }
+            done
+
+            COMPILER_VERSION="$(clang --version | head -n1)"
+            LINKER_VERSION="$(ld.lld --version | head -n1)"
+            COMPILER_KIND="clang"
+            CLANG_VERSION="$COMPILER_VERSION"
+
+            llvm-nm --version | head -n1
+            llvm-objdump --version | head -n1
+          fi
+
+          [[ -n "$COMPILER_VERSION" ]] || {
+            echo "FATAL: compiler version is empty" >&2
+            exit 1
+          }
+
+          [[ -n "$LINKER_VERSION" ]] || {
+            echo "FATAL: linker version is empty" >&2
+            exit 1
+          }
+
+          TC_IDENTITY_HASH="$(
+            printf '%s\n%s\n' \
+              "$COMPILER_VERSION" \
+              "$LINKER_VERSION" \
+              | sha256sum \
+              | cut -d' ' -f1 \
+              | head -c16
+          )"
+
           {
+            echo "COMPILER_VERSION=$COMPILER_VERSION"
+            echo "LINKER_VERSION=$LINKER_VERSION"
             echo "CLANG_VERSION=$CLANG_VERSION"
+            echo "COMPILER_KIND=$COMPILER_KIND"
             echo "TC_IDENTITY_HASH=$TC_IDENTITY_HASH"
           } >> "$GITHUB_ENV"
+
           {
-            echo "$CLANG_VERSION"
-            echo "$LLD_VERSION"
+            echo "$COMPILER_VERSION"
+            echo "$LINKER_VERSION"
           } > "$ABS_LOG/toolchain-identity.txt"
-          test -n "$PATH"
+
+          echo "Compiler: $COMPILER_VERSION"
+          echo "Linker:   $LINKER_VERSION"
+          echo "Kind:     $COMPILER_KIND"
+          echo "Identity: $TC_IDENTITY_HASH"
       # ── 12. Kconfig fragment normalization ───────────────────────────────────
       - name: Validate Kconfig fragment
         run: |
@@ -1646,31 +1287,59 @@ jobs:
             exit 1
           fi
           cat "$CFG"
-      # ── 13. Merge Kconfig ────────────────────────────────────────────────────
+      # ── 13. Merge Kconfig ─────────────────────────────────────────────────────
       - name: Merge Kconfig fragment
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
+
+          if [[ "$TOOLCHAIN" == "gcc" ]]; then
+            TOOLCHAIN_ARGS=(
+              "CC=$TC_CC"
+              "LD=$TC_LD"
+              "AR=$TC_AR"
+              "NM=$TC_NM"
+              "OBJCOPY=$TC_OBJCOPY"
+              "OBJDUMP=$TC_OBJDUMP"
+              "STRIP=$TC_STRIP"
+              "LLVM=0"
+              "LLVM_IAS=0"
+              "CROSS_COMPILE=$TC_CROSS_COMPILE"
+              "CROSS_COMPILE_ARM32=$TC_CROSS_COMPILE_ARM32"
+            )
+          else
+            TOOLCHAIN_ARGS=(
+              "CC=$TC_CC"
+              "LD=$TC_LD"
+              "AR=$TC_AR"
+              "NM=$TC_NM"
+              "OBJCOPY=$TC_OBJCOPY"
+              "OBJDUMP=$TC_OBJDUMP"
+              "STRIP=$TC_STRIP"
+              "LLVM=1"
+              "LLVM_IAS=$TC_LLVM_IAS"
+              "CLANG_TRIPLE=$TC_CLANG_TRIPLE"
+              "CROSS_COMPILE=$TC_CROSS_COMPILE"
+              "CROSS_COMPILE_ARM32=$TC_CROSS_COMPILE_ARM32"
+            )
+          fi
+
           cp \
             "$GITHUB_WORKSPACE/chimera-ksu-susfs.cfg" \
             /tmp/chimera-ksu-susfs.cfg
+
           cp \
             "$GITHUB_WORKSPACE/chimera-device-specific.cfg" \
             /tmp/chimera-device-specific.cfg
+
           make \
             O="$ABS_OUT" \
             ARCH=arm64 \
-            CC=clang \
-            LLVM=1 \
-            LLVM_IAS=1 \
-            LD=ld.lld \
-            AR=llvm-ar \
-            NM=llvm-nm \
-            OBJCOPY=llvm-objcopy \
-            OBJDUMP=llvm-objdump \
-            STRIP=llvm-strip \
+            HOSTLDFLAGS="$TC_HOSTLDFLAGS" \
+            "${TOOLCHAIN_ARGS[@]}" \
             "$(basename "$DEFCONFIG")" \
             | tee "$ABS_LOG/defconfig-base.log"
+
           scripts/kconfig/merge_config.sh \
             -m \
             -O "$ABS_OUT" \
@@ -1678,27 +1347,61 @@ jobs:
             /tmp/chimera-ksu-susfs.cfg \
             /tmp/chimera-device-specific.cfg \
             | tee "$ABS_LOG/merge-config.log"
+
           make \
             O="$ABS_OUT" \
             ARCH=arm64 \
-            CC=clang \
-            LLVM=1 \
-            LLVM_IAS=1 \
-            LD=ld.lld \
-            AR=llvm-ar \
-            NM=llvm-nm \
-            OBJCOPY=llvm-objcopy \
-            OBJDUMP=llvm-objdump \
-            STRIP=llvm-strip \
+            HOSTLDFLAGS="$TC_HOSTLDFLAGS" \
+            "${TOOLCHAIN_ARGS[@]}" \
             olddefconfig \
             | tee -a "$ABS_LOG/merge-config.log"
-      # ── 14. Force KernelSU hook mode after Kconfig resolution ─────────────
+      # ── 14. Force KernelSU hook mode after Kconfig resolution ─────────────────
       - name: Normalize KernelSU hook mode
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
+
           CFG="$ABS_OUT/.config"
+
+          [[ -f "$CFG" ]] || {
+            echo "FATAL: kernel configuration not found: $CFG" >&2
+            exit 1
+          }
+
+          # Use the same compiler/tool selection resolved in steps 11c/11d.
+          if [[ "$TOOLCHAIN" == "gcc" ]]; then
+            TOOLCHAIN_ARGS=(
+              "CC=$TC_CC"
+              "LD=$TC_LD"
+              "AR=$TC_AR"
+              "NM=$TC_NM"
+              "OBJCOPY=$TC_OBJCOPY"
+              "OBJDUMP=$TC_OBJDUMP"
+              "STRIP=$TC_STRIP"
+              "LLVM=0"
+              "LLVM_IAS=0"
+              "CROSS_COMPILE=$TC_CROSS_COMPILE"
+              "CROSS_COMPILE_ARM32=$TC_CROSS_COMPILE_ARM32"
+            )
+          else
+            TOOLCHAIN_ARGS=(
+              "CC=$TC_CC"
+              "LD=$TC_LD"
+              "AR=$TC_AR"
+              "NM=$TC_NM"
+              "OBJCOPY=$TC_OBJCOPY"
+              "OBJDUMP=$TC_OBJDUMP"
+              "STRIP=$TC_STRIP"
+              "LLVM=1"
+              "LLVM_IAS=$TC_LLVM_IAS"
+              "CLANG_TRIPLE=$TC_CLANG_TRIPLE"
+              "CROSS_COMPILE=$TC_CROSS_COMPILE"
+              "CROSS_COMPILE_ARM32=$TC_CROSS_COMPILE_ARM32"
+            )
+          fi
+
           echo "Forcing KernelSU manual hook mode"
+
           if [[ -x scripts/config ]]; then
             scripts/config \
               --file "$CFG" \
@@ -1706,46 +1409,82 @@ jobs:
               -e CONFIG_KSU_MANUAL_HOOK \
               -d CONFIG_KSU_KPROBES_HOOK
           else
-            echo "scripts/config unavailable, patching .config directly"
+            echo "scripts/config unavailable; editing .config directly"
+
             sed -i \
               '/^CONFIG_KSU_KPROBES_HOOK=/d' \
               "$CFG"
+
             sed -i \
               '/^# CONFIG_KSU_KPROBES_HOOK is not set$/d' \
               "$CFG"
-            echo "CONFIG_KSU_KPROBES_HOOK=n" >> "$CFG"
-            grep -q '^CONFIG_KSU=y$' "$CFG" || \
-              echo "CONFIG_KSU=y" >> "$CFG"
-            grep -q '^CONFIG_KSU_MANUAL_HOOK=y$' "$CFG" || \
-              echo "CONFIG_KSU_MANUAL_HOOK=y" >> "$CFG"
+
+            sed -i \
+              '/^CONFIG_KSU_MANUAL_HOOK=/d' \
+              "$CFG"
+
+            sed -i \
+              '/^# CONFIG_KSU_MANUAL_HOOK is not set$/d' \
+              "$CFG"
+
+            sed -i \
+              '/^CONFIG_KSU=/d' \
+              "$CFG"
+
+            sed -i \
+              '/^# CONFIG_KSU is not set$/d' \
+              "$CFG"
+
+            {
+              echo "CONFIG_KSU=y"
+              echo "CONFIG_KSU_MANUAL_HOOK=y"
+              echo "# CONFIG_KSU_KPROBES_HOOK is not set"
+            } >> "$CFG"
           fi
+
           make \
             O="$ABS_OUT" \
             ARCH=arm64 \
-            CC=clang \
-            LLVM=1 \
-            LLVM_IAS=1 \
-            LD=ld.lld \
-            AR=llvm-ar \
-            NM=llvm-nm \
-            OBJCOPY=llvm-objcopy \
-            OBJDUMP=llvm-objdump \
-            STRIP=llvm-strip \
+            HOSTLDFLAGS="$TC_HOSTLDFLAGS" \
+            "${TOOLCHAIN_ARGS[@]}" \
             olddefconfig \
             | tee -a "$ABS_LOG/merge-config.log"
+
           echo
           echo "========== Final KernelSU mode =========="
-          grep '^CONFIG_KSU' "$CFG" || true
-          if grep -q '^CONFIG_KSU_KPROBES_HOOK=y$' "$CFG"; then
-            echo "FATAL: CONFIG_KSU_KPROBES_HOOK still enabled"
+
+          grep \
+            -E \
+            '^(CONFIG_KSU|# CONFIG_KSU)' \
+            "$CFG" \
+            || true
+
+          if ! grep -q '^CONFIG_KSU=y$' "$CFG"; then
+            echo "FATAL: CONFIG_KSU=y is missing after olddefconfig" >&2
             exit 1
           fi
+
           if ! grep -q '^CONFIG_KSU_MANUAL_HOOK=y$' "$CFG"; then
-            echo "FATAL: CONFIG_KSU_MANUAL_HOOK missing"
+            echo "FATAL: CONFIG_KSU_MANUAL_HOOK=y is missing after olddefconfig" >&2
             exit 1
           fi
+
+          if grep -q '^CONFIG_KSU_KPROBES_HOOK=y$' "$CFG"; then
+            echo "FATAL: CONFIG_KSU_KPROBES_HOOK=y remains enabled" >&2
+            exit 1
+          fi
+
+          if grep -q '^CONFIG_KSU_KPROBE_HOOK=y$' "$CFG"; then
+            echo "FATAL: CONFIG_KSU_KPROBE_HOOK=y remains enabled" >&2
+            exit 1
+          fi
+
           echo "PASS: KernelSU manual hook mode enforced"
-          cp "$CFG" "$ABS_LOG/final.config"
+          echo "PASS: KernelSU kprobe hook mode disabled"
+
+          cp \
+            "$CFG" \
+            "$ABS_LOG/final.config"
       # ── 14b. Security/config guard ────────────────────────────────────────────
       - name: Guard pass — verify security restrictions disabled and KSU/SUSFS enabled
         working-directory: ${{ env.KERNEL_DIR }}
@@ -1815,31 +1554,58 @@ jobs:
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
+
+          if [[ "$TOOLCHAIN" == "gcc" ]]; then
+            TOOLCHAIN_ARGS=(
+              "CC=$TC_CC"
+              "LD=$TC_LD"
+              "AR=$TC_AR"
+              "NM=$TC_NM"
+              "OBJCOPY=$TC_OBJCOPY"
+              "OBJDUMP=$TC_OBJDUMP"
+              "STRIP=$TC_STRIP"
+              "LLVM=0"
+              "LLVM_IAS=0"
+              "CROSS_COMPILE=$TC_CROSS_COMPILE"
+              "CROSS_COMPILE_ARM32=$TC_CROSS_COMPILE_ARM32"
+            )
+          else
+            TOOLCHAIN_ARGS=(
+              "CC=$TC_CC"
+              "LD=$TC_LD"
+              "AR=$TC_AR"
+              "NM=$TC_NM"
+              "OBJCOPY=$TC_OBJCOPY"
+              "OBJDUMP=$TC_OBJDUMP"
+              "STRIP=$TC_STRIP"
+              "LLVM=1"
+              "LLVM_IAS=$TC_LLVM_IAS"
+              "CLANG_TRIPLE=$TC_CLANG_TRIPLE"
+              "CROSS_COMPILE=$TC_CROSS_COMPILE"
+              "CROSS_COMPILE_ARM32=$TC_CROSS_COMPILE_ARM32"
+            )
+          fi
+
           make \
             O="$ABS_OUT" \
             ARCH=arm64 \
-            CC=clang \
-            LLVM=1 \
-            LLVM_IAS=1 \
             HOSTLDFLAGS="$TC_HOSTLDFLAGS" \
-            LD=ld.lld \
-            AR=llvm-ar \
-            NM=llvm-nm \
-            OBJCOPY=llvm-objcopy \
-            OBJDUMP=llvm-objdump \
-            STRIP=llvm-strip \
-            CLANG_TRIPLE=aarch64-linux-gnu- \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            "${TOOLCHAIN_ARGS[@]}" \
             olddefconfig
+
           cp \
             "$ABS_OUT/.config" \
             "$ABS_LOG/config.built"
+
           grep -E \
             '^(CONFIG_KSU|CONFIG_KSU_SUSFS|CONFIG_SEC_RESTRICT|CONFIG_RKP|CONFIG_TIMA|CONFIG_FIVE|CONFIG_LOCALVERSION)' \
             "$ABS_OUT/.config" \
             | tee "$ABS_LOG/config-summary.txt"
-          FINAL_CONFIG_HASH="$(sha256sum "$ABS_OUT/.config" | cut -d' ' -f1)"
+
+          FINAL_CONFIG_HASH="$(
+            sha256sum "$ABS_OUT/.config" | cut -d' ' -f1
+          )"
+
           echo "FINAL_CONFIG_HASH=$FINAL_CONFIG_HASH" >> "$GITHUB_ENV"
           echo "Final .config SHA-256: $FINAL_CONFIG_HASH"
       # ── 18. Build Image and DTBs ──────────────────────────────────────────────
@@ -1853,39 +1619,60 @@ jobs:
           KBUILD_BUILD_HOST: ${{ env.BUILD_HOST }}
           KBUILD_BUILD_VERSION: ${{ env.BUILD_VERSION }}
           KBUILD_BUILD_TIMESTAMP: ${{ env.KBUILD_BUILD_TIMESTAMP }}
-          CC: ccache clang
-          LD: ld.lld
-          AR: llvm-ar
-          NM: llvm-nm
-          OBJCOPY: llvm-objcopy
-          OBJDUMP: llvm-objdump
-          STRIP: llvm-strip
-          LLVM: "1"
-          LLVM_IAS: "1"
         run: |
           set -Eeuo pipefail
+
+          if [[ "$TOOLCHAIN" == "gcc" ]]; then
+            TOOLCHAIN_ARGS=(
+              "CC=$TC_CC"
+              "LD=$TC_LD"
+              "AR=$TC_AR"
+              "NM=$TC_NM"
+              "OBJCOPY=$TC_OBJCOPY"
+              "OBJDUMP=$TC_OBJDUMP"
+              "STRIP=$TC_STRIP"
+              "LLVM=0"
+              "LLVM_IAS=0"
+              "CROSS_COMPILE=$TC_CROSS_COMPILE"
+              "CROSS_COMPILE_ARM32=$TC_CROSS_COMPILE_ARM32"
+            )
+
+            BUILD_KCFLAGS="$CHIMERA_KCFLAGS"
+            BUILD_KBUILD_LDFLAGS=""
+
+          else
+            TOOLCHAIN_ARGS=(
+              "CC=$TC_CC"
+              "LD=$TC_LD"
+              "AR=$TC_AR"
+              "NM=$TC_NM"
+              "OBJCOPY=$TC_OBJCOPY"
+              "OBJDUMP=$TC_OBJDUMP"
+              "STRIP=$TC_STRIP"
+              "LLVM=1"
+              "LLVM_IAS=$TC_LLVM_IAS"
+              "CLANG_TRIPLE=$TC_CLANG_TRIPLE"
+              "CROSS_COMPILE=$TC_CROSS_COMPILE"
+              "CROSS_COMPILE_ARM32=$TC_CROSS_COMPILE_ARM32"
+            )
+
+            BUILD_KCFLAGS="$CHIMERA_KCFLAGS"
+            BUILD_KBUILD_LDFLAGS="$CHIMERA_KBUILD_LDFLAGS"
+          fi
+
           JOBS="$(nproc)"
+
           MAKE_ARGS=(
             "O=$ABS_OUT"
             "ARCH=arm64"
-            "CC=ccache clang"
-            "LLVM=1"
-            "LLVM_IAS=1"
-            "HOSTLDFLAGS=${TC_HOSTLDFLAGS}"
-            "LD=ld.lld"
-            "AR=llvm-ar"
-            "NM=llvm-nm"
-            "OBJCOPY=llvm-objcopy"
-            "OBJDUMP=llvm-objdump"
-            "STRIP=llvm-strip"
-            "CLANG_TRIPLE=aarch64-linux-gnu-"
-            "CROSS_COMPILE=aarch64-linux-gnu-"
-            "CROSS_COMPILE_ARM32=arm-linux-gnueabi-"
+            "HOSTLDFLAGS=$TC_HOSTLDFLAGS"
+            "${TOOLCHAIN_ARGS[@]}"
             "-j${JOBS}"
-            "LOCALVERSION=${BRAND}"
-            "KCFLAGS=${CHIMERA_KCFLAGS}"
-            "KBUILD_LDFLAGS=${CHIMERA_KBUILD_LDFLAGS}"
+            "LOCALVERSION=$BRAND"
+            "KCFLAGS=$BUILD_KCFLAGS"
+            "KBUILD_LDFLAGS=$BUILD_KBUILD_LDFLAGS"
           )
+
           make \
             "${MAKE_ARGS[@]}" \
             Image \
@@ -1893,12 +1680,15 @@ jobs:
             dtbs \
             2>&1 \
             | tee "$ABS_LOG/build.log"
+
           {
             echo "Build identity: $KERNEL_IDENTITY"
             echo "Kernel release: $KERNEL_RELEASE"
-            echo "KCFLAGS: $CHIMERA_KCFLAGS"
+            echo "Compiler: $COMPILER_VERSION"
+            echo "Linker: $LINKER_VERSION"
+            echo "KCFLAGS: $BUILD_KCFLAGS"
             echo "KCFLAGS SHA-256: $KCFLAGS_HASH"
-            echo "KBUILD_LDFLAGS: $CHIMERA_KBUILD_LDFLAGS"
+            echo "KBUILD_LDFLAGS: $BUILD_KBUILD_LDFLAGS"
           } | tee "$ABS_LOG/build-flags.txt"
       # ── 18b. Verify KCFLAGS actually reached the build unmodified ───────────
       - name: Verify build identity and KCFLAGS
@@ -1906,28 +1696,51 @@ jobs:
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
-          [[ -n "$CHIMERA_KCFLAGS" ]] || { echo "FATAL: KCFLAGS is empty" >&2; exit 1; }
-          [[ -n "$KCFLAGS_HASH" ]] || { echo "FATAL: KCFLAGS_HASH is empty" >&2; exit 1; }
-          
-          ACTUAL_HASH="$(printf '%s\n' "$CHIMERA_KCFLAGS" | sha256sum | cut -d' ' -f1)"
-          
-          if [[ "$ACTUAL_HASH" != "$KCFLAGS_HASH" ]]; then
-            echo "FATAL: KCFLAGS hash mismatch (expected $KCFLAGS_HASH, got $ACTUAL_HASH)" >&2
+
+          [[ -n "$CHIMERA_KCFLAGS" ]] || {
+            echo "FATAL: CHIMERA_KCFLAGS is empty" >&2
             exit 1
+          }
+
+          [[ -n "$KCFLAGS_HASH" ]] || {
+            echo "FATAL: KCFLAGS_HASH is empty" >&2
+            exit 1
+          }
+
+          if [[ "$TOOLCHAIN" == "gcc" ]]; then
+            BUILD_KCFLAGS="$CHIMERA_KCFLAGS"
+          else
+            BUILD_KCFLAGS="$CHIMERA_KCFLAGS"
           fi
-          
-          grep -Fq "KCFLAGS: $CHIMERA_KCFLAGS" "$ABS_LOG/build-flags.txt" || {
-            echo "FATAL: build log does not contain the expected KCFLAGS" >&2
+
+          ACTUAL_HASH="$(
+            printf '%s\n' "$CHIMERA_KCFLAGS" \
+              | sha256sum \
+              | cut -d' ' -f1
+          )"
+
+          [[ "$ACTUAL_HASH" == "$KCFLAGS_HASH" ]] || {
+            echo "FATAL: KCFLAGS hash mismatch" >&2
+            echo "Expected: $KCFLAGS_HASH" >&2
+            echo "Actual:   $ACTUAL_HASH" >&2
             exit 1
           }
-          grep -Fq "Build identity: $KERNEL_IDENTITY" "$ABS_LOG/build-flags.txt" || {
-            echo "FATAL: build identity missing from build metadata" >&2
-            exit 1
-          }
+
+          grep -Fq \
+            "KCFLAGS: $BUILD_KCFLAGS" \
+            "$ABS_LOG/build-flags.txt" || {
+              echo "FATAL: build metadata does not contain expected KCFLAGS" >&2
+              exit 1
+            }
+
+          grep -Fq \
+            "Build identity: $KERNEL_IDENTITY" \
+            "$ABS_LOG/build-flags.txt" || {
+              echo "FATAL: build identity missing from build metadata" >&2
+              exit 1
+            }
+
           echo "PASS: kernel identity and KCFLAGS verified"
-          echo "Identity: $KERNEL_IDENTITY"
-          echo "KCFLAGS: $CHIMERA_KCFLAGS"
-          echo "KCFLAGS SHA-256: $KCFLAGS_HASH"
       # ── 19. vmlinux KSU/SUSFS symbol guard ────────────────────────────────────
       - name: Guard pass — verify KSU/SUSFS symbols
         if: ${{ inputs.dry_run != true }}
@@ -2044,33 +1857,84 @@ jobs:
           echo \
             "ART_DIR=$ART_DIR" \
             >> "$GITHUB_ENV"
-      # ── 20a. Capture actual kernel release ────────────────────────────────────
+         # ── 20a. Capture actual kernel release ────────────────────────────────────
       - name: Capture actual kernel release
         if: ${{ inputs.dry_run != true }}
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
-          ACTUAL_RELEASE="$(
+
+          [[ -d "$ABS_OUT" ]] || {
+            echo "FATAL: output directory does not exist: $ABS_OUT" >&2
+            exit 1
+          }
+
+          if [[ "$TOOLCHAIN" == "gcc" ]]; then
+            TOOLCHAIN_ARGS=(
+              "CC=$TC_CC"
+              "LD=$TC_LD"
+              "AR=$TC_AR"
+              "NM=$TC_NM"
+              "OBJCOPY=$TC_OBJCOPY"
+              "OBJDUMP=$TC_OBJDUMP"
+              "STRIP=$TC_STRIP"
+              "LLVM=0"
+              "LLVM_IAS=0"
+              "CROSS_COMPILE=$TC_CROSS_COMPILE"
+              "CROSS_COMPILE_ARM32=$TC_CROSS_COMPILE_ARM32"
+            )
+          else
+            TOOLCHAIN_ARGS=(
+              "CC=$TC_CC"
+              "LD=$TC_LD"
+              "AR=$TC_AR"
+              "NM=$TC_NM"
+              "OBJCOPY=$TC_OBJCOPY"
+              "OBJDUMP=$TC_OBJDUMP"
+              "STRIP=$TC_STRIP"
+              "LLVM=1"
+              "LLVM_IAS=$TC_LLVM_IAS"
+              "CLANG_TRIPLE=$TC_CLANG_TRIPLE"
+              "CROSS_COMPILE=$TC_CROSS_COMPILE"
+              "CROSS_COMPILE_ARM32=$TC_CROSS_COMPILE_ARM32"
+            )
+          fi
+
+          RELEASE_OUTPUT="$(
             make \
               --no-print-directory \
               O="$ABS_OUT" \
               ARCH=arm64 \
-              CC=clang \
-              LLVM=1 \
-              LLVM_IAS=1 \
               HOSTLDFLAGS="$TC_HOSTLDFLAGS" \
-              kernelrelease \
-              | tail -n1
+              "${TOOLCHAIN_ARGS[@]}" \
+              kernelrelease
           )"
+
+          ACTUAL_RELEASE="$(printf '%s\n' "$RELEASE_OUTPUT" | tail -n1)"
+
           [[ -n "$ACTUAL_RELEASE" ]] || {
             echo "FATAL: kernelrelease returned empty output" >&2
+            printf 'Raw output:\n%s\n' "$RELEASE_OUTPUT" >&2
             exit 1
           }
+
           if [[ "$ACTUAL_RELEASE" == *$'\n'* ]]; then
-            echo "FATAL: kernelrelease output still contains embedded newlines — refusing to write to GITHUB_ENV" >&2
+            echo "FATAL: kernelrelease contains embedded newlines" >&2
             printf '%s\n' "$ACTUAL_RELEASE" >&2
             exit 1
           fi
+
+          if [[ "$ACTUAL_RELEASE" =~ [[:space:]] ]]; then
+            echo "FATAL: kernelrelease contains whitespace: '$ACTUAL_RELEASE'" >&2
+            exit 1
+          fi
+
+          if [[ -n "${KERNEL_RELEASE:-}" && "$ACTUAL_RELEASE" != "$KERNEL_RELEASE" ]]; then
+            echo "WARN: actual release differs from expected release"
+            echo "Expected: $KERNEL_RELEASE"
+            echo "Actual:   $ACTUAL_RELEASE"
+          fi
+
           echo "ACTUAL_KERNEL_RELEASE=$ACTUAL_RELEASE" >> "$GITHUB_ENV"
           echo "Actual kernel release: $ACTUAL_RELEASE"
       # ── 20b. Generate identity-aware anykernel.sh ─────────────────────────────
