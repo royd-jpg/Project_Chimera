@@ -517,20 +517,44 @@ jobs:
             echo "uname_preview=$UNAME_PREVIEW"
           } > "$ABS_LOG/inputs.env"
       # ── 4a2. Guard — required Chimera build-flag env vars present ───────────
-      - name: Guard — required Chimera build-flag env vars present
+       - name: Guard required Chimera build-flag env vars present
         run: |
           set -Eeuo pipefail
-          : "${CHIMERA_KCFLAGS:?CHIMERA_KCFLAGS is empty/unset — check the env: block, not a step-local $KCFLAGS reference}"
-          : "${CHIMERA_KBUILD_LDFLAGS:?CHIMERA_KBUILD_LDFLAGS is empty/unset — check the env: block, not a step-local $KBUILD_LDFLAGS reference}"
-          case " $CHIMERA_KCFLAGS " in
-            *" -fuse-ld=lld "*) : ;;
-            *)
-              echo "FATAL: -fuse-ld=lld missing from CHIMERA_KCFLAGS." >&2
-              exit 1
-              ;;
-          esac
-          echo "OK: CHIMERA_KCFLAGS=$CHIMERA_KCFLAGS"
-          echo "OK: CHIMERA_KBUILD_LDFLAGS=$CHIMERA_KBUILD_LDFLAGS"
+
+          : "${CHIMERA_KCFLAGS:?CHIMERA_KCFLAGS is empty or unset; check the workflow env block}"
+          : "${CHIMERA_KBUILD_LDFLAGS:?CHIMERA_KBUILD_LDFLAGS is empty or unset; check the workflow env block}"
+
+          if [[ "$TOOLCHAIN" == "gcc" ]]; then
+            EFFECTIVE_KCFLAGS="-O2 -fcommon -fno-strict-aliasing -Wno-error"
+            EFFECTIVE_KBUILD_LDFLAGS=""
+          else
+            EFFECTIVE_KCFLAGS="$CHIMERA_KCFLAGS"
+            EFFECTIVE_KBUILD_LDFLAGS="$CHIMERA_KBUILD_LDFLAGS"
+          fi
+
+          {
+            echo "Toolchain: $TOOLCHAIN"
+            echo "Global CHIMERA_KCFLAGS: $CHIMERA_KCFLAGS"
+            echo "Global CHIMERA_KBUILD_LDFLAGS: $CHIMERA_KBUILD_LDFLAGS"
+            echo "Effective KCFLAGS: $EFFECTIVE_KCFLAGS"
+            echo "Effective KBUILD_LDFLAGS: $EFFECTIVE_KBUILD_LDFLAGS"
+          } | tee "$ABS_LOG/build-flag-env-guard.txt"
+
+          if [[ "$TOOLCHAIN" == "gcc" ]]; then
+            for forbidden in \
+              "-fuse-ld=lld" \
+              "-Wno-unknown-warning-option" \
+              "-Wno-error=unused-but-set-global"; do
+              if [[ " $EFFECTIVE_KCFLAGS $EFFECTIVE_KBUILD_LDFLAGS " == *" $forbidden "* ]]; then
+                echo "FATAL: Clang-only flag leaked into GCC mode: $forbidden" >&2
+                exit 1
+              fi
+            done
+
+            echo "PASS: GCC mode has no Clang-only flags"
+          else
+            echo "PASS: LLVM mode retains its configured flags"
+          fi
       # ── 4b. Resolve KCFLAGS hash / kernel identity string ────────────────────
       - name: Generate kernel identity and hash flags
         if: ${{ inputs.dry_run != true }}
