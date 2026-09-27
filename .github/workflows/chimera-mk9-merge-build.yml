@@ -85,7 +85,7 @@ on:
         default: cm9
 
       toolchain:
-        description: "Toolchain: gcc/llvm22/llvm21/llvm20/aosp23/aosp22/aosp21/aosp20/aosp19/neutron19/neutron23/neutron24/zyc_stable/weebx (weebx = Clang 20.0.0git snapshot, frozen since 2024-12-06; proton removed — unmaintained since 2021-05-22, frozen at Clang 13.0.0; aosp23 = Clang r614150 (23.0.1) per user-supplied archive URL — UNVERIFIED, see header). UNVERIFIED whether this matrix satisfies an LOS24/A17 minimum compiler requirement (see header)."
+        description: "Toolchain: gcc/llvm22/llvm21/llvm20/aosp23/aosp22/aosp21/aosp20/aosp19/neutron19/neutron23/neutron24/zyc_stable/weebx"
         required: true
         type: choice
         options: [gcc, llvm22, llvm21, llvm20, aosp23, aosp22, aosp21, aosp20, aosp19, neutron19, neutron23, neutron24, zyc_stable, weebx]
@@ -238,8 +238,8 @@ env:
   FORCE_REPATCH: ${{ inputs.force_repatch }}
   BASE_REPO: ${{ inputs.base_repo }}
 
-  CHIMERA_KCFLAGS: -O2 -fcommon -fno-strict-aliasing -Wno-error -Wno-error=unused-but-set-global -Wno-unknown-warning-option -fuse-ld=lld
-  CHIMERA_KBUILD_LDFLAGS: "-fuse-ld=lld"
+  CHIMERA_KCFLAGS: -O2 -fcommon -fno-strict-aliasing -Wno-error
+  CHIMERA_KBUILD_LDFLAGS: ""
 
 jobs:
   build:
@@ -878,7 +878,7 @@ jobs:
           }
           echo
           echo "PASS: all Chimera overlay markers present"
-      # ── 11c. Toolchain resolution ─────────────────────────────────────────────
+      # ── 11c. Toolchain resolution ───────────────────────────────────────────
       - name: Resolve toolchain configuration
         id: tc-resolve
         run: |
@@ -887,34 +887,27 @@ jobs:
           TOOLCHAIN="${{ inputs.toolchain }}"
 
           TC_URL=""
-          TC_ARCHIVE_FMT="tar.gz"
+          TC_ARCHIVE_FMT="system"
           TC_CACHE_KEY=""
-          TC_LLVM_IAS="1"
-          TC_USE_FULL_LLVM="true"
+          TC_LLVM_IAS="0"
+          TC_USE_FULL_LLVM="false"
           TC_HOSTLDFLAGS=""
           TC_SHA256=""
 
-          TC_CC="ccache clang"
-          TC_LD="ld.lld"
-          TC_AR="llvm-ar"
-          TC_NM="llvm-nm"
-          TC_OBJCOPY="llvm-objcopy"
-          TC_OBJDUMP="llvm-objdump"
-          TC_STRIP="llvm-strip"
-
-          TC_CLANG_TRIPLE="aarch64-linux-gnu-"
-          TC_CROSS_COMPILE="aarch64-linux-gnu-"
-          TC_CROSS_COMPILE_ARM32="arm-linux-gnueabi-"
+          TC_CC=""
+          TC_LD=""
+          TC_AR=""
+          TC_NM=""
+          TC_OBJCOPY=""
+          TC_OBJDUMP=""
+          TC_STRIP=""
+          TC_CLANG_TRIPLE=""
+          TC_CROSS_COMPILE=""
+          TC_CROSS_COMPILE_ARM32=""
 
           case "$TOOLCHAIN" in
             gcc)
-              # System cross-GCC supplied by the Ubuntu runner.
-              TC_URL="system"
-              TC_ARCHIVE_FMT="system"
-              TC_CACHE_KEY="gcc-cross-ubuntu-24.04-v1"
-
-              TC_LLVM_IAS="0"
-              TC_USE_FULL_LLVM="false"
+              TC_CACHE_KEY="gcc-cross-ubuntu-24.04-v2"
 
               TC_CC="ccache aarch64-linux-gnu-gcc"
               TC_LD="aarch64-linux-gnu-ld"
@@ -924,37 +917,37 @@ jobs:
               TC_OBJDUMP="aarch64-linux-gnu-objdump"
               TC_STRIP="aarch64-linux-gnu-strip"
 
-              TC_CLANG_TRIPLE=""
               TC_CROSS_COMPILE="aarch64-linux-gnu-"
               TC_CROSS_COMPILE_ARM32="arm-linux-gnueabi-"
               ;;
 
             aosp19)
               TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-15.0.0_r10/clang-r536225.tar.gz"
+              TC_ARCHIVE_FMT="tar.gz"
               TC_CACHE_KEY="aosp-clang-r536225-ubuntu-24.04-v2"
               ;;
 
             aosp20)
-              # UNPINNED MIRROR: this remains mutable until the current
-              # GitLab commit is independently resolved and pinned.
               TC_URL="https://gitlab.com/kei-space/clang/r547379/-/archive/master/r547379-master.tar.gz"
+              TC_ARCHIVE_FMT="tar.gz"
               TC_CACHE_KEY="aosp-clang-r547379-ubuntu-24.04-v2"
               ;;
 
             aosp21)
               TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/21b19c041de1f1df9b97fd9902ae5405c6cf8eb9/clang-r563880c.tar.gz"
+              TC_ARCHIVE_FMT="tar.gz"
               TC_CACHE_KEY="aosp-clang-r563880c-ubuntu-24.04-v2"
               ;;
 
             aosp22)
               TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/mirror-goog-main-llvm-toolchain-source/clang-r596125.tar.gz"
+              TC_ARCHIVE_FMT="tar.gz"
               TC_CACHE_KEY="aosp-clang-r596125-ubuntu-24.04-v2"
               ;;
 
             aosp23)
-              # User-supplied archive URL. Checksum intentionally remains
-              # empty until the archive is independently verified.
               TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/28337064939c0b4bb5804cddf35fb03d860edcf6/clang-r614150.tar.gz"
+              TC_ARCHIVE_FMT="tar.gz"
               TC_CACHE_KEY="aosp-clang-r614150-ubuntu-24.04-v1"
               ;;
 
@@ -995,36 +988,37 @@ jobs:
               ;;
 
             zyc_stable)
-              TC_URL="$(
-                curl -fsSL \
-                  "https://raw.githubusercontent.com/ZyCromerZ/Clang/main/Clang-main-link.txt" \
-                  || true
-              )"
-
-              if [[ -z "$TC_URL" ]]; then
-                echo "FATAL: zyc_stable URL lookup failed" >&2
-                exit 1
-              fi
-
+              TC_URL="$(curl -fsSL https://raw.githubusercontent.com/ZyCromerZ/Clang/main/Clang-main-link.txt)"
               TC_CACHE_KEY="zyc-clang-ubuntu-24.04-$(printf '%s' "$TC_URL" | sha256sum | cut -c1-16)"
               ;;
 
             weebx)
               TC_URL="https://github.com/XSans0/WeebX-Clang/releases/download/WeebX-Clang-20.0.0git-release/WeebX-Clang-20.0.0git.tar.gz"
+              TC_ARCHIVE_FMT="tar.gz"
               TC_CACHE_KEY="weebx-clang-20.0.0git-20241206-ubuntu-24.04-v1"
               TC_SHA256="a2ac878d7f26fc1ac7d90d1330e4e34b62676d3a2326673b78b7799e1d8a0a7c"
               ;;
 
-            proton)
-              echo "FATAL: proton is unsupported and intentionally removed" >&2
-              exit 1
-              ;;
-
             *)
-              echo "FATAL: unsupported toolchain '$TOOLCHAIN'" >&2
+              echo "FATAL: unsupported toolchain: $TOOLCHAIN" >&2
               exit 1
               ;;
           esac
+
+          if [[ "$TOOLCHAIN" != "gcc" ]]; then
+            TC_LLVM_IAS="1"
+            TC_USE_FULL_LLVM="true"
+            TC_CC="ccache clang"
+            TC_LD="ld.lld"
+            TC_AR="llvm-ar"
+            TC_NM="llvm-nm"
+            TC_OBJCOPY="llvm-objcopy"
+            TC_OBJDUMP="llvm-objdump"
+            TC_STRIP="llvm-strip"
+            TC_CLANG_TRIPLE="aarch64-linux-gnu-"
+            TC_CROSS_COMPILE="aarch64-linux-gnu-"
+            TC_CROSS_COMPILE_ARM32="arm-linux-gnueabi-"
+          fi
 
           {
             echo "TC_URL=$TC_URL"
@@ -1034,7 +1028,6 @@ jobs:
             echo "TC_USE_FULL_LLVM=$TC_USE_FULL_LLVM"
             echo "TC_HOSTLDFLAGS=$TC_HOSTLDFLAGS"
             echo "TC_SHA256=$TC_SHA256"
-
             echo "TC_CC=$TC_CC"
             echo "TC_LD=$TC_LD"
             echo "TC_AR=$TC_AR"
@@ -1042,13 +1035,20 @@ jobs:
             echo "TC_OBJCOPY=$TC_OBJCOPY"
             echo "TC_OBJDUMP=$TC_OBJDUMP"
             echo "TC_STRIP=$TC_STRIP"
-
             echo "TC_CLANG_TRIPLE=$TC_CLANG_TRIPLE"
             echo "TC_CROSS_COMPILE=$TC_CROSS_COMPILE"
             echo "TC_CROSS_COMPILE_ARM32=$TC_CROSS_COMPILE_ARM32"
           } >> "$GITHUB_ENV"
 
-          echo "TC_CACHE_KEY=$TC_CACHE_KEY" >> "$GITHUB_OUTPUT"
+          {
+            echo "cache-key=$TC_CACHE_KEY"
+            echo "toolchain=$TOOLCHAIN"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Toolchain: $TOOLCHAIN"
+          echo "Compiler: $TC_CC"
+          echo "Linker: $TC_LD"
+          echo "Target cross-prefix: $TC_CROSS_COMPILE"
 
       - name: Cache toolchain
         uses: actions/cache@v4
@@ -1181,80 +1181,60 @@ jobs:
           chmod +x "$ACTUAL_BIN"/* 2>/dev/null || true
           echo "$ACTUAL_BIN" >> "$GITHUB_PATH"
 
-      # ── 11d. Validate compiler binaries/versions, capture real identity ──────
-      - name: Verify Toolchain and capture compiler identity
+      # ── 11d. Verify toolchain ───────────────────────────────────────────────
+      - name: Verify toolchain and capture compiler identity
         run: |
           set -Eeuo pipefail
 
-          if [[ "$TOOLCHAIN" == "gcc" ]]; then
-            echo "Validating GCC cross-toolchain..."
+          require_command() {
+            local command_name="$1"
+            command -v "$command_name" >/dev/null 2>&1 || {
+              echo "FATAL: required command not found: $command_name" >&2
+              exit 1
+            }
+          }
 
-            for bin in \
-              aarch64-linux-gnu-gcc \
-              aarch64-linux-gnu-ld \
-              aarch64-linux-gnu-ar \
-              aarch64-linux-gnu-nm \
-              aarch64-linux-gnu-objdump \
-              aarch64-linux-gnu-objcopy \
-              aarch64-linux-gnu-strip \
-              arm-linux-gnueabi-gcc \
-              arm-linux-gnueabi-ld \
-              arm-linux-gnueabi-ar \
-              arm-linux-gnueabi-objcopy; do
-              command -v "$bin" >/dev/null 2>&1 || {
-                echo "FATAL: required GCC binary '$bin' not found in PATH" >&2
-                exit 1
-              }
-            done
+          if [[ "$TOOLCHAIN" == "gcc" ]]; then
+            require_command aarch64-linux-gnu-gcc
+            require_command aarch64-linux-gnu-ld
+            require_command aarch64-linux-gnu-ar
+            require_command aarch64-linux-gnu-nm
+            require_command aarch64-linux-gnu-objcopy
+            require_command aarch64-linux-gnu-objdump
+            require_command aarch64-linux-gnu-strip
+            require_command arm-linux-gnueabi-gcc
 
             COMPILER_VERSION="$(aarch64-linux-gnu-gcc --version | head -n1)"
             LINKER_VERSION="$(aarch64-linux-gnu-ld --version | head -n1)"
-            COMPILER_KIND="gcc"
             CLANG_VERSION="not-applicable"
+            COMPILER_KIND="gcc"
 
+            [[ "$TC_CC" == *aarch64-linux-gnu-gcc ]] || {
+              echo "FATAL: GCC mode selected an invalid compiler: $TC_CC" >&2
+              exit 1
+            }
+
+            [[ "$TC_LD" != *ld.lld ]] || {
+              echo "FATAL: GCC mode selected LLD: $TC_LD" >&2
+              exit 1
+            }
           else
-            echo "Validating LLVM toolchain..."
-
-            for bin in \
-              clang \
-              llvm-nm \
-              llvm-objdump \
-              llvm-ar \
-              llvm-objcopy \
-              llvm-strip \
-              ld.lld; do
-              command -v "$bin" >/dev/null 2>&1 || {
-                echo "FATAL: required LLVM binary '$bin' not found in PATH" >&2
-                exit 1
-              }
+            for binary in clang ld.lld llvm-nm llvm-objdump llvm-ar llvm-objcopy llvm-strip; do
+              require_command "$binary"
             done
 
             COMPILER_VERSION="$(clang --version | head -n1)"
             LINKER_VERSION="$(ld.lld --version | head -n1)"
-            COMPILER_KIND="clang"
             CLANG_VERSION="$COMPILER_VERSION"
-
-            llvm-nm --version | head -n1
-            llvm-objdump --version | head -n1
+            COMPILER_KIND="llvm"
           fi
 
-          [[ -n "$COMPILER_VERSION" ]] || {
-            echo "FATAL: compiler version is empty" >&2
-            exit 1
-          }
-
-          [[ -n "$LINKER_VERSION" ]] || {
-            echo "FATAL: linker version is empty" >&2
-            exit 1
-          }
-
           TC_IDENTITY_HASH="$(
-            printf '%s\n%s\n' \
+            printf '%s\n%s\n%s\n' \
               "$COMPILER_VERSION" \
               "$LINKER_VERSION" \
-              | sha256sum \
-              | cut -d' ' -f1 \
-              | head -c16
+              "$COMPILER_KIND" |
+            sha256sum | cut -d' ' -f1 | cut -c1-16
           )"
 
           {
@@ -1266,365 +1246,23 @@ jobs:
           } >> "$GITHUB_ENV"
 
           {
-            echo "$COMPILER_VERSION"
-            echo "$LINKER_VERSION"
-          } > "$ABS_LOG/toolchain-identity.txt"
+            echo "Compiler: $COMPILER_VERSION"
+            echo "Linker: $LINKER_VERSION"
+            echo "Compiler kind: $COMPILER_KIND"
+            echo "Toolchain identity hash: $TC_IDENTITY_HASH"
+          } | tee "$ABS_LOG/toolchain-identity.txt"
 
-          echo "Compiler: $COMPILER_VERSION"
-          echo "Linker:   $LINKER_VERSION"
-          echo "Kind:     $COMPILER_KIND"
-          echo "Identity: $TC_IDENTITY_HASH"
-      # ── 12. Kconfig fragment normalization ───────────────────────────────────
-      - name: Validate Kconfig fragment
-        run: |
-          set -Eeuo pipefail
-          CFG="$GITHUB_WORKSPACE/chimera-ksu-susfs.cfg"
-          grep -q '^CONFIG_KSU=y$' "$CFG"
-          grep -q '^CONFIG_KSU_MANUAL_HOOK=y$' "$CFG"
-          grep -q '^CONFIG_KSU_SUSFS=y$' "$CFG"
-          if grep -q '^CONFIG_KSU_NON_KPROBE' "$CFG"; then
-            echo "FATAL: CONFIG_KSU_NON_KPROBE is not a valid KernelSU-Next symbol" >&2
-            exit 1
-          fi
-          cat "$CFG"
-      # ── 13. Merge Kconfig ─────────────────────────────────────────────────────
-      - name: Merge Kconfig fragment
-        working-directory: ${{ env.KERNEL_DIR }}
+      - name: Resolve effective make arguments
+        id: make-args
         run: |
           set -Eeuo pipefail
 
           if [[ "$TOOLCHAIN" == "gcc" ]]; then
-            TOOLCHAIN_ARGS=(
+            MAKE_TOOLCHAIN_ARGS=(
               "CC=$TC_CC"
-              "LD=$TC_LD"
-              "AR=$TC_AR"
-              "NM=$TC_NM"
-              "OBJCOPY=$TC_OBJCOPY"
-              "OBJDUMP=$TC_OBJDUMP"
-              "STRIP=$TC_STRIP"
-              "LLVM=0"
-              "LLVM_IAS=0"
-              "CROSS_COMPILE=$TC_CROSS_COMPILE"
-              "CROSS_COMPILE_ARM32=$TC_CROSS_COMPILE_ARM32"
-            )
-          else
-            TOOLCHAIN_ARGS=(
-              "CC=$TC_CC"
-              "LD=$TC_LD"
-              "AR=$TC_AR"
-              "NM=$TC_NM"
-              "OBJCOPY=$TC_OBJCOPY"
-              "OBJDUMP=$TC_OBJDUMP"
-              "STRIP=$TC_STRIP"
-              "LLVM=1"
-              "LLVM_IAS=$TC_LLVM_IAS"
-              "CLANG_TRIPLE=$TC_CLANG_TRIPLE"
-              "CROSS_COMPILE=$TC_CROSS_COMPILE"
-              "CROSS_COMPILE_ARM32=$TC_CROSS_COMPILE_ARM32"
-            )
-          fi
-
-          cp \
-            "$GITHUB_WORKSPACE/chimera-ksu-susfs.cfg" \
-            /tmp/chimera-ksu-susfs.cfg
-
-          cp \
-            "$GITHUB_WORKSPACE/chimera-device-specific.cfg" \
-            /tmp/chimera-device-specific.cfg
-
-          make \
-            O="$ABS_OUT" \
-            ARCH=arm64 \
-            HOSTLDFLAGS="$TC_HOSTLDFLAGS" \
-            "${TOOLCHAIN_ARGS[@]}" \
-            "$(basename "$DEFCONFIG")" \
-            | tee "$ABS_LOG/defconfig-base.log"
-
-          scripts/kconfig/merge_config.sh \
-            -m \
-            -O "$ABS_OUT" \
-            "$ABS_OUT/.config" \
-            /tmp/chimera-ksu-susfs.cfg \
-            /tmp/chimera-device-specific.cfg \
-            | tee "$ABS_LOG/merge-config.log"
-
-          make \
-            O="$ABS_OUT" \
-            ARCH=arm64 \
-            HOSTLDFLAGS="$TC_HOSTLDFLAGS" \
-            "${TOOLCHAIN_ARGS[@]}" \
-            olddefconfig \
-            | tee -a "$ABS_LOG/merge-config.log"
-      # ── 14. Force KernelSU hook mode after Kconfig resolution ─────────────────
-      - name: Normalize KernelSU hook mode
-        working-directory: ${{ env.KERNEL_DIR }}
-        run: |
-          set -Eeuo pipefail
-
-          CFG="$ABS_OUT/.config"
-
-          [[ -f "$CFG" ]] || {
-            echo "FATAL: kernel configuration not found: $CFG" >&2
-            exit 1
-          }
-
-          # Use the same compiler/tool selection resolved in steps 11c/11d.
-          if [[ "$TOOLCHAIN" == "gcc" ]]; then
-            TOOLCHAIN_ARGS=(
-              "CC=$TC_CC"
-              "LD=$TC_LD"
-              "AR=$TC_AR"
-              "NM=$TC_NM"
-              "OBJCOPY=$TC_OBJCOPY"
-              "OBJDUMP=$TC_OBJDUMP"
-              "STRIP=$TC_STRIP"
-              "LLVM=0"
-              "LLVM_IAS=0"
-              "CROSS_COMPILE=$TC_CROSS_COMPILE"
-              "CROSS_COMPILE_ARM32=$TC_CROSS_COMPILE_ARM32"
-            )
-          else
-            TOOLCHAIN_ARGS=(
-              "CC=$TC_CC"
-              "LD=$TC_LD"
-              "AR=$TC_AR"
-              "NM=$TC_NM"
-              "OBJCOPY=$TC_OBJCOPY"
-              "OBJDUMP=$TC_OBJDUMP"
-              "STRIP=$TC_STRIP"
-              "LLVM=1"
-              "LLVM_IAS=$TC_LLVM_IAS"
-              "CLANG_TRIPLE=$TC_CLANG_TRIPLE"
-              "CROSS_COMPILE=$TC_CROSS_COMPILE"
-              "CROSS_COMPILE_ARM32=$TC_CROSS_COMPILE_ARM32"
-            )
-          fi
-
-          echo "Forcing KernelSU manual hook mode"
-
-          if [[ -x scripts/config ]]; then
-            scripts/config \
-              --file "$CFG" \
-              -e CONFIG_KSU \
-              -e CONFIG_KSU_MANUAL_HOOK \
-              -d CONFIG_KSU_KPROBES_HOOK
-          else
-            echo "scripts/config unavailable; editing .config directly"
-
-            sed -i \
-              '/^CONFIG_KSU_KPROBES_HOOK=/d' \
-              "$CFG"
-
-            sed -i \
-              '/^# CONFIG_KSU_KPROBES_HOOK is not set$/d' \
-              "$CFG"
-
-            sed -i \
-              '/^CONFIG_KSU_MANUAL_HOOK=/d' \
-              "$CFG"
-
-            sed -i \
-              '/^# CONFIG_KSU_MANUAL_HOOK is not set$/d' \
-              "$CFG"
-
-            sed -i \
-              '/^CONFIG_KSU=/d' \
-              "$CFG"
-
-            sed -i \
-              '/^# CONFIG_KSU is not set$/d' \
-              "$CFG"
-
-            {
-              echo "CONFIG_KSU=y"
-              echo "CONFIG_KSU_MANUAL_HOOK=y"
-              echo "# CONFIG_KSU_KPROBES_HOOK is not set"
-            } >> "$CFG"
-          fi
-
-          make \
-            O="$ABS_OUT" \
-            ARCH=arm64 \
-            HOSTLDFLAGS="$TC_HOSTLDFLAGS" \
-            "${TOOLCHAIN_ARGS[@]}" \
-            olddefconfig \
-            | tee -a "$ABS_LOG/merge-config.log"
-
-          echo
-          echo "========== Final KernelSU mode =========="
-
-          grep \
-            -E \
-            '^(CONFIG_KSU|# CONFIG_KSU)' \
-            "$CFG" \
-            || true
-
-          if ! grep -q '^CONFIG_KSU=y$' "$CFG"; then
-            echo "FATAL: CONFIG_KSU=y is missing after olddefconfig" >&2
-            exit 1
-          fi
-
-          if ! grep -q '^CONFIG_KSU_MANUAL_HOOK=y$' "$CFG"; then
-            echo "FATAL: CONFIG_KSU_MANUAL_HOOK=y is missing after olddefconfig" >&2
-            exit 1
-          fi
-
-          if grep -q '^CONFIG_KSU_KPROBES_HOOK=y$' "$CFG"; then
-            echo "FATAL: CONFIG_KSU_KPROBES_HOOK=y remains enabled" >&2
-            exit 1
-          fi
-
-          if grep -q '^CONFIG_KSU_KPROBE_HOOK=y$' "$CFG"; then
-            echo "FATAL: CONFIG_KSU_KPROBE_HOOK=y remains enabled" >&2
-            exit 1
-          fi
-
-          echo "PASS: KernelSU manual hook mode enforced"
-          echo "PASS: KernelSU kprobe hook mode disabled"
-
-          cp \
-            "$CFG" \
-            "$ABS_LOG/final.config"
-      # ── 14b. Security/config guard ────────────────────────────────────────────
-      - name: Guard pass — verify security restrictions disabled and KSU/SUSFS enabled
-        working-directory: ${{ env.KERNEL_DIR }}
-        run: |
-          set -Eeuo pipefail
-          CFG="$ABS_OUT/.config"
-          FORBIDDEN=(
-            CONFIG_RKP_KDP
-            CONFIG_UH_RKP
-            CONFIG_TIMA
-            CONFIG_TIMA_LKMAUTH
-            CONFIG_FIVE
-            CONFIG_SEC_RESTRICT_ROOTING
-            CONFIG_SEC_RESTRICT_SETUID
-            CONFIG_SECURITY_DEFEX
-            CONFIG_KNOX_KAP
-          )
-          FAIL=0
-          : > "$ABS_LOG/config-guard.log"
-          for sym in "${FORBIDDEN[@]}"; do
-            if grep -qE "^${sym}=y" "$CFG"; then
-              echo "FATAL: $sym=y" | tee -a "$ABS_LOG/config-guard.log"
-              FAIL=1
-            else
-              echo "OK: $sym disabled" | tee -a "$ABS_LOG/config-guard.log"
-            fi
-          done
-          REQUIRED=(
-            CONFIG_KSU
-            CONFIG_KSU_MANUAL_HOOK
-            CONFIG_KSU_SUSFS
-            CONFIG_KSU_SUSFS_SUS_PATH
-            CONFIG_KSU_SUSFS_SUS_MAP
-            CONFIG_KSU_SUSFS_SUS_KSTAT
-            CONFIG_HZ_300
-            # CONFIG_MFD_MADERA
-            # CONFIG_MFD_CS47L92
-            CONFIG_TCP_CONG_ADVANCED
-            CONFIG_TCP_CONG_BBR
-            CONFIG_TCP_CONG_CUBIC
-            CONFIG_DEFAULT_BBR
-            CONFIG_NET_SCHED
-            CONFIG_NET_SCH_FQ
-            CONFIG_NET_SCH_FQ_CODEL
-          )
-          for sym in "${REQUIRED[@]}"; do
-            if grep -qE "^${sym}=y" "$CFG"; then
-              echo "OK: $sym=y" | tee -a "$ABS_LOG/config-guard.log"
-            else
-              echo "FATAL: $sym is not enabled" | tee -a "$ABS_LOG/config-guard.log"
-              FAIL=1
-            fi
-          done
-          [[ "$FAIL" -eq 0 ]] || exit 1
-      # ── 16. ccache ───────────────────────────────────────────────────────────
-      - name: Set up ccache
-        uses: hendrikmuhs/ccache-action@v1.2
-        with:
-          key: >-
-            chimera-mk9-${{ inputs.profile }}-${{ inputs.toolchain }}-${{ env.TC_CACHE_KEY }}-${{ env.TC_IDENTITY_HASH }}-${{ github.sha }}
-          restore-keys: |
-            chimera-mk9-${{ inputs.profile }}-${{ inputs.toolchain }}-${{ env.TC_CACHE_KEY }}-${{ env.TC_IDENTITY_HASH }}-
-          max-size: ${{ env.CCACHE_MAXSIZE }}
-
-      # ── 17. Finalize config ───────────────────────────────────────────────────
-      - name: Finalise kernel .config
-        working-directory: ${{ env.KERNEL_DIR }}
-        run: |
-          set -Eeuo pipefail
-
-          if [[ "$TOOLCHAIN" == "gcc" ]]; then
-            TOOLCHAIN_ARGS=(
-              "CC=$TC_CC"
-              "LD=$TC_LD"
-              "AR=$TC_AR"
-              "NM=$TC_NM"
-              "OBJCOPY=$TC_OBJCOPY"
-              "OBJDUMP=$TC_OBJDUMP"
-              "STRIP=$TC_STRIP"
-              "LLVM=0"
-              "LLVM_IAS=0"
-              "CROSS_COMPILE=$TC_CROSS_COMPILE"
-              "CROSS_COMPILE_ARM32=$TC_CROSS_COMPILE_ARM32"
-            )
-          else
-            TOOLCHAIN_ARGS=(
-              "CC=$TC_CC"
-              "LD=$TC_LD"
-              "AR=$TC_AR"
-              "NM=$TC_NM"
-              "OBJCOPY=$TC_OBJCOPY"
-              "OBJDUMP=$TC_OBJDUMP"
-              "STRIP=$TC_STRIP"
-              "LLVM=1"
-              "LLVM_IAS=$TC_LLVM_IAS"
-              "CLANG_TRIPLE=$TC_CLANG_TRIPLE"
-              "CROSS_COMPILE=$TC_CROSS_COMPILE"
-              "CROSS_COMPILE_ARM32=$TC_CROSS_COMPILE_ARM32"
-            )
-          fi
-
-          make \
-            O="$ABS_OUT" \
-            ARCH=arm64 \
-            HOSTLDFLAGS="$TC_HOSTLDFLAGS" \
-            "${TOOLCHAIN_ARGS[@]}" \
-            olddefconfig
-
-          cp \
-            "$ABS_OUT/.config" \
-            "$ABS_LOG/config.built"
-
-          grep -E \
-            '^(CONFIG_KSU|CONFIG_KSU_SUSFS|CONFIG_SEC_RESTRICT|CONFIG_RKP|CONFIG_TIMA|CONFIG_FIVE|CONFIG_LOCALVERSION)' \
-            "$ABS_OUT/.config" \
-            | tee "$ABS_LOG/config-summary.txt"
-
-          FINAL_CONFIG_HASH="$(
-            sha256sum "$ABS_OUT/.config" | cut -d' ' -f1
-          )"
-
-          echo "FINAL_CONFIG_HASH=$FINAL_CONFIG_HASH" >> "$GITHUB_ENV"
-          echo "Final .config SHA-256: $FINAL_CONFIG_HASH"
-      # ── 18. Build Image and DTBs ──────────────────────────────────────────────
-      - name: Build kernel Image and device DTBs
-        if: ${{ inputs.dry_run != true }}
-        working-directory: ${{ env.KERNEL_DIR }}
-        env:
-          ARCH: arm64
-          SUBARCH: arm64
-          KBUILD_BUILD_USER: ${{ env.BUILD_USER }}
-          KBUILD_BUILD_HOST: ${{ env.BUILD_HOST }}
-          KBUILD_BUILD_VERSION: ${{ env.BUILD_VERSION }}
-          KBUILD_BUILD_TIMESTAMP: ${{ env.KBUILD_BUILD_TIMESTAMP }}
-        run: |
-          set -Eeuo pipefail
-
-          if [[ "$TOOLCHAIN" == "gcc" ]]; then
-            TOOLCHAIN_ARGS=(
-              "CC=$TC_CC"
+              "HOSTCC=gcc"
+              "HOSTCXX=g++"
+              "HOSTLD=ld"
               "LD=$TC_LD"
               "AR=$TC_AR"
               "NM=$TC_NM"
@@ -1637,12 +1275,14 @@ jobs:
               "CROSS_COMPILE_ARM32=$TC_CROSS_COMPILE_ARM32"
             )
 
-            BUILD_KCFLAGS="$CHIMERA_KCFLAGS"
+            BUILD_KCFLAGS="-O2 -fcommon -fno-strict-aliasing -Wno-error"
             BUILD_KBUILD_LDFLAGS=""
-
           else
-            TOOLCHAIN_ARGS=(
+            MAKE_TOOLCHAIN_ARGS=(
               "CC=$TC_CC"
+              "HOSTCC=clang"
+              "HOSTCXX=clang++"
+              "HOSTLD=ld.lld"
               "LD=$TC_LD"
               "AR=$TC_AR"
               "NM=$TC_NM"
@@ -1660,18 +1300,527 @@ jobs:
             BUILD_KBUILD_LDFLAGS="$CHIMERA_KBUILD_LDFLAGS"
           fi
 
+          BUILD_KCFLAGS="$(printf '%s\n' "$BUILD_KCFLAGS" | xargs)"
+          BUILD_KBUILD_LDFLAGS="$(printf '%s\n' "$BUILD_KBUILD_LDFLAGS" | xargs || true)"
+
+          if [[ "$TOOLCHAIN" == "gcc" ]]; then
+            for forbidden in \
+              "-fuse-ld=lld" \
+              "-Wno-unknown-warning-option" \
+              "-Wno-error=unused-but-set-global"; do
+              if [[ " $BUILD_KCFLAGS $BUILD_KBUILD_LDFLAGS " == *" $forbidden "* ]]; then
+                echo "FATAL: Clang-only flag leaked into GCC mode: $forbidden" >&2
+                exit 1
+              fi
+            done
+          fi
+
+          MAKE_TOOLCHAIN_ARGS_FILE="$ABS_LOG/make-toolchain-args.txt"
+          : > "$MAKE_TOOLCHAIN_ARGS_FILE"
+
+          printf '%s\n' "${MAKE_TOOLCHAIN_ARGS[@]}" \
+            | tee "$MAKE_TOOLCHAIN_ARGS_FILE"
+
+          {
+            echo "BUILD_KCFLAGS=$BUILD_KCFLAGS"
+            echo "BUILD_KBUILD_LDFLAGS=$BUILD_KBUILD_LDFLAGS"
+          } | tee -a "$MAKE_TOOLCHAIN_ARGS_FILE"
+
+          {
+            echo "BUILD_KCFLAGS=$BUILD_KCFLAGS"
+            echo "BUILD_KBUILD_LDFLAGS=$BUILD_KBUILD_LDFLAGS"
+          } >> "$GITHUB_ENV"    
+      # ── 12. Kconfig fragment normalization ───────────────────────────────────
+      - name: Validate Kconfig fragment
+        run: |
+          set -Eeuo pipefail
+          CFG="$GITHUB_WORKSPACE/chimera-ksu-susfs.cfg"
+          grep -q '^CONFIG_KSU=y$' "$CFG"
+          grep -q '^CONFIG_KSU_MANUAL_HOOK=y$' "$CFG"
+          grep -q '^CONFIG_KSU_SUSFS=y$' "$CFG"
+          if grep -q '^CONFIG_KSU_NON_KPROBE' "$CFG"; then
+            echo "FATAL: CONFIG_KSU_NON_KPROBE is not a valid KernelSU-Next symbol" >&2
+            exit 1
+          fi
+          cat "$CFG"
+      # ── 13. Merge Kconfig ───────────────────────────────────────────────────
+      - name: Merge Kconfig
+        working-directory: ${{ env.KERNEL_DIR }}
+        run: |
+          set -Eeuo pipefail
+
+          make_toolchain_args() {
+            if [[ "$TOOLCHAIN" == "gcc" ]]; then
+              TOOLCHAIN_ARGS=(
+                "CC=$TC_CC"
+                "HOSTCC=gcc"
+                "HOSTCXX=g++"
+                "HOSTLD=ld"
+                "LD=$TC_LD"
+                "AR=$TC_AR"
+                "NM=$TC_NM"
+                "OBJCOPY=$TC_OBJCOPY"
+                "OBJDUMP=$TC_OBJDUMP"
+                "STRIP=$TC_STRIP"
+                "LLVM=0"
+                "LLVM_IAS=0"
+                "CROSS_COMPILE=$TC_CROSS_COMPILE"
+                "CROSS_COMPILE_ARM32=$TC_CROSS_COMPILE_ARM32"
+              )
+            else
+              TOOLCHAIN_ARGS=(
+                "CC=$TC_CC"
+                "HOSTCC=clang"
+                "HOSTCXX=clang++"
+                "HOSTLD=ld.lld"
+                "LD=$TC_LD"
+                "AR=$TC_AR"
+                "NM=$TC_NM"
+                "OBJCOPY=$TC_OBJCOPY"
+                "OBJDUMP=$TC_OBJDUMP"
+                "STRIP=$TC_STRIP"
+                "LLVM=1"
+                "LLVM_IAS=${TC_LLVM_IAS:-1}"
+                "CLANG_TRIPLE=${TC_CLANG_TRIPLE:-aarch64-linux-gnu-}"
+                "CROSS_COMPILE=$TC_CROSS_COMPILE"
+                "CROSS_COMPILE_ARM32=$TC_CROSS_COMPILE_ARM32"
+              )
+            fi
+          }
+
+          make_toolchain_args
+
+          cp \
+            "$GITHUB_WORKSPACE/chimera-ksu-susfs.cfg" \
+            /tmp/chimera-ksu-susfs.cfg
+
+          cp \
+            "$GITHUB_WORKSPACE/chimera-device-specific.cfg" \
+            /tmp/chimera-device-specific.cfg
+
+          make \
+            O="$ABS_OUT" \
+            ARCH=arm64 \
+            HOSTLDFLAGS="${TC_HOSTLDFLAGS:-}" \
+            "${TOOLCHAIN_ARGS[@]}" \
+            "$(basename "$DEFCONFIG")" \
+            | tee "$ABS_LOG/defconfig-base.log"
+
+          scripts/kconfig/merge_config.sh \
+            -m \
+            -O "$ABS_OUT" \
+            "$ABS_OUT/.config" \
+            /tmp/chimera-ksu-susfs.cfg \
+            /tmp/chimera-device-specific.cfg \
+            | tee "$ABS_LOG/merge-config.log"
+
+          make \
+            O="$ABS_OUT" \
+            ARCH=arm64 \
+            HOSTLDFLAGS="${TC_HOSTLDFLAGS:-}" \
+            "${TOOLCHAIN_ARGS[@]}" \
+            olddefconfig \
+            | tee -a "$ABS_LOG/merge-config.log"
+
+      # ── 14. Force KernelSU hook mode after Kconfig resolution ─────────────────
+      - name: Normalize KernelSU hook mode
+        working-directory: ${{ env.KERNEL_DIR }}
+        run: |
+          set -Eeuo pipefail
+
+          make_toolchain_args() {
+            if [[ "$TOOLCHAIN" == "gcc" ]]; then
+              TOOLCHAIN_ARGS=(
+                "CC=$TC_CC"
+                "HOSTCC=gcc"
+                "HOSTCXX=g++"
+                "HOSTLD=ld"
+                "LD=$TC_LD"
+                "AR=$TC_AR"
+                "NM=$TC_NM"
+                "OBJCOPY=$TC_OBJCOPY"
+                "OBJDUMP=$TC_OBJDUMP"
+                "STRIP=$TC_STRIP"
+                "LLVM=0"
+                "LLVM_IAS=0"
+                "CROSS_COMPILE=$TC_CROSS_COMPILE"
+                "CROSS_COMPILE_ARM32=$TC_CROSS_COMPILE_ARM32"
+              )
+            else
+              TOOLCHAIN_ARGS=(
+                "CC=$TC_CC"
+                "HOSTCC=clang"
+                "HOSTCXX=clang++"
+                "HOSTLD=ld.lld"
+                "LD=$TC_LD"
+                "AR=$TC_AR"
+                "NM=$TC_NM"
+                "OBJCOPY=$TC_OBJCOPY"
+                "OBJDUMP=$TC_OBJDUMP"
+                "STRIP=$TC_STRIP"
+                "LLVM=1"
+                "LLVM_IAS=${TC_LLVM_IAS:-1}"
+                "CLANG_TRIPLE=${TC_CLANG_TRIPLE:-aarch64-linux-gnu-}"
+                "CROSS_COMPILE=$TC_CROSS_COMPILE"
+                "CROSS_COMPILE_ARM32=$TC_CROSS_COMPILE_ARM32"
+              )
+            fi
+          }
+
+          make_toolchain_args
+
+          CFG="$ABS_OUT/.config"
+
+          echo "Forcing KernelSU manual-hook mode"
+
+          if [[ -x scripts/config ]]; then
+            scripts/config \
+              --file "$CFG" \
+              -e CONFIG_KSU \
+              -e CONFIG_KSU_MANUAL_HOOK \
+              -d CONFIG_KSU_KPROBES_HOOK
+          else
+            sed -i \
+              -e '/^CONFIG_KSU_KPROBES_HOOK=/d' \
+              -e '/^# CONFIG_KSU_KPROBES_HOOK is not set$/d' \
+              "$CFG"
+
+            grep -q '^CONFIG_KSU=y$' "$CFG" || \
+              printf '%s\n' 'CONFIG_KSU=y' >> "$CFG"
+
+            grep -q '^CONFIG_KSU_MANUAL_HOOK=y$' "$CFG" || \
+              printf '%s\n' 'CONFIG_KSU_MANUAL_HOOK=y' >> "$CFG"
+
+            printf '%s\n' '# CONFIG_KSU_KPROBES_HOOK is not set' >> "$CFG"
+          fi
+
+          make \
+            O="$ABS_OUT" \
+            ARCH=arm64 \
+            HOSTLDFLAGS="${TC_HOSTLDFLAGS:-}" \
+            "${TOOLCHAIN_ARGS[@]}" \
+            olddefconfig \
+            | tee -a "$ABS_LOG/merge-config.log"
+
+          grep -q '^CONFIG_KSU=y$' "$CFG" || {
+            echo "FATAL: CONFIG_KSU=y is missing after olddefconfig" >&2
+            exit 1
+          }
+
+          grep -q '^CONFIG_KSU_MANUAL_HOOK=y$' "$CFG" || {
+            echo "FATAL: CONFIG_KSU_MANUAL_HOOK=y is missing after olddefconfig" >&2
+            exit 1
+          }
+
+          if grep -q '^CONFIG_KSU_KPROBES_HOOK=y$' "$CFG"; then
+            echo "FATAL: CONFIG_KSU_KPROBES_HOOK=y is also enabled" >&2
+            exit 1
+          fi
+
+          echo "PASS: KernelSU manual-hook mode is enabled exclusively"
+          cp "$CFG" "$ABS_LOG/final.config"
+
+      # ── 14b. Security/config guard ───────────────────────────────────────────
+      - name: Guard pass — verify security restrictions disabled and KSU/SUSFS enabled
+        working-directory: ${{ env.KERNEL_DIR }}
+        run: |
+          set -Eeuo pipefail
+
+          CFG="$ABS_OUT/.config"
+
+          FORBIDDEN=(
+            CONFIG_RKP_KDP
+            CONFIG_UH_RKP
+            CONFIG_TIMA
+            CONFIG_TIMA_LKMAUTH
+            CONFIG_FIVE
+            CONFIG_SEC_RESTRICT_ROOTING
+            CONFIG_SEC_RESTRICT_SETUID
+            CONFIG_SECURITY_DEFEX
+            CONFIG_KNOX_KAP
+          )
+
+          REQUIRED=(
+            CONFIG_KSU
+            CONFIG_KSU_MANUAL_HOOK
+            CONFIG_KSU_SUSFS
+            CONFIG_KSU_SUSFS_SUS_PATH
+            CONFIG_KSU_SUSFS_SUS_MAP
+            CONFIG_KSU_SUSFS_SUS_KSTAT
+            CONFIG_HZ_300
+            CONFIG_TCP_CONG_ADVANCED
+            CONFIG_TCP_CONG_BBR
+            CONFIG_TCP_CONG_CUBIC
+            CONFIG_DEFAULT_BBR
+            CONFIG_NET_SCHED
+            CONFIG_NET_SCH_FQ
+            CONFIG_NET_SCH_FQ_CODEL
+          )
+
+          FAIL=0
+          : > "$ABS_LOG/config-guard.log"
+
+          for sym in "${FORBIDDEN[@]}"; do
+            if grep -qE "^${sym}=y$" "$CFG"; then
+              echo "FATAL: $sym=y" | tee -a "$ABS_LOG/config-guard.log"
+              FAIL=1
+            else
+              echo "OK: $sym disabled" | tee -a "$ABS_LOG/config-guard.log"
+            fi
+          done
+
+          for sym in "${REQUIRED[@]}"; do
+            if grep -qE "^${sym}=y$" "$CFG"; then
+              echo "OK: $sym=y" | tee -a "$ABS_LOG/config-guard.log"
+            else
+              echo "FATAL: $sym is not enabled" | tee -a "$ABS_LOG/config-guard.log"
+              FAIL=1
+            fi
+          done
+
+          if grep -q '^CONFIG_KSU_KPROBES_HOOK=y$' "$CFG"; then
+            echo "FATAL: CONFIG_KSU_KPROBES_HOOK=y; manual and kprobe modes cannot both be enabled" \
+              | tee -a "$ABS_LOG/config-guard.log"
+            FAIL=1
+          else
+            echo "OK: CONFIG_KSU_KPROBES_HOOK disabled" \
+              | tee -a "$ABS_LOG/config-guard.log"
+          fi
+
+          [[ "$FAIL" -eq 0 ]] || exit 1
+
+      # ── 16. ccache ───────────────────────────────────────────────────────────
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: >-
+            chimera-mk9-${{ inputs.profile }}-${{ inputs.toolchain }}-${{ env.TC_CACHE_KEY }}-${{ env.TC_IDENTITY_HASH }}-${{ github.sha }}
+          restore-keys: |
+            chimera-mk9-${{ inputs.profile }}-${{ inputs.toolchain }}-${{ env.TC_CACHE_KEY }}-${{ env.TC_IDENTITY_HASH }}-
+          max-size: ${{ env.CCACHE_MAXSIZE }}
+
+      # ── 17. Finalize config ──────────────────────────────────────────────────
+      - name: Finalise kernel .config
+        working-directory: ${{ env.KERNEL_DIR }}
+        run: |
+          set -Eeuo pipefail
+
+          make_toolchain_args() {
+            if [[ "$TOOLCHAIN" == "gcc" ]]; then
+              TOOLCHAIN_ARGS=(
+                "CC=$TC_CC"
+                "HOSTCC=gcc"
+                "HOSTCXX=g++"
+                "HOSTLD=ld"
+                "LD=$TC_LD"
+                "AR=$TC_AR"
+                "NM=$TC_NM"
+                "OBJCOPY=$TC_OBJCOPY"
+                "OBJDUMP=$TC_OBJDUMP"
+                "STRIP=$TC_STRIP"
+                "LLVM=0"
+                "LLVM_IAS=0"
+                "CROSS_COMPILE=$TC_CROSS_COMPILE"
+                "CROSS_COMPILE_ARM32=$TC_CROSS_COMPILE_ARM32"
+              )
+            else
+              TOOLCHAIN_ARGS=(
+                "CC=$TC_CC"
+                "HOSTCC=clang"
+                "HOSTCXX=clang++"
+                "HOSTLD=ld.lld"
+                "LD=$TC_LD"
+                "AR=$TC_AR"
+                "NM=$TC_NM"
+                "OBJCOPY=$TC_OBJCOPY"
+                "OBJDUMP=$TC_OBJDUMP"
+                "STRIP=$TC_STRIP"
+                "LLVM=1"
+                "LLVM_IAS=${TC_LLVM_IAS:-1}"
+                "CLANG_TRIPLE=${TC_CLANG_TRIPLE:-aarch64-linux-gnu-}"
+                "CROSS_COMPILE=$TC_CROSS_COMPILE"
+                "CROSS_COMPILE_ARM32=$TC_CROSS_COMPILE_ARM32"
+              )
+            fi
+          }
+
+          make_toolchain_args
+
+          make \
+            O="$ABS_OUT" \
+            ARCH=arm64 \
+            HOSTLDFLAGS="${TC_HOSTLDFLAGS:-}" \
+            "${TOOLCHAIN_ARGS[@]}" \
+            olddefconfig \
+            | tee "$ABS_LOG/finalize-config.log"
+
+          cp "$ABS_OUT/.config" "$ABS_LOG/config.built"
+
+          grep -E \
+            '^(CONFIG_KSU|CONFIG_KSU_MANUAL_HOOK|CONFIG_KSU_KPROBES_HOOK|CONFIG_KSU_SUSFS|CONFIG_SECURITY|CONFIG_RKP|CONFIG_TIMA|CONFIG_FIVE|CONFIG_LOCALVERSION)' \
+            "$ABS_OUT/.config" \
+            | tee "$ABS_LOG/config-summary.txt"
+
+          FINAL_CONFIG_HASH="$(sha256sum "$ABS_OUT/.config" | cut -d' ' -f1)"
+
+          echo "FINAL_CONFIG_HASH=$FINAL_CONFIG_HASH" >> "$GITHUB_ENV"
+          echo "Final .config SHA-256: $FINAL_CONFIG_HASH"
+
+      # ── 17b. Validate effective compiler flags ───────────────────────────────
+      - name: Guard effective GCC or LLVM build mode
+        run: |
+          set -Eeuo pipefail
+
+          : "${TOOLCHAIN:?TOOLCHAIN is not set}"
+          : "${TC_CC:?TC_CC is not set}"
+          : "${TC_LD:?TC_LD is not set}"
+
+          if [[ "$TOOLCHAIN" == "gcc" ]]; then
+            BUILD_KCFLAGS="-O2 -fcommon -fno-strict-aliasing -Wno-error"
+            BUILD_KBUILD_LDFLAGS=""
+
+            [[ "$TC_CC" == *aarch64-linux-gnu-gcc ]] || {
+              echo "FATAL: GCC mode is not using aarch64-linux-gnu-gcc: $TC_CC" >&2
+              exit 1
+            }
+
+            [[ "$TC_LD" == "aarch64-linux-gnu-ld" ]] || {
+              echo "FATAL: GCC mode is not using aarch64-linux-gnu-ld: $TC_LD" >&2
+              exit 1
+            }
+
+            for forbidden in \
+              "-fuse-ld=lld" \
+              "-Wno-unknown-warning-option" \
+              "-Wno-error=unused-but-set-global"; do
+              if [[ " $BUILD_KCFLAGS $BUILD_KBUILD_LDFLAGS " == *" $forbidden "* ]]; then
+                echo "FATAL: Clang-only flag leaked into GCC mode: $forbidden" >&2
+                exit 1
+              fi
+            done
+          else
+            BUILD_KCFLAGS="${CHIMERA_KCFLAGS:?CHIMERA_KCFLAGS is not set}"
+            BUILD_KBUILD_LDFLAGS="${CHIMERA_KBUILD_LDFLAGS:-}"
+
+            [[ "$TC_CC" == *clang* ]] || {
+              echo "FATAL: LLVM mode is not using Clang: $TC_CC" >&2
+              exit 1
+            }
+
+            [[ "$TC_LD" == "ld.lld" ]] || {
+              echo "FATAL: LLVM mode is not using ld.lld: $TC_LD" >&2
+              exit 1
+            }
+          fi
+
+          {
+            echo "Toolchain: $TOOLCHAIN"
+            echo "Compiler command: $TC_CC"
+            echo "Linker command: $TC_LD"
+            echo "Effective KCFLAGS: $BUILD_KCFLAGS"
+            echo "Effective KBUILD_LDFLAGS: $BUILD_KBUILD_LDFLAGS"
+          } | tee "$ABS_LOG/effective-build-mode.txt"
+          
+      # ── 18. Build kernel and device DTBs ────────────────────────────────────
+      - name: Build kernel Image and device DTBs
+        if: ${{ inputs.dry_run != true }}
+        working-directory: ${{ env.KERNEL_DIR }}
+        run: |
+          set -Eeuo pipefail
+
+          : "${TOOLCHAIN:?TOOLCHAIN is not set}"
+          : "${TC_CC:?TC_CC is not set}"
+          : "${TC_LD:?TC_LD is not set}"
+          : "${TC_AR:?TC_AR is not set}"
+          : "${TC_NM:?TC_NM is not set}"
+          : "${TC_OBJCOPY:?TC_OBJCOPY is not set}"
+          : "${TC_OBJDUMP:?TC_OBJDUMP is not set}"
+          : "${TC_STRIP:?TC_STRIP is not set}"
+          : "${TC_CROSS_COMPILE:?TC_CROSS_COMPILE is not set}"
+          : "${TC_CROSS_COMPILE_ARM32:?TC_CROSS_COMPILE_ARM32 is not set}"
+          : "${ABS_OUT:?ABS_OUT is not set}"
+          : "${ABS_LOG:?ABS_LOG is not set}"
+          : "${BRAND:?BRAND is not set}"
+
+          if [[ "$TOOLCHAIN" == "gcc" ]]; then
+            TOOLCHAIN_ARGS=(
+              "CC=$TC_CC"
+              "HOSTCC=gcc"
+              "HOSTCXX=g++"
+              "HOSTLD=ld"
+              "LD=$TC_LD"
+              "AR=$TC_AR"
+              "NM=$TC_NM"
+              "OBJCOPY=$TC_OBJCOPY"
+              "OBJDUMP=$TC_OBJDUMP"
+              "STRIP=$TC_STRIP"
+              "LLVM=0"
+              "LLVM_IAS=0"
+              "CROSS_COMPILE=$TC_CROSS_COMPILE"
+              "CROSS_COMPILE_ARM32=$TC_CROSS_COMPILE_ARM32"
+            )
+
+            # GCC-compatible flags only.
+            BUILD_KCFLAGS="-O2 -fcommon -fno-strict-aliasing -Wno-error"
+            BUILD_KBUILD_LDFLAGS=""
+
+            if [[ "$BUILD_KCFLAGS" == *"-Wno-error=unused-but-set-global"* ]]; then
+              echo "FATAL: Clang-only warning flag leaked into GCC mode" >&2
+              exit 1
+            fi
+
+            if [[ "$BUILD_KCFLAGS" == *"-Wno-unknown-warning-option"* ]]; then
+              echo "FATAL: Clang-only warning flag leaked into GCC mode" >&2
+              exit 1
+            fi
+
+            if [[ "$BUILD_KCFLAGS" == *"-fuse-ld=lld"* ]]; then
+              echo "FATAL: LLD flag leaked into GCC mode" >&2
+              exit 1
+            fi
+          else
+            TOOLCHAIN_ARGS=(
+              "CC=$TC_CC"
+              "HOSTCC=clang"
+              "HOSTCXX=clang++"
+              "HOSTLD=ld.lld"
+              "LD=$TC_LD"
+              "AR=$TC_AR"
+              "NM=$TC_NM"
+              "OBJCOPY=$TC_OBJCOPY"
+              "OBJDUMP=$TC_OBJDUMP"
+              "STRIP=$TC_STRIP"
+              "LLVM=1"
+              "LLVM_IAS=${TC_LLVM_IAS:-1}"
+              "CLANG_TRIPLE=${TC_CLANG_TRIPLE:-aarch64-linux-gnu-}"
+              "CROSS_COMPILE=$TC_CROSS_COMPILE"
+              "CROSS_COMPILE_ARM32=$TC_CROSS_COMPILE_ARM32"
+            )
+
+            BUILD_KCFLAGS="${CHIMERA_KCFLAGS:?CHIMERA_KCFLAGS is not set}"
+            BUILD_KBUILD_LDFLAGS="${CHIMERA_KBUILD_LDFLAGS:-}"
+          fi
+
           JOBS="$(nproc)"
 
           MAKE_ARGS=(
             "O=$ABS_OUT"
             "ARCH=arm64"
-            "HOSTLDFLAGS=$TC_HOSTLDFLAGS"
+            "HOSTLDFLAGS=${TC_HOSTLDFLAGS:-}"
             "${TOOLCHAIN_ARGS[@]}"
             "-j${JOBS}"
             "LOCALVERSION=$BRAND"
             "KCFLAGS=$BUILD_KCFLAGS"
             "KBUILD_LDFLAGS=$BUILD_KBUILD_LDFLAGS"
           )
+
+          {
+            echo "Toolchain: $TOOLCHAIN"
+            echo "Compiler: ${COMPILER_VERSION:-unknown}"
+            echo "Linker: ${LINKER_VERSION:-unknown}"
+            echo "KCFLAGS: $BUILD_KCFLAGS"
+            echo "KBUILD_LDFLAGS: $BUILD_KBUILD_LDFLAGS"
+          } | tee "$ABS_LOG/build-flags.txt"
 
           make \
             "${MAKE_ARGS[@]}" \
@@ -1680,16 +1829,6 @@ jobs:
             dtbs \
             2>&1 \
             | tee "$ABS_LOG/build.log"
-
-          {
-            echo "Build identity: $KERNEL_IDENTITY"
-            echo "Kernel release: $KERNEL_RELEASE"
-            echo "Compiler: $COMPILER_VERSION"
-            echo "Linker: $LINKER_VERSION"
-            echo "KCFLAGS: $BUILD_KCFLAGS"
-            echo "KCFLAGS SHA-256: $KCFLAGS_HASH"
-            echo "KBUILD_LDFLAGS: $BUILD_KBUILD_LDFLAGS"
-          } | tee "$ABS_LOG/build-flags.txt"
       # ── 18b. Verify KCFLAGS actually reached the build unmodified ───────────
       - name: Verify build identity and KCFLAGS
         if: ${{ inputs.dry_run != true }}
@@ -1864,76 +2003,27 @@ jobs:
         run: |
           set -Eeuo pipefail
 
-          [[ -d "$ABS_OUT" ]] || {
-            echo "FATAL: output directory does not exist: $ABS_OUT" >&2
-            exit 1
-          }
-
-          if [[ "$TOOLCHAIN" == "gcc" ]]; then
-            TOOLCHAIN_ARGS=(
-              "CC=$TC_CC"
-              "LD=$TC_LD"
-              "AR=$TC_AR"
-              "NM=$TC_NM"
-              "OBJCOPY=$TC_OBJCOPY"
-              "OBJDUMP=$TC_OBJDUMP"
-              "STRIP=$TC_STRIP"
-              "LLVM=0"
-              "LLVM_IAS=0"
-              "CROSS_COMPILE=$TC_CROSS_COMPILE"
-              "CROSS_COMPILE_ARM32=$TC_CROSS_COMPILE_ARM32"
-            )
-          else
-            TOOLCHAIN_ARGS=(
-              "CC=$TC_CC"
-              "LD=$TC_LD"
-              "AR=$TC_AR"
-              "NM=$TC_NM"
-              "OBJCOPY=$TC_OBJCOPY"
-              "OBJDUMP=$TC_OBJDUMP"
-              "STRIP=$TC_STRIP"
-              "LLVM=1"
-              "LLVM_IAS=$TC_LLVM_IAS"
-              "CLANG_TRIPLE=$TC_CLANG_TRIPLE"
-              "CROSS_COMPILE=$TC_CROSS_COMPILE"
-              "CROSS_COMPILE_ARM32=$TC_CROSS_COMPILE_ARM32"
-            )
-          fi
-
-          RELEASE_OUTPUT="$(
+          ACTUAL_RELEASE="$(
             make \
               --no-print-directory \
               O="$ABS_OUT" \
               ARCH=arm64 \
               HOSTLDFLAGS="$TC_HOSTLDFLAGS" \
-              "${TOOLCHAIN_ARGS[@]}" \
-              kernelrelease
+              "${MAKE_TOOLCHAIN_ARGS[@]}" \
+              kernelrelease |
+            tail -n1
           )"
-
-          ACTUAL_RELEASE="$(printf '%s\n' "$RELEASE_OUTPUT" | tail -n1)"
 
           [[ -n "$ACTUAL_RELEASE" ]] || {
             echo "FATAL: kernelrelease returned empty output" >&2
-            printf 'Raw output:\n%s\n' "$RELEASE_OUTPUT" >&2
             exit 1
           }
 
-          if [[ "$ACTUAL_RELEASE" == *$'\n'* ]]; then
+          [[ "$ACTUAL_RELEASE" != *$'\n'* ]] || {
             echo "FATAL: kernelrelease contains embedded newlines" >&2
             printf '%s\n' "$ACTUAL_RELEASE" >&2
             exit 1
-          fi
-
-          if [[ "$ACTUAL_RELEASE" =~ [[:space:]] ]]; then
-            echo "FATAL: kernelrelease contains whitespace: '$ACTUAL_RELEASE'" >&2
-            exit 1
-          fi
-
-          if [[ -n "${KERNEL_RELEASE:-}" && "$ACTUAL_RELEASE" != "$KERNEL_RELEASE" ]]; then
-            echo "WARN: actual release differs from expected release"
-            echo "Expected: $KERNEL_RELEASE"
-            echo "Actual:   $ACTUAL_RELEASE"
-          fi
+          }
 
           echo "ACTUAL_KERNEL_RELEASE=$ACTUAL_RELEASE" >> "$GITHUB_ENV"
           echo "Actual kernel release: $ACTUAL_RELEASE"
