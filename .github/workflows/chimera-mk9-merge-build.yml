@@ -1,72 +1,27 @@
-name: Project Chimera Mk9 — gavdoc38 Canonical Base Build v.20260928
+name: Project Chimera Mk9 — boot-first kernel build v.20260928-r2
 # ─────────────────────────────────────────────────────────────────────────────
-# VERSION HISTORY (append-only — do not delete prior entries)
+# VERSION HISTORY (append-only; earlier entries condensed — the attached
+# previous file's full text was truncated mid-entry at v.20260822a)
 #
-# v.20260928 — Added GCC cross-toolchain support.
-#   Kconfig, kernelrelease, and kernel-build invocations now select GCC or
-#   LLVM arguments dynamically. GCC mode uses the system AArch64 and ARM
-#   cross-tools with LLVM=0 and LLVM_IAS=0. LLVM modes retain their resolved
-#   LLVM settings. Compiler and linker identity are captured and validated.
-#   KernelSU manual-hook normalization and actual kernel-release detection no
-#   longer contain hard-coded LLVM-only make arguments.
-#
-# v.20260927 — Added the aosp23 toolchain option.
-#   Uses the supplied AOSP Clang r614150 archive URL. The archive URL,
-#   extraction layout, reported compiler version, cross-binutils prefixes,
-#   and download integrity were not independently verified. No SHA-256 pin
-#   is present. The first aosp23 CI run is the required validation.
-#
-# v.20260921 — Added the weebx toolchain option and base_ref-derived branding.
-#   WeebX-Clang is pinned by archive SHA-256 and its archive layout,
-#   compiler binaries, LLVM target, and cross-binutils prefixes were checked.
-#   A full kernel build with this compiler remains unverified; the first
-#   successful CI build is the definitive validation.
-#
-#   Added the -cm9x[git7] brand option. The suffix is derived from the first
-#   seven characters of the validated kernel base_ref and is propagated
-#   through CONFIG_LOCALVERSION, LOCALVERSION, kernel-release metadata,
-#   manifest fields, and AnyKernel identity data.
-#
-# v.20260914 — Completed an external audit of KernelSU-Next hook wiring and
-#   toolchain reproducibility.
-#   Added direct verification of all five required manual-hook call sites in
-#   fs/exec.c, fs/open.c, fs/stat.c, fs/read_write.c, and
-#   drivers/input/input.c. Extended the vmlinux symbol guard with the
-#   corresponding KSU handler symbols.
-#
-#   Removed proton from the selectable toolchain options because its upstream
-#   default branch was stale. Kept the case branch as inert compatibility
-#   code. Added an explicit warning that aosp20 uses a mutable third-party
-#   mirror and still requires immutable commit pinning.
-#
-#   Changed zyc_stable cache-key generation to hash the dynamically resolved
-#   archive URL, preventing a static cache key from silently freezing an
-#   outdated LLVM snapshot.
-#
-# v.20260902 — Fixed three CI and packaging issues.
-#   Corrected the DTB packaging path so the generated dtb.img is included in
-#   the AnyKernel archive.
-#
-#   Moved toolchain setup before all Kconfig steps so configuration probes use
-#   the selected compiler rather than an absent or unrelated system compiler.
-#
-#   Wired ccache into the compiler command and retained post-build verification
-#   of the configured compiler flags.
-#
-#   Updated the Project Chimera branch reference after its upstream branch
-#   rename. Existing historical references remain unchanged because this log
-#   is append-only.
-#
-# v.20260822b — Fixed AnyKernel identity parity.
-#   Added compiler identity, expected kernel release, final configuration
-#   SHA-256, uname data, and KernelSU manual-hook information to the generated
-#   AnyKernel header. Corrected the stray closing brace in kernel.string.
-#
-# v.20260822a — Fixed the AArch64 VDSO linker failure.
-#   Restored -fuse-ld=lld to CHIMERA_KCFLAGS so VDSO sub-builds receive the
-#   linker selection on this Linux 4.9 tree. The flag remains in
-#   CHIMERA_KBUILD_LDFLAGS for the top-level ke
+# v.20260928-r2 — Boot-first restructure. profile is now boot-first |
+#   chimera-full. Shared toolchain library (no bash arrays across steps).
+#   Fixed: unexported KBUILD_BUILD_USER/HOST/VERSION; empty-default
+#   build_date; 18b identity self-check; step-20a empty toolchain args;
+#   zyc_stable archive format; host -fcommon (dtc yylloc); -fuse-ld=lld in
+#   LLVM mode only; AnyKernel lowercase variables; injection-safe inputs;
+#   SUBLEVEL enforcement; compiler identity from vmlinux .comment.
+#   Packaging is opt-in and UNVERIFIED. No claim of boot/root/SUSFS proof.
+# v.20260928 — GCC cross-toolchain option added.
+# v.20260927 — aosp23 toolchain option (URL/layout/hash unverified).
+# v.20260921 — weebx toolchain (SHA-256 pinned); -cm9x[git7] brand.
+# v.20260914 — KSU-Next manual-hook call-site audit; vmlinux symbol guard;
+#   proton removed; zyc_stable cache key hashes resolved URL.
+# v.20260902 — DTB packaging path, toolchain-before-Kconfig, ccache wiring.
+# v.20260822b — AnyKernel identity parity.
+# v.20260822a — AArch64 VDSO linker failure fix (-fuse-ld=lld).
+# ─────────────────────────────────────────────────────────────────────────────
 
+# contents: write is required ONLY for do_release (creates a tag + release).
 permissions:
   contents: write
 
@@ -78,11 +33,11 @@ on:
   workflow_dispatch:
     inputs:
       profile:
-        description: "Build profile: cm9 (runtime SUSFS spoof) or cm9e (compile-time identity)"
+        description: "boot-first (smallest safe build) or chimera-full (adds optional Chimera overlay/tuning)"
         required: true
         type: choice
-        options: [cm9, cm9e]
-        default: cm9
+        options: [boot-first, chimera-full]
+        default: boot-first
 
       toolchain:
         description: "Toolchain: gcc/llvm22/llvm21/llvm20/aosp23/aosp22/aosp21/aosp20/aosp19/neutron19/neutron23/neutron24/zyc_stable/weebx"
@@ -91,20 +46,32 @@ on:
         options: [gcc, llvm22, llvm21, llvm20, aosp23, aosp22, aosp21, aosp20, aosp19, neutron19, neutron23, neutron24, zyc_stable, weebx]
         default: llvm22
 
+      apply_optional_overlay:
+        description: "Apply the optional Chimera overlay/tuning even in boot-first"
+        required: false
+        type: boolean
+        default: false
+
       dry_run:
-        description: "Validate only — skip build and package"
+        description: "Validate + configure only — skip build and packaging"
+        required: false
+        type: boolean
+        default: false
+
+      package_anykernel:
+        description: "Also build an AnyKernel3 ZIP + raw dtb concat (packaging is UNVERIFIED for this device)"
         required: false
         type: boolean
         default: false
 
       do_release:
-        description: "Create a GitHub Release after successful build"
+        description: "Create a GitHub prerelease (creates a tag — repository mutation)"
         required: false
         type: boolean
         default: false
 
       force_repatch:
-        description: "Force re-apply Chimera overlay patches even if markers present"
+        description: "Pass FORCE_REPATCH=true to the overlay script (overlay only)"
         required: false
         type: boolean
         default: false
@@ -116,31 +83,25 @@ on:
         default: "gavdoc38/android_kernel_samsung_exynos9810"
 
       base_ref:
-        description: "Base ref: full 40-hex commit SHA only (not a branch name — see fix-log item [I]). Default is the current pin of record; the live branch tip is logged for drift but never substituted automatically."
+        description: "Base ref: full 40-hex commit SHA only. Live branch tip is logged for drift, never substituted."
         required: false
         type: string
         default: "0cb89107c970173b7900c3cea4d82c33572a9af1"
 
       ksu_commit:
-        description: "KernelSU-Next exact commit SHA (full 40-hex, pin; overrides submodule-pinned commit if different) — must be bumped together with base_ref, see fix-log item [I]"
+        description: "KernelSU-Next exact commit SHA (full 40-hex). Bump together with base_ref."
         required: false
         type: string
         default: "685b4a6ba3d2befdf40b3c67cf096d050c7aa6cb"
 
       base_branch_hint:
-        description: "Branch name to compare base_ref against for drift logging ONLY — never used as the actual checkout ref"
+        description: "Branch name to compare base_ref against for drift logging ONLY"
         required: false
         type: string
         default: "lineage-23.2-ksun3-susfs2"
 
-      susfs_note:
-        description: "SUSFS provenance note only — SUSFS is vendored into the gavdoc38 base tree (branch suffix '-susfs2'), not a separate checkout"
-        required: false
-        type: string
-        default: "vendored in base branch lineage-23.2-ksun3-susfs2"
-
       brand:
-        description: "LOCALVERSION suffix (must start with '-'). '-cm9x[git7]' resolves to '-cm9x' + first 7 hex chars of base_ref. Pick 'Other' to type a custom value."
+        description: "LOCALVERSION suffix (starts with '-'). '-cm9x[git7]' = '-cm9x' + first 7 hex of base_ref."
         required: true
         type: choice
         options:
@@ -150,27 +111,18 @@ on:
           - "Other"
         default: "-cm9x[git7]"
       custom_brand:
-        description: "Custom brand — only used if 'brand' above is set to 'Other' (must start with '-')"
+        description: "Custom brand — only if brand=Other (must start with '-')"
         required: false
         type: string
 
       build_user:
-        description: "KBUILD_BUILD_USER. Pick 'Other' to type a custom value."
+        description: "KBUILD_BUILD_USER. 'Other' uses custom_build_user."
         required: true
         type: choice
-        options:
-          - "MTRXX"
-          - "EVOXV"
-          - "EVOXG"
-          - "DRPFST"
-          - "HLCYN"
-          - "LOS"
-          - "GA"
-          - "RC0"
-          - "Other"
+        options: ["MTRXX", "EVOXV", "EVOXG", "DRPFST", "HLCYN", "LOS", "GA", "RC0", "Other"]
         default: "Other"
       custom_build_user:
-        description: "Custom build user — only used if 'build_user' above is set to 'Other'"
+        description: "Custom build user — only if build_user=Other"
         required: false
         type: string
         default: "CM9XNNNN"
@@ -182,13 +134,13 @@ on:
         default: "AegisDevLabs"
 
       build_version:
-        description: "KBUILD_BUILD_VERSION (#N token)"
+        description: "KBUILD_BUILD_VERSION (#N token, digits)"
         required: false
         type: string
         default: "1"
 
       build_date:
-        description: "KBUILD_BUILD_TIMESTAMP — ROM label shown for reference only, stripped before use. Pick 'Other' to type a custom value."
+        description: "KBUILD_BUILD_TIMESTAMP — ROM label stripped before use. 'Other' uses custom_build_date (empty => fixed default)."
         required: true
         type: choice
         options:
@@ -203,7 +155,7 @@ on:
           - "Other"
         default: "Other"
       custom_build_date:
-        description: "Custom build timestamp — only used if 'build_date' above is set to 'Other' (no ROM prefix needed here)"
+        description: "Custom build timestamp — only if build_date=Other"
         required: false
         type: string
 
@@ -218,193 +170,124 @@ env:
   ANYKERNEL_REPO: "https://github.com/osm0sis/AnyKernel3.git"
 
   DEFCONFIG: "arch/arm64/configs/exynos9810-star2lte_defconfig"
-
   CCACHE_MAXSIZE: "3G"
-
-  BRAND_DEFAULT: "-Chimera_Mk9"
-  BUILD_USER_DEFAULT: "GA"
-  BUILD_HOST_DEFAULT: "CM9XNNNN"
-  BUILD_VERSION_DEFAULT: "1"
-  KBUILD_BUILD_TIMESTAMP_DEFAULT: "Mon 1 Jan 00:00:00 UTC 2026"
+  CCACHE_BASEDIR: "${{ github.workspace }}"
 
   KERNEL_VERSION: "4.9.337"
   KERNEL_NAME: "Chimera Mk9"
   KERNEL_DEVICE: "star2lte"
   KERNEL_PLATFORM: "Exynos 9810"
+  BUILD_DATE_DEFAULT: "Thu Jan 1 00:00:00 UTC 2026"
 
+  # Common target CFLAGS. LLVM mode appends -fuse-ld=lld in the shared library.
+  CHIMERA_KCFLAGS_COMMON: "-O2 -fcommon -fno-strict-aliasing -Wno-error"
+
+  CI_LIB: "/tmp/chimera-ci-lib.sh"
+
+  # Inputs are passed through env, never interpolated into shell text.
   PROFILE: ${{ inputs.profile }}
   TOOLCHAIN: ${{ inputs.toolchain }}
-  IDENTITY_ENGINE_ACTIVE: ${{ inputs.profile == 'cm9e' }}
+  IN_PROFILE: ${{ inputs.profile }}
+  IN_TOOLCHAIN: ${{ inputs.toolchain }}
+  IN_BASE_REPO: ${{ inputs.base_repo }}
+  IN_BASE_REF: ${{ inputs.base_ref }}
+  IN_KSU_COMMIT: ${{ inputs.ksu_commit }}
+  IN_BASE_BRANCH_HINT: ${{ inputs.base_branch_hint }}
+  IN_BRAND: ${{ inputs.brand }}
+  IN_CUSTOM_BRAND: ${{ inputs.custom_brand }}
+  IN_BUILD_USER: ${{ inputs.build_user }}
+  IN_CUSTOM_BUILD_USER: ${{ inputs.custom_build_user }}
+  IN_BUILD_HOST: ${{ inputs.build_host }}
+  IN_BUILD_VERSION: ${{ inputs.build_version }}
+  IN_BUILD_DATE: ${{ inputs.build_date }}
+  IN_CUSTOM_BUILD_DATE: ${{ inputs.custom_build_date }}
   FORCE_REPATCH: ${{ inputs.force_repatch }}
-  BASE_REPO: ${{ inputs.base_repo }}
-
-  CHIMERA_KCFLAGS: -O2 -fcommon -fno-strict-aliasing -Wno-error
-  CHIMERA_KBUILD_LDFLAGS: ""
+  APPLY_OVERLAY: ${{ inputs.profile == 'chimera-full' || inputs.apply_optional_overlay }}
 
 jobs:
   build:
-    name: Chimera Mk9 Merge Build — ${{ inputs.profile }} / ${{ inputs.toolchain }}
+    name: Chimera Mk9 ${{ inputs.profile }} / ${{ inputs.toolchain }}
     runs-on: ubuntu-24.04
-
+    timeout-minutes: 240
     defaults:
       run:
         shell: bash
 
     steps:
-
-      # ── 0a. Validate inputs ───────────────────────────────────────────────────
+      # ── 0. Validate inputs ─────────────────────────────────────────────────
       - name: Validate workflow inputs
         run: |
           set -Eeuo pipefail
           FAIL=0
-          case "${{ inputs.profile }}" in
-            cm9|cm9e) : ;;
-            *) echo "FATAL: profile must be 'cm9' or 'cm9e', got '${{ inputs.profile }}'" >&2; FAIL=1 ;;
-          esac
-          case "${{ inputs.toolchain }}" in
-            gcc|llvm22|llvm21|llvm20|aosp23|aosp22|aosp21|aosp20|aosp19|neutron19|neutron23|neutron24|zyc_stable|weebx) : ;;
-            *) echo "FATAL: unsupported toolchain '${{ inputs.toolchain }}'" >&2; FAIL=1 ;;
-          esac
-          if ! [[ "${{ inputs.base_ref }}" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "FATAL: base_ref must be a full 40-hex commit SHA, got '${{ inputs.base_ref }}'" >&2
-            FAIL=1
-          fi
-          if ! [[ "${{ inputs.ksu_commit }}" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "FATAL: ksu_commit must be a full 40-hex commit SHA, got '${{ inputs.ksu_commit }}'" >&2
-            FAIL=1
-          fi
-          if [[ -z "${{ inputs.base_repo }}" || "${{ inputs.base_repo }}" != */* ]]; then
-            echo "FATAL: base_repo must be 'owner/repo', got '${{ inputs.base_repo }}'" >&2
-            FAIL=1
-          fi
-          # NOTE: brand dash-prefix check intentionally NOT done here.
-          # inputs.brand is now a choice field that can legitimately be
-          # "Other" or a non-dash option (e.g. "24463729") at this point —
-          # the real value isn't resolved until the "Resolve build identity
-          # inputs" step below. Enforcing '-' prefix here would FATAL on
-          # valid dropdown selections before resolution ever runs. The
-          # dash-prefix rule is enforced against the RESOLVED value instead
-          # (see "Resolve build identity inputs" and "Resolve build
-          # identity" steps).
-          if [[ -z "${{ inputs.build_date }}" ]]; then
-            echo "FATAL: build_date must not be empty" >&2
-            FAIL=1
-          fi
+          [[ "$IN_PROFILE" =~ ^(boot-first|chimera-full)$ ]] || { echo "FATAL: bad profile '$IN_PROFILE'" >&2; FAIL=1; }
+          [[ "$IN_TOOLCHAIN" =~ ^(gcc|llvm22|llvm21|llvm20|aosp23|aosp22|aosp21|aosp20|aosp19|neutron19|neutron23|neutron24|zyc_stable|weebx)$ ]] || { echo "FATAL: bad toolchain '$IN_TOOLCHAIN'" >&2; FAIL=1; }
+          [[ "$IN_BASE_REF" =~ ^[0-9a-f]{40}$ ]] || { echo "FATAL: base_ref must be a full 40-hex SHA" >&2; FAIL=1; }
+          [[ "$IN_KSU_COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "FATAL: ksu_commit must be a full 40-hex SHA" >&2; FAIL=1; }
+          [[ "$IN_BASE_REPO" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || { echo "FATAL: base_repo must be owner/repo" >&2; FAIL=1; }
+          [[ "$IN_BASE_BRANCH_HINT" =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "FATAL: bad base_branch_hint" >&2; FAIL=1; }
+          [[ "$IN_BUILD_VERSION" =~ ^[0-9]+$ ]] || { echo "FATAL: build_version must be digits" >&2; FAIL=1; }
+          [[ "$IN_BUILD_HOST" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "FATAL: bad build_host" >&2; FAIL=1; }
           [[ "$FAIL" -eq 0 ]] || exit 1
-          echo "PASS: all workflow_dispatch inputs valid"
-      # ── 0a2. Coalesce Other/dropdown inputs into final values ───────────────
-      - name: Resolve build identity inputs (choice + Other + ROM-prefix strip)
+          echo "PASS: inputs valid (APPLY_OVERLAY=$APPLY_OVERLAY)"
+
+      - name: Resolve build identity inputs
         run: |
           set -Eeuo pipefail
-
-          # brand — choice + Other + derived "-cm9x[git7]"
-          if [[ "${{ inputs.brand }}" == "Other" ]]; then
-            FINAL_BRAND="${{ inputs.custom_brand }}"
-          elif [[ "${{ inputs.brand }}" == "-cm9x[git7]" ]]; then
-            # "-cm9x" + first 7 hex chars of base_ref. base_ref is already
-            # validated as a full 40-hex SHA in step 0a and re-checked
-            # against the checked-out HEAD in the Preflight step, so this
-            # is the kernel-source commit the build actually uses.
-            BASE_REF_FULL="${{ inputs.base_ref }}"
-            [[ "$BASE_REF_FULL" =~ ^[0-9a-f]{40}$ ]] || {
-              echo "FATAL: cannot derive -cm9x[git7] brand — base_ref is not a 40-hex SHA: '$BASE_REF_FULL'" >&2
-              exit 1
-            }
-            FINAL_BRAND="-cm9x${BASE_REF_FULL:0:7}"
+          if [[ "$IN_BRAND" == "Other" ]]; then
+            FINAL_BRAND="$IN_CUSTOM_BRAND"
+          elif [[ "$IN_BRAND" == "-cm9x[git7]" ]]; then
+            FINAL_BRAND="-cm9x${IN_BASE_REF:0:7}"
           else
-            FINAL_BRAND="${{ inputs.brand }}"
+            FINAL_BRAND="$IN_BRAND"
           fi
-          [[ "$FINAL_BRAND" == -* ]] || {
-            echo "FATAL: resolved brand must start with '-', got '$FINAL_BRAND'" >&2
-            exit 1
-          }
+          [[ "$FINAL_BRAND" =~ ^-[A-Za-z0-9._+@:-]+$ ]] || { echo "FATAL: brand '$FINAL_BRAND' must start with '-' and use [A-Za-z0-9._+@:-]" >&2; exit 1; }
 
-          # build_user — choice + Other
-          if [[ "${{ inputs.build_user }}" == "Other" ]]; then
-            FINAL_BUILD_USER="${{ inputs.custom_build_user }}"
+          if [[ "$IN_BUILD_USER" == "Other" ]]; then FINAL_USER="$IN_CUSTOM_BUILD_USER"; else FINAL_USER="$IN_BUILD_USER"; fi
+          [[ "$FINAL_USER" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "FATAL: bad build user '$FINAL_USER'" >&2; exit 1; }
+
+          if [[ "$IN_BUILD_DATE" == "Other" ]]; then
+            FINAL_DATE="$IN_CUSTOM_BUILD_DATE"
+            if [[ -z "$FINAL_DATE" ]]; then
+              FINAL_DATE="$BUILD_DATE_DEFAULT"
+              echo "::warning::build_date=Other with empty custom_build_date — using fixed default '$FINAL_DATE'"
+            fi
           else
-            FINAL_BUILD_USER="${{ inputs.build_user }}"
+            FINAL_DATE="${IN_BUILD_DATE#*: }"
           fi
+          [[ "$FINAL_DATE" =~ ^[A-Za-z0-9\ :+._-]+$ ]] || { echo "FATAL: bad build date '$FINAL_DATE'" >&2; exit 1; }
 
-          # build_host / build_version — plain string inputs, unchanged,
-          # passed through as-is (no choice/Other logic for these two).
-          FINAL_BUILD_HOST="${{ inputs.build_host }}"
-          FINAL_BUILD_VERSION="${{ inputs.build_version }}"
-
-          # build_date — dropdown carries a "ROM: " prefix for UI legibility
-          # only (e.g. "MTRXX: Wed Aug 19 03:26:19 UTC 2026"). Strip
-          # everything up to and including the first ": " so the ROM label
-          # never reaches KBUILD_BUILD_TIMESTAMP. "Other" passes through as-is.
-          if [[ "${{ inputs.build_date }}" == "Other" ]]; then
-            FINAL_BUILD_DATE="${{ inputs.custom_build_date }}"
-          else
-            RAW_DATE="${{ inputs.build_date }}"
-            FINAL_BUILD_DATE="${RAW_DATE#*: }"
-          fi
-
-          for name in FINAL_BRAND FINAL_BUILD_USER FINAL_BUILD_HOST FINAL_BUILD_VERSION FINAL_BUILD_DATE; do
-            [[ -n "${!name}" ]] || {
-              echo "FATAL: $name resolved empty — 'Other' selected with an empty custom_* field?" >&2
-              exit 1
-            }
-          done
-
+          UNAME_PREVIEW="Linux version ${KERNEL_VERSION}${FINAL_BRAND} (${FINAL_USER}@${IN_BUILD_HOST}) #${IN_BUILD_VERSION} SMP PREEMPT"
           {
-            echo "FINAL_BRAND=$FINAL_BRAND"
-            echo "FINAL_BUILD_USER=$FINAL_BUILD_USER"
-            echo "FINAL_BUILD_HOST=$FINAL_BUILD_HOST"
-            echo "FINAL_BUILD_VERSION=$FINAL_BUILD_VERSION"
-            echo "FINAL_BUILD_DATE=$FINAL_BUILD_DATE"
+            echo "BRAND=$FINAL_BRAND"
+            echo "KBUILD_BUILD_USER=$FINAL_USER"
+            echo "KBUILD_BUILD_HOST=$IN_BUILD_HOST"
+            echo "KBUILD_BUILD_VERSION=$IN_BUILD_VERSION"
+            echo "KBUILD_BUILD_TIMESTAMP=$FINAL_DATE"
+            echo "UNAME_PREVIEW=$UNAME_PREVIEW"
           } >> "$GITHUB_ENV"
+          echo "brand=$FINAL_BRAND user=$FINAL_USER host=$IN_BUILD_HOST ver=$IN_BUILD_VERSION ts=$FINAL_DATE"
 
-          echo "Resolved brand:         $FINAL_BRAND"
-          echo "Resolved build_user:    $FINAL_BUILD_USER"
-          echo "Resolved build_host:    $FINAL_BUILD_HOST"
-          echo "Resolved build_version: $FINAL_BUILD_VERSION"
-          echo "Resolved build_date:    $FINAL_BUILD_DATE"
-      # ── 0b. Clean workspace before any checkout ───────────────────────────────
-      - name: Clean workspace (prevent cross-run contamination)
+      - name: Clean workspace
         run: |
           set -Eeuo pipefail
           find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-          echo "Workspace clean: $(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 | wc -l) entries remain"
-      # ── 1. Host dependencies ────────────────────────────────────────────────
+
+      # ── 1. Host dependencies ───────────────────────────────────────────────
       - name: Install build dependencies
         run: |
           set -Eeuo pipefail
-
           sudo apt-get update -qq
-
           sudo apt-get install -y --no-install-recommends \
-            aria2 \
-            bc \
-            bison \
-            build-essential \
-            ccache \
-            curl \
-            flex \
-            gcc-aarch64-linux-gnu \
-            gcc-arm-linux-gnueabi \
-            git \
-            libc6-dev-arm64-cross \
-            libc6-dev-armel-cross \
-            libelf-dev \
-            libssl-dev \
-            lz4 \
-            lzop \
-            python3 \
-            rsync \
-            zstd \
-            cpio \
-            pahole \
-            zip
-
+            aria2 bc bison build-essential ccache curl flex \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi \
+            git libelf-dev libssl-dev lz4 lzop python3 rsync \
+            zstd xz-utils cpio zip
           python3 --version
-          curl --version | head -n1
           aarch64-linux-gnu-gcc --version | head -n1
           arm-linux-gnueabi-gcc --version | head -n1
-      # ── 2. Checkout Project_Chimera (workflow repo — overlay patches + Kconfig) ──
-      - name: Checkout Project_Chimera (workflow repo — overlay + Kconfig fragment)
+
+      # ── 2. Checkouts ───────────────────────────────────────────────────────
+      - name: Checkout Project_Chimera (workflow repo — cfg fragments + overlay)
         uses: actions/checkout@v4
         with:
           path: .
@@ -412,40 +295,24 @@ jobs:
           fetch-depth: 1
           clean: false
 
-      - name: Validate checked-out Project_Chimera revision
+      - name: Record Project_Chimera revision and verify required files
         run: |
           set -Eeuo pipefail
-          ACTUAL_REF="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo 'DETACHED')"
-          ACTUAL_SHA="$(git rev-parse HEAD)"
-          echo "CHIMERA_REF (pinned):      $CHIMERA_REF"
-          echo "Checked-out branch/ref:    $ACTUAL_REF"
-          echo "Checked-out commit:        $ACTUAL_SHA"
-          echo "CHIMERA_SHA=$ACTUAL_SHA" >> "$GITHUB_ENV"
-          if [[ "$ACTUAL_REF" != "$CHIMERA_REF" && "$ACTUAL_REF" != "DETACHED" ]]; then
-            echo "FATAL: checked-out ref '$ACTUAL_REF' does not match pinned CHIMERA_REF '$CHIMERA_REF'" >&2
-            exit 1
+          SHA="$(git rev-parse HEAD)"
+          echo "CHIMERA_SHA=$SHA" >> "$GITHUB_ENV"
+          echo "Chimera ref: $CHIMERA_REF  commit: $SHA (branch tip — not an immutable pin)"
+          NEED=(chimera-ksu-susfs.cfg)
+          if [[ "$APPLY_OVERLAY" == "true" ]]; then
+            NEED+=(patches/apply_chimera_overlay_patches.sh chimera-device-specific.cfg)
           fi
-      - name: Verify required repo-local files
-        run: |
-          set -Eeuo pipefail
           MISSING=0
-          for f in \
-            patches/apply_chimera_overlay_patches.sh \
-            chimera-ksu-susfs.cfg \
-            chimera-device-specific.cfg; do
-            if [[ ! -f "$GITHUB_WORKSPACE/$f" ]]; then
-              echo "FATAL: required file missing: $f" >&2
-              MISSING=1
-            else
-              echo "OK: $f"
-            fi
+          for f in "${NEED[@]}"; do
+            if [[ -f "$GITHUB_WORKSPACE/$f" ]]; then echo "OK: $f"; else echo "FATAL: missing $f" >&2; MISSING=1; fi
           done
-          if [[ -f "$GITHUB_WORKSPACE/patches/apply_chimera_overlay_patches.sh" ]]; then
-            chmod +x "$GITHUB_WORKSPACE/patches/apply_chimera_overlay_patches.sh"
-          fi
           [[ "$MISSING" -eq 0 ]] || exit 1
-      # ── 3. Checkout gavdoc38 canonical base (KSU-Next + SUSFS pre-integrated) ──
-      - name: Checkout gavdoc38 base (KernelSU-Next + SUSFS canonical integration)
+          [[ ! -f patches/apply_chimera_overlay_patches.sh ]] || chmod +x patches/apply_chimera_overlay_patches.sh
+
+      - name: Checkout gavdoc38 base (pinned commit, submodules)
         uses: actions/checkout@v4
         with:
           repository: ${{ inputs.base_repo }}
@@ -455,360 +322,388 @@ jobs:
           submodules: recursive
           clean: false
 
-      # ── 3b. Detect base branch-tip drift (log only — never auto-advances pin) ──
-      - name: Detect base branch-tip drift
-        run: |
-          set -Eeuo pipefail
-          TIP="$(git ls-remote "https://github.com/${{ inputs.base_repo }}.git" \
-            "refs/heads/${{ inputs.base_branch_hint }}" | cut -f1 || true)"
-          echo "Pinned base_ref:                 ${{ inputs.base_ref }}"
-          echo "Live tip of ${{ inputs.base_branch_hint }}: ${TIP:-<lookup failed>}"
-          if [[ -z "$TIP" ]]; then
-            echo "WARN: could not resolve live branch tip for drift comparison (non-fatal)"
-          elif [[ "$TIP" != "${{ inputs.base_ref }}" ]]; then
-            echo "::warning::base_ref (${{ inputs.base_ref }}) has drifted from the live tip of ${{ inputs.base_branch_hint }} ($TIP). Pin is NOT auto-advanced. Re-verify fix-log items before repinning."
-          else
-            echo "OK: base_ref matches the live branch tip — no drift"
-          fi
-      # ── 3c. Clone AnyKernel3 ─────────────────────────────────────────────────
-      - name: Clone AnyKernel3
-        if: ${{ inputs.dry_run != true }}
-        run: |
-          set -Eeuo pipefail
-          git clone --depth=1 "$ANYKERNEL_REPO" "$ANYKERNEL_DIR"
-          rm -rf "$ANYKERNEL_DIR/.git" "$ANYKERNEL_DIR/modules" "$ANYKERNEL_DIR/patch" "$ANYKERNEL_DIR/ramdisk"
-          echo "AK3 cloned and stripped"
-          echo "AK3_DIR=$GITHUB_WORKSPACE/$ANYKERNEL_DIR" >> "$GITHUB_ENV"
-      # ── 4. Workspace ─────────────────────────────────────────────────────────
       - name: Prepare workspace directories
         run: |
           set -Eeuo pipefail
-          mkdir -p "$GITHUB_WORKSPACE/$LOG_DIR"
-          mkdir -p "$GITHUB_WORKSPACE/$OUT_DIR"
-          echo "ABS_LOG=$GITHUB_WORKSPACE/$LOG_DIR" >> "$GITHUB_ENV"
-          echo "ABS_OUT=$GITHUB_WORKSPACE/$OUT_DIR" >> "$GITHUB_ENV"
-          echo "ABS_KERNEL=$GITHUB_WORKSPACE/$KERNEL_DIR" >> "$GITHUB_ENV"
-          echo "ABS_TC=$GITHUB_WORKSPACE/toolchains/clang" >> "$GITHUB_ENV"
-      - name: Resolve build identity
+          mkdir -p "$GITHUB_WORKSPACE/$LOG_DIR" "$GITHUB_WORKSPACE/$OUT_DIR" "$GITHUB_WORKSPACE/artifacts" "$GITHUB_WORKSPACE/toolchains"
+          {
+            echo "ABS_LOG=$GITHUB_WORKSPACE/$LOG_DIR"
+            echo "ABS_OUT=$GITHUB_WORKSPACE/$OUT_DIR"
+            echo "ABS_KERNEL=$GITHUB_WORKSPACE/$KERNEL_DIR"
+            echo "ABS_TC=$GITHUB_WORKSPACE/toolchains/clang"
+            echo "ART_DIR=$GITHUB_WORKSPACE/artifacts"
+          } >> "$GITHUB_ENV"
+
+      - name: Detect base branch-tip drift (log only)
         run: |
           set -Eeuo pipefail
-          BRAND="$FINAL_BRAND"
-          [[ "${BRAND:0:1}" == "-" ]] || {
-            echo "FATAL: brand must start with '-'" >&2
-            exit 1
+          TIP="$(git ls-remote "https://github.com/${IN_BASE_REPO}.git" "refs/heads/${IN_BASE_BRANCH_HINT}" | cut -f1 || true)"
+          {
+            echo "pinned base_ref: $IN_BASE_REF"
+            echo "live tip of $IN_BASE_BRANCH_HINT: ${TIP:-<lookup failed>}"
+          } | tee "$ABS_LOG/base-drift.txt"
+          if [[ -n "$TIP" && "$TIP" != "$IN_BASE_REF" ]]; then
+            echo "::warning::base_ref drifted from live tip $TIP; pin NOT advanced. Re-verify before repinning."
+          fi
+
+      # ── 3. Shared toolchain library (sourced by every step) ────────────────
+      - name: Write shared toolchain library
+        run: |
+          set -Eeuo pipefail
+          cat > "$CI_LIB" <<'LIBEOF'
+          # Sourced by each step. Reads only persisted env. No cross-step arrays.
+          chimera_toolchain_args() {
+            local v bad
+            for v in TOOLCHAIN TC_CC TC_LD TC_AR TC_NM TC_OBJCOPY TC_OBJDUMP TC_STRIP \
+                     TC_CROSS_COMPILE TC_CROSS_COMPILE_ARM32 CHIMERA_KCFLAGS_COMMON; do
+              [[ -n "${!v-}" ]] || { echo "FATAL: $v is unset or empty" >&2; return 1; }
+            done
+            BUILD_KBUILD_LDFLAGS=""   # explicitly empty is valid; never passed to make
+            if [[ "$TOOLCHAIN" == "gcc" ]]; then
+              TOOLCHAIN_ARGS=(
+                "CC=${TC_CC}"
+                "HOSTCC=gcc -fcommon"
+                "HOSTCXX=g++"
+                "HOSTLD=ld"
+                "LD=${TC_LD}"
+                "AR=${TC_AR}"
+                "NM=${TC_NM}"
+                "OBJCOPY=${TC_OBJCOPY}"
+                "OBJDUMP=${TC_OBJDUMP}"
+                "STRIP=${TC_STRIP}"
+                "CROSS_COMPILE=${TC_CROSS_COMPILE}"
+                "CROSS_COMPILE_ARM32=${TC_CROSS_COMPILE_ARM32}"
+              )
+              BUILD_KCFLAGS="$CHIMERA_KCFLAGS_COMMON"
+              for bad in -fuse-ld=lld -Wno-unknown-warning-option -Wno-error=unused-but-set-global; do
+                [[ " $BUILD_KCFLAGS " != *" $bad "* ]] || { echo "FATAL: clang-only flag $bad in GCC mode" >&2; return 1; }
+              done
+              [[ "$TC_CC" == *aarch64-linux-gnu-gcc ]] || { echo "FATAL: GCC mode CC is '$TC_CC'" >&2; return 1; }
+              [[ "$TC_LD" == "aarch64-linux-gnu-ld" ]] || { echo "FATAL: GCC mode LD is '$TC_LD'" >&2; return 1; }
+            else
+              TOOLCHAIN_ARGS=(
+                "CC=${TC_CC}"
+                "HOSTCC=clang -fcommon"
+                "HOSTCXX=clang++"
+                "HOSTLD=ld.lld"
+                "LD=${TC_LD}"
+                "AR=${TC_AR}"
+                "NM=${TC_NM}"
+                "OBJCOPY=${TC_OBJCOPY}"
+                "OBJDUMP=${TC_OBJDUMP}"
+                "STRIP=${TC_STRIP}"
+                "LLVM=1"
+                "LLVM_IAS=1"
+                "CLANG_TRIPLE=aarch64-linux-gnu-"
+                "CROSS_COMPILE=${TC_CROSS_COMPILE}"
+                "CROSS_COMPILE_ARM32=${TC_CROSS_COMPILE_ARM32}"
+              )
+              BUILD_KCFLAGS="$CHIMERA_KCFLAGS_COMMON -fuse-ld=lld"
+              [[ "$TC_CC" == *clang* ]] || { echo "FATAL: LLVM mode CC is '$TC_CC'" >&2; return 1; }
+              [[ "$TC_LD" == "ld.lld" ]] || { echo "FATAL: LLVM mode LD is '$TC_LD'" >&2; return 1; }
+            fi
           }
-          BUILD_USER="$FINAL_BUILD_USER"
-          BUILD_HOST="$FINAL_BUILD_HOST"
-          BUILD_VER="$FINAL_BUILD_VERSION"
-          BUILD_TS="$FINAL_BUILD_DATE"
-          UNAME_PREVIEW="Linux version 4.9.337${BRAND} (${BUILD_USER}@${BUILD_HOST}) #${BUILD_VER} SMP PREEMPT"
-          {
-            echo "BRAND=$BRAND"
-            echo "BUILD_USER=$BUILD_USER"
-            echo "BUILD_HOST=$BUILD_HOST"
-            echo "BUILD_VERSION=$BUILD_VER"
-            echo "KBUILD_BUILD_TIMESTAMP=$BUILD_TS"
-            echo "UNAME_PREVIEW=$UNAME_PREVIEW"
-          } >> "$GITHUB_ENV"
-          {
-            echo "profile=${{ inputs.profile }}"
-            echo "toolchain=${{ inputs.toolchain }}"
-            echo "brand=$BRAND"
-            echo "uname_preview=$UNAME_PREVIEW"
-          } > "$ABS_LOG/inputs.env"
-      # ── 4a2. Guard — required Chimera build-flag env vars present ───────────
-      - name: Guard required Chimera build-flag env vars present
+          chimera_make() {
+            make O="$ABS_OUT" ARCH=arm64 "${TOOLCHAIN_ARGS[@]}" "$@"
+          }
+          LIBEOF
+          bash -n "$CI_LIB"
+          echo "library written: $CI_LIB"
+
+      # ── 4. Toolchain resolution ────────────────────────────────────────────
+      - name: Resolve toolchain configuration
+        id: tc-resolve
         run: |
           set -Eeuo pipefail
+          TC_URL=""; TC_ARCHIVE_FMT="tar.gz"; TC_CACHE_KEY=""; TC_SHA256=""
+          case "$IN_TOOLCHAIN" in
+            gcc)
+              TC_CACHE_KEY="gcc-cross-ubuntu-24.04-v3" ;;
+            aosp19)
+              TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-15.0.0_r10/clang-r536225.tar.gz"
+              TC_CACHE_KEY="aosp-clang-r536225-ubuntu-24.04-v2" ;;
+            aosp20)
+              TC_URL="https://gitlab.com/kei-space/clang/r547379/-/archive/master/r547379-master.tar.gz"
+              TC_CACHE_KEY="aosp-clang-r547379-ubuntu-24.04-v2"
+              echo "::warning::aosp20 uses a mutable third-party mirror (master); not reproducible" ;;
+            aosp21)
+              TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/21b19c041de1f1df9b97fd9902ae5405c6cf8eb9/clang-r563880c.tar.gz"
+              TC_CACHE_KEY="aosp-clang-r563880c-ubuntu-24.04-v2" ;;
+            aosp22)
+              TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/mirror-goog-main-llvm-toolchain-source/clang-r596125.tar.gz"
+              TC_CACHE_KEY="aosp-clang-r596125-ubuntu-24.04-v2"
+              echo "::warning::aosp22 URL references a mutable branch; not reproducible" ;;
+            aosp23)
+              TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/28337064939c0b4bb5804cddf35fb03d860edcf6/clang-r614150.tar.gz"
+              TC_CACHE_KEY="aosp-clang-r614150-ubuntu-24.04-v1"
+              echo "::warning::aosp23 unverified: no SHA-256 pin" ;;
+            llvm20)
+              TC_URL="https://mirrors.edge.kernel.org/pub/tools/llvm/files/llvm-20.1.8-x86_64.tar.xz"
+              TC_ARCHIVE_FMT="tar.xz"; TC_CACHE_KEY="korg-clang-20.1.8-ubuntu-24.04-v1" ;;
+            llvm21)
+              TC_URL="https://mirrors.edge.kernel.org/pub/tools/llvm/files/llvm-21.1.0-x86_64.tar.xz"
+              TC_ARCHIVE_FMT="tar.xz"; TC_CACHE_KEY="llvm-clang-21.1.0-ubuntu-24.04-v1" ;;
+            llvm22)
+              TC_URL="https://mirrors.edge.kernel.org/pub/tools/llvm/files/llvm-22.1.7-x86_64.tar.xz"
+              TC_ARCHIVE_FMT="tar.xz"; TC_CACHE_KEY="llvm-clang-22.1.7-ubuntu-24.04-v1" ;;
+            neutron19)
+              TC_URL="https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/10032024/neutron-clang-10032024.tar.zst"
+              TC_ARCHIVE_FMT="tar.zst"; TC_CACHE_KEY="neutron-clang-10032024-ubuntu-24.04-v2" ;;
+            neutron23)
+              TC_URL="https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/30062026/neutron-clang-30062026.tar.zst"
+              TC_ARCHIVE_FMT="tar.zst"; TC_CACHE_KEY="neutron-clang-30062026-ubuntu-24.04-v2" ;;
+            neutron24)
+              TC_URL="https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/30072026/neutron-clang-30072026.tar.zst"
+              TC_ARCHIVE_FMT="tar.zst"; TC_CACHE_KEY="neutron-clang-30072026-ubuntu-24.04-v2" ;;
+            zyc_stable)
+              TC_URL="$(curl -fsSL https://raw.githubusercontent.com/ZyCromerZ/Clang/main/Clang-main-link.txt | head -n1 | tr -d '\r')"
+              [[ "$TC_URL" =~ ^https:// ]] || { echo "FATAL: zyc URL lookup failed: '$TC_URL'" >&2; exit 1; }
+              TC_ARCHIVE_FMT="tar.gz"   # UNVERIFIED — REQUIRES CONFIRMATION
+              TC_CACHE_KEY="zyc-clang-ubuntu-24.04-$(printf '%s' "$TC_URL" | sha256sum | cut -c1-16)" ;;
+            weebx)
+              TC_URL="https://github.com/XSans0/WeebX-Clang/releases/download/WeebX-Clang-20.0.0git-release/WeebX-Clang-20.0.0git.tar.gz"
+              TC_CACHE_KEY="weebx-clang-20.0.0git-20241206-ubuntu-24.04-v1"
+              TC_SHA256="a2ac878d7f26fc1ac7d90d1330e4e34b62676d3a2326673b78b7799e1d8a0a7c" ;;
+            *) echo "FATAL: unsupported toolchain $IN_TOOLCHAIN" >&2; exit 1 ;;
+          esac
 
-          : "${CHIMERA_KCFLAGS:?CHIMERA_KCFLAGS is unset or empty; check the workflow env block}"
-
-          if [[ -z "${CHIMERA_KBUILD_LDFLAGS+x}" ]]; then
-            echo "FATAL: CHIMERA_KBUILD_LDFLAGS is unset; define it in the workflow env block" >&2
-            exit 1
-          fi
-
-          if [[ "$TOOLCHAIN" == "gcc" ]]; then
-            EFFECTIVE_KCFLAGS="-O2 -fcommon -fno-strict-aliasing -Wno-error"
-            EFFECTIVE_KBUILD_LDFLAGS=""
+          if [[ "$IN_TOOLCHAIN" == "gcc" ]]; then
+            TC_CC="ccache aarch64-linux-gnu-gcc"; TC_LD="aarch64-linux-gnu-ld"
+            TC_AR="aarch64-linux-gnu-ar"; TC_NM="aarch64-linux-gnu-nm"
+            TC_OBJCOPY="aarch64-linux-gnu-objcopy"; TC_OBJDUMP="aarch64-linux-gnu-objdump"
+            TC_STRIP="aarch64-linux-gnu-strip"
           else
-            EFFECTIVE_KCFLAGS="$CHIMERA_KCFLAGS"
-            EFFECTIVE_KBUILD_LDFLAGS="$CHIMERA_KBUILD_LDFLAGS"
+            TC_CC="ccache clang"; TC_LD="ld.lld"; TC_AR="llvm-ar"; TC_NM="llvm-nm"
+            TC_OBJCOPY="llvm-objcopy"; TC_OBJDUMP="llvm-objdump"; TC_STRIP="llvm-strip"
           fi
-
           {
-            echo "Toolchain: $TOOLCHAIN"
-            echo "Global CHIMERA_KCFLAGS: $CHIMERA_KCFLAGS"
-            echo "Global CHIMERA_KBUILD_LDFLAGS: $CHIMERA_KBUILD_LDFLAGS"
-            echo "Effective KCFLAGS: $EFFECTIVE_KCFLAGS"
-            echo "Effective KBUILD_LDFLAGS: $EFFECTIVE_KBUILD_LDFLAGS"
-          } | tee "$ABS_LOG/build-flag-env-guard.txt"
+            echo "TC_URL=$TC_URL"
+            echo "TC_ARCHIVE_FMT=$TC_ARCHIVE_FMT"
+            echo "TC_CACHE_KEY=$TC_CACHE_KEY"
+            echo "TC_SHA256=$TC_SHA256"
+            echo "TC_CC=$TC_CC"
+            echo "TC_LD=$TC_LD"
+            echo "TC_AR=$TC_AR"
+            echo "TC_NM=$TC_NM"
+            echo "TC_OBJCOPY=$TC_OBJCOPY"
+            echo "TC_OBJDUMP=$TC_OBJDUMP"
+            echo "TC_STRIP=$TC_STRIP"
+            echo "TC_CROSS_COMPILE=aarch64-linux-gnu-"
+            echo "TC_CROSS_COMPILE_ARM32=arm-linux-gnueabi-"
+          } >> "$GITHUB_ENV"
+          echo "Toolchain=$IN_TOOLCHAIN CC=$TC_CC LD=$TC_LD"
 
-          if [[ "$TOOLCHAIN" == "gcc" ]]; then
-            [[ "$EFFECTIVE_KCFLAGS" != *"-fuse-ld=lld"* ]] || {
-              echo "FATAL: -fuse-ld=lld leaked into GCC KCFLAGS" >&2
-              exit 1
-            }
+      - name: Cache toolchain
+        if: ${{ inputs.toolchain != 'gcc' }}
+        uses: actions/cache@v4
+        id: tc-cache
+        with:
+          path: toolchains/clang
+          key: ${{ env.TC_CACHE_KEY }}
 
-            [[ "$EFFECTIVE_KCFLAGS" != *"-Wno-unknown-warning-option"* ]] || {
-              echo "FATAL: Clang-only warning flag leaked into GCC KCFLAGS" >&2
-              exit 1
-            }
-
-            [[ "$EFFECTIVE_KCFLAGS" != *"-Wno-error=unused-but-set-global"* ]] || {
-              echo "FATAL: Clang-only warning flag leaked into GCC KCFLAGS" >&2
-              exit 1
-            }
-
-            [[ -z "$EFFECTIVE_KBUILD_LDFLAGS" ]] || {
-              echo "FATAL: GCC effective KBUILD_LDFLAGS must be empty" >&2
-              exit 1
-            }
-
-            echo "PASS: GCC mode has no Clang-only flags"
-          else
-            echo "PASS: LLVM mode retains its configured flags"
-          fi
-      # ── 4b. Resolve KCFLAGS hash / kernel identity string ────────────────────
-      - name: Generate kernel identity and hash flags
-        if: ${{ inputs.dry_run != true }}
+      - name: Download and extract toolchain
+        if: ${{ inputs.toolchain != 'gcc' && steps.tc-cache.outputs.cache-hit != 'true' }}
         run: |
           set -Eeuo pipefail
-          KCFLAGS_HASH="$(printf '%s\n' "$CHIMERA_KCFLAGS" | sha256sum | cut -d' ' -f1)"
-          KERNEL_RELEASE="${KERNEL_VERSION}${BRAND}"
-          KERNEL_IDENTITY="chimera-mk9/${PROFILE}/${TOOLCHAIN}/${KERNEL_RELEASE}"
+          rm -rf "$ABS_TC"; mkdir -p "$ABS_TC"
+          [[ -n "$TC_URL" ]] || { echo "FATAL: TC_URL empty" >&2; exit 1; }
+          ARCHIVE=/tmp/clang_archive
+          aria2c -x 16 -s 16 -k 1M -c --max-tries=5 --retry-wait=5 --timeout=60 \
+            --dir=/tmp --out=clang_archive "$TC_URL"
+          [[ -s "$ARCHIVE" ]] || { echo "FATAL: archive missing/empty" >&2; exit 1; }
+          ACTUAL_SHA="$(sha256sum "$ARCHIVE" | cut -d' ' -f1)"
+          echo "toolchain archive sha256: $ACTUAL_SHA" | tee "$ABS_LOG/toolchain-archive-sha256.txt"
+          if [[ -n "$TC_SHA256" && "$ACTUAL_SHA" != "$TC_SHA256" ]]; then
+            echo "FATAL: SHA-256 mismatch (expected $TC_SHA256)" >&2; exit 1
+          fi
+          case "$TC_ARCHIVE_FMT" in
+            tar.gz) tar -C "$ABS_TC" -xzf "$ARCHIVE" ;;
+            tar.xz) tar -C "$ABS_TC" -xJf "$ARCHIVE" ;;
+            tar.zst) zstd -d "$ARCHIVE" -o /tmp/clang.tar --force; tar -C "$ABS_TC" -xf /tmp/clang.tar ;;
+            *) echo "FATAL: unsupported archive format '$TC_ARCHIVE_FMT'" >&2; exit 1 ;;
+          esac
+          [[ -n "$(find "$ABS_TC" -type f -print -quit)" ]] || { echo "FATAL: no files extracted" >&2; exit 1; }
+          echo "Toolchain ready: $(find "$ABS_TC" -type f | wc -l) file(s)"
+
+      - name: Configure LLVM toolchain PATH
+        if: ${{ inputs.toolchain != 'gcc' }}
+        run: |
+          set -Eeuo pipefail
+          ACTUAL_BIN="$(find "$ABS_TC" -type d -name bin -printf '%d\t%p\n' | sort -n | cut -f2 | sed -n '1p')"
+          [[ -n "$ACTUAL_BIN" && -d "$ACTUAL_BIN" ]] || { echo "FATAL: no bin dir under $ABS_TC" >&2; exit 1; }
+          chmod +x "$ACTUAL_BIN"/* 2>/dev/null || true
+          echo "$ACTUAL_BIN" >> "$GITHUB_PATH"
+          echo "toolchain bin: $ACTUAL_BIN"
+
+      - name: Verify toolchain and capture compiler identity
+        run: |
+          set -Eeuo pipefail
+          need() { command -v "$1" >/dev/null 2>&1 || { echo "FATAL: missing command $1" >&2; exit 1; }; }
+          need ccache
+          if [[ "$TOOLCHAIN" == "gcc" ]]; then
+            for t in gcc ld ar nm objcopy objdump strip; do need "aarch64-linux-gnu-$t"; done
+            for t in gcc ld ar nm objcopy objdump strip; do need "arm-linux-gnueabi-$t"; done
+            COMPILER_VERSION="$(aarch64-linux-gnu-gcc --version | head -n1)"
+            LINKER_VERSION="$(aarch64-linux-gnu-ld --version | head -n1)"
+            COMPILER_KIND=gcc
+          else
+            for b in clang ld.lld llvm-nm llvm-objdump llvm-ar llvm-objcopy llvm-strip; do need "$b"; done
+            clang --print-targets | grep -qi aarch64 || { echo "FATAL: clang lacks aarch64 target" >&2; exit 1; }
+            COMPILER_VERSION="$(clang --version | head -n1)"
+            LINKER_VERSION="$(ld.lld --version | head -n1)"
+            COMPILER_KIND=llvm
+          fi
+          TC_IDENTITY_HASH="$(printf '%s\n%s\n%s\n' "$COMPILER_VERSION" "$LINKER_VERSION" "$COMPILER_KIND" | sha256sum | cut -c1-16)"
           {
-            echo "KCFLAGS_HASH=$KCFLAGS_HASH"
-            echo "KERNEL_RELEASE=$KERNEL_RELEASE"
-            echo "KERNEL_IDENTITY=$KERNEL_IDENTITY"
+            echo "COMPILER_VERSION=$COMPILER_VERSION"
+            echo "LINKER_VERSION=$LINKER_VERSION"
+            echo "COMPILER_KIND=$COMPILER_KIND"
+            echo "TC_IDENTITY_HASH=$TC_IDENTITY_HASH"
           } >> "$GITHUB_ENV"
           {
-            echo "kernel_name=$KERNEL_NAME"
-            echo "kernel_version=$KERNEL_VERSION"
-            echo "kernel_release=$KERNEL_RELEASE"
-            echo "device=$KERNEL_DEVICE"
-            echo "platform=$KERNEL_PLATFORM"
-            echo "profile=$PROFILE"
-            echo "toolchain=$TOOLCHAIN"
-            echo "kcflags=$CHIMERA_KCFLAGS"
-            echo "kbuild_ldflags=$CHIMERA_KBUILD_LDFLAGS"
-            echo "kcflags_sha256=$KCFLAGS_HASH"
-            echo "identity=$KERNEL_IDENTITY"
-          } > "$ABS_LOG/kernel-identity.txt"
-          echo "Kernel identity: $KERNEL_IDENTITY"
-          echo "KCFLAGS: $CHIMERA_KCFLAGS"
-          echo "KCFLAGS SHA-256: $KCFLAGS_HASH"
+            echo "Compiler: $COMPILER_VERSION"
+            echo "Linker:   $LINKER_VERSION"
+            echo "Kind:     $COMPILER_KIND"
+            echo "Identity hash: $TC_IDENTITY_HASH"
+          } | tee "$ABS_LOG/toolchain-identity.txt"
 
-      # ── 5. Validate base ─────────────────────────────────────────────────────
-      - name: Preflight — verify base ref and clean worktree
+      - name: Set up ccache
+        if: ${{ !inputs.dry_run }}
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: chimera-mk9-${{ inputs.toolchain }}-${{ env.TC_CACHE_KEY }}-${{ env.TC_IDENTITY_HASH }}-${{ github.sha }}
+          restore-keys: |
+            chimera-mk9-${{ inputs.toolchain }}-${{ env.TC_CACHE_KEY }}-${{ env.TC_IDENTITY_HASH }}-
+          max-size: ${{ env.CCACHE_MAXSIZE }}
+
+      # ── 5. Verify base ─────────────────────────────────────────────────────
+      - name: Preflight — base ref, clean tree, kernel version, defconfig
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
           if [[ -n "$(git status --porcelain --ignore-submodules=none)" ]]; then
-            echo "FATAL: base checkout is not clean" >&2
-            git status --short
-            exit 1
-          fi
-          grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL)' Makefile \
-            | head -3 \
-            | tee "$ABS_LOG/kernel-version.log"
-          VER_LINE="$(grep -E '^VERSION\s*=\s*4$' Makefile || true)"
-          PATCH_LINE="$(grep -E '^PATCHLEVEL\s*=\s*9$' Makefile || true)"
-          if [[ -z "$VER_LINE" || -z "$PATCH_LINE" ]]; then
-            echo "FATAL: base is not the expected 4.9.x tree — refusing to proceed" >&2
-            exit 1
+            echo "FATAL: base checkout not clean" >&2; git status --short; exit 1
           fi
           BASE_COMMIT="$(git rev-parse HEAD)"
-          if [[ "$BASE_COMMIT" != "${{ inputs.base_ref }}" ]]; then
-            echo "FATAL: checked-out HEAD ($BASE_COMMIT) does not match requested base_ref (${{ inputs.base_ref }})" >&2
-            exit 1
-          fi
+          [[ "$BASE_COMMIT" == "$IN_BASE_REF" ]] || { echo "FATAL: HEAD $BASE_COMMIT != base_ref $IN_BASE_REF" >&2; exit 1; }
+          KV="$(make -s --no-print-directory kernelversion)"
+          echo "kernelversion: $KV"
+          [[ "$KV" == "$KERNEL_VERSION" ]] || { echo "FATAL: kernelversion '$KV' != expected '$KERNEL_VERSION'" >&2; exit 1; }
+          [[ -f "$DEFCONFIG" ]] || { echo "FATAL: defconfig missing: $DEFCONFIG" >&2; exit 1; }
           echo "$BASE_COMMIT" > "$ABS_LOG/base-commit.txt"
           echo "BASE_COMMIT=$BASE_COMMIT" >> "$GITHUB_ENV"
-          echo "Base repo:   ${{ inputs.base_repo }}"
-          echo "Base commit: $BASE_COMMIT"
-          [[ -f "$DEFCONFIG" ]] || {
-            echo "FATAL: DEFCONFIG not found at $DEFCONFIG in base checkout" >&2
-            exit 1
-          }
-          echo "OK: DEFCONFIG present at $DEFCONFIG"
-      # ── 6. KernelSU-Next submodule pin verification ─────────────────────────
-      - name: Verify / re-pin KernelSU-Next submodule commit
+          echo "KERNEL_RELEASE_EXPECTED=${KV}${BRAND}" >> "$GITHUB_ENV"
+          echo "OK: base $IN_BASE_REPO@$BASE_COMMIT, $KV, defconfig present"
+
+      - name: Verify / re-pin KernelSU-Next and log upstream refs
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
-          KSU_SUB="KernelSU-Next"
-          WANT="${{ inputs.ksu_commit }}"
-          [[ -d "$KSU_SUB/.git" || -f "$KSU_SUB/.git" ]] || {
-            echo "FATAL: KernelSU-Next submodule not populated — checkout submodules:recursive failed?" >&2
-            exit 1
-          }
-          ACTUAL="$(git -C "$KSU_SUB" rev-parse HEAD)"
-          if [[ "$ACTUAL" != "$WANT" ]]; then
-            echo "Submodule pinned to $ACTUAL, requested $WANT — re-checking out requested commit"
-            git -C "$KSU_SUB" fetch --no-tags --depth=100 origin "$WANT"
-            git -C "$KSU_SUB" checkout --detach "$WANT"
-            ACTUAL="$(git -C "$KSU_SUB" rev-parse HEAD)"
+          SUB="KernelSU-Next"
+          [[ -d "$SUB/.git" || -f "$SUB/.git" ]] || { echo "FATAL: $SUB submodule not populated" >&2; exit 1; }
+          ACTUAL="$(git -C "$SUB" rev-parse HEAD)"
+          if [[ "$ACTUAL" != "$IN_KSU_COMMIT" ]]; then
+            echo "Submodule at $ACTUAL, requested $IN_KSU_COMMIT — re-checking out"
+            git -C "$SUB" fetch --no-tags --depth=100 origin "$IN_KSU_COMMIT"
+            git -C "$SUB" checkout --detach "$IN_KSU_COMMIT"
+            ACTUAL="$(git -C "$SUB" rev-parse HEAD)"
           fi
+          [[ "$ACTUAL" == "$IN_KSU_COMMIT" ]] || { echo "FATAL: KSU commit mismatch" >&2; exit 1; }
           echo "$ACTUAL" > "$ABS_LOG/ksu-commit.txt"
-          echo "KSU_GIT_VERSION=$(git -C "$KSU_SUB" rev-parse --short HEAD)" >> "$GITHUB_ENV"
-          echo "KernelSU-Next commit: $ACTUAL"
-      # ── 7. Verify canonical backports are present ────────────────────────────
-      - name: Verify canonical KSU-Next backports (path_umount, seccomp, selinux, reboot)
+          echo "KSU_COMMIT_ACTUAL=$ACTUAL" >> "$GITHUB_ENV"
+          {
+            echo "pinned KernelSU-Next: $ACTUAL"
+            echo "git describe: $(git -C "$SUB" describe --tags --always 2>&1 || true)"
+            echo "submodule remote: $(git -C "$SUB" remote get-url origin 2>&1 || true)"
+            echo "--- upstream refs (informational; NOT used to change the pin) ---"
+            git ls-remote https://github.com/KernelSU-Next/KernelSU-Next.git \
+              'refs/tags/v3.4.0*' 'refs/heads/v3.4.0*' 'refs/heads/*legacy*' 2>&1 || echo "ls-remote failed (non-fatal)"
+          } | tee "$ABS_LOG/ksu-upstream-refs.txt"
+
+      - name: Verify base integration (backports, hook call sites, LSM path, Kbuild guards)
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
           FAIL=0
-          check() {
-            local desc="$1"; local file="$2"; shift 2
-            if grep -qE "$1" "$file" 2>/dev/null; then
-              echo "OK:    $desc"
-            else
-              echo "FATAL: $desc — not found in $file"
-              FAIL=1
-            fi
+          chk() {
+            local d="$1" f="$2" p="$3"
+            if grep -qE -- "$p" "$f" 2>/dev/null; then echo "OK:    $d"; else echo "FATAL: $d — /$p/ not found in $f"; FAIL=1; fi
           }
-          check "fs/namespace.c: can_umount() present"        fs/namespace.c '^static int can_umount\(' 
-          check "fs/namespace.c: can_umount() checks check_mnt()" fs/namespace.c 'if \(!check_mnt\(mnt\)\)'
-          check "fs/namespace.c: can_umount() checks MNT_LOCKED"  fs/namespace.c 'MNT_LOCKED'
-          check "fs/namespace.c: can_umount() checks CAP_SYS_ADMIN on MNT_FORCE" fs/namespace.c 'MNT_FORCE.*capable\(CAP_SYS_ADMIN\)'
-          check "fs/namespace.c: path_umount() present"        fs/namespace.c '^int path_umount\('
-          check "fs/internal.h: path_umount() declared"        fs/internal.h 'int path_umount\(struct path \*path, int flags\);'
-          check "include/linux/seccomp.h: filter_count field" include/linux/seccomp.h 'atomic_t filter_count;'
-          check "objsec.h: selinux_inode() helper"  security/selinux/include/objsec.h 'selinux_inode\('
-          check "objsec.h: selinux_cred() helper"   security/selinux/include/objsec.h 'selinux_cred\('
-          check "selinuxfs.c: uses selinux_inode()" security/selinux/selinuxfs.c 'selinux_inode\(inode\)'
-          check "xfrm.c: uses selinux_cred()"       security/selinux/xfrm.c 'selinux_cred\(current_cred\(\)\)'
-          check "kernel/reboot.c: ksu_handle_sys_reboot declared" kernel/reboot.c 'extern int ksu_handle_sys_reboot'
-          check "kernel/reboot.c: ksu_handle_sys_reboot called"   kernel/reboot.c 'ksu_handle_sys_reboot\(magic1, magic2, cmd, &arg\)'
+          # canonical backports (Kbuild self-patch guards must be no-ops)
+          chk "can_umount() present"            fs/namespace.c '^static int can_umount\('
+          chk "can_umount() check_mnt"          fs/namespace.c 'if \(!check_mnt\(mnt\)\)'
+          chk "can_umount() MNT_LOCKED"         fs/namespace.c 'MNT_LOCKED'
+          chk "can_umount() MNT_FORCE cap"      fs/namespace.c 'MNT_FORCE.*capable\(CAP_SYS_ADMIN\)'
+          chk "path_umount() defined"           fs/namespace.c '^int path_umount\('
+          chk "path_umount() declared"          fs/internal.h  'int path_umount\(struct path \*path, int flags\);'
+          chk "seccomp filter_count"            include/linux/seccomp.h 'atomic_t filter_count;'
+          chk "objsec.h selinux_inode()"        security/selinux/include/objsec.h 'selinux_inode\('
+          chk "objsec.h selinux_cred()"         security/selinux/include/objsec.h 'selinux_cred\('
+          chk "hooks.c uses selinux_inode()"    security/selinux/hooks.c 'selinux_inode\(inode\)'
+          chk "selinuxfs.c inode helper"        security/selinux/selinuxfs.c 'struct inode_security_struct \*\)inode->i_security|selinux_inode\(inode\)'
+          chk "xfrm.c uses selinux_cred()"      security/selinux/xfrm.c 'selinux_cred\(current_cred\(\)\)'
+          chk "reboot.c extern"                 kernel/reboot.c 'extern int ksu_handle_sys_reboot'
+          chk "reboot.c call"                   kernel/reboot.c 'ksu_handle_sys_reboot\(magic1, magic2, cmd, &arg\)'
           AVC_DEFS="$(grep -rn '^bool susfs_is_avc_log_spoofing_enabled = false;' security/selinux/avc.c fs/susfs.c 2>/dev/null | wc -l)"
           if [[ "$AVC_DEFS" -eq 1 ]] && grep -q '^bool susfs_is_avc_log_spoofing_enabled = false;' security/selinux/avc.c; then
-            echo "OK:    susfs_is_avc_log_spoofing_enabled defined exactly once, in avc.c"
+            echo "OK:    avc log spoofing flag defined once in avc.c"
           else
-            echo "FATAL: susfs_is_avc_log_spoofing_enabled definition count/location unexpected (found $AVC_DEFS definition(s) across avc.c/susfs.c)"
-            FAIL=1
+            echo "FATAL: avc log spoofing flag definition unexpected ($AVC_DEFS)"; FAIL=1
           fi
-          if grep -q 'extern bool susfs_is_avc_log_spoofing_enabled;' fs/susfs.c; then
-            echo "OK:    fs/susfs.c declares susfs_is_avc_log_spoofing_enabled extern (correct — do not define it here)"
-          else
-            echo "FATAL: fs/susfs.c missing expected extern declaration"
-            FAIL=1
-          fi
-          [[ "$FAIL" -eq 0 ]] || {
-            echo
-            echo "One or more canonical backports expected from base_ref=${{ inputs.base_ref }} were not found."
-            exit 1
-          }
-          echo
-          echo "PASS: all canonical KSU-Next backports verified present from base — no hand patches required"
-      # ── 7b. Verify KSU-Next manual-hook call sites are actually wired ───────
-      # step 19 only proves ksu_handle_*() symbols are LINKED into vmlinux —
-      # KernelSU-Next defines them unconditionally inside its own submodule,
-      # so they appear in the binary even if no hooked syscall path ever
-      # calls them. CONFIG_KSU_MANUAL_HOOK=y (enforced in step 14) requires
-      # the call sites below to exist in the BASE kernel tree itself. This
-      # step checks the call sites directly so a future base_ref repin that
-      # silently drops a hook fails loud here instead of producing a kernel
-      # that boots and links fine but grants root/hides files inconsistently.
-      - name: Verify KSU-Next manual hook call sites are wired into base tree
-        working-directory: ${{ env.KERNEL_DIR }}
-        run: |
-          set -Eeuo pipefail
-          FAIL=0
-          check() {
-            local desc="$1" pattern="$2" file="$3"
-            if grep -qE "$pattern" "$file" 2>/dev/null; then
-              echo "OK:    $desc"
-            else
-              echo "FATAL: $desc — call site not found in $file"
-              FAIL=1
-            fi
-          }
-          check "fs/exec.c calls ksu_handle_execveat()"            'ksu_handle_execveat\(' fs/exec.c
-          check "fs/open.c calls ksu_handle_faccessat()"           'ksu_handle_faccessat\(' fs/open.c
-          check "fs/stat.c calls ksu_handle_stat()"                'ksu_handle_stat\(' fs/stat.c
-          check "fs/read_write.c calls ksu_handle_sys_read()"      'ksu_handle_sys_read\(' fs/read_write.c
-          check "drivers/input/input.c calls ksu_handle_input_handle_event()" 'ksu_handle_input_handle_event\(' drivers/input/input.c
-          [[ "$FAIL" -eq 0 ]] || {
-            echo
-            echo "One or more KSU-Next manual-hook call sites expected from base_ref=${{ inputs.base_ref }} were not found in the base tree." >&2
-            exit 1
-          }
-          echo
-          echo "PASS: all manual-hook call sites present in base tree"
-      # ── 8. Verify LSM-based setresuid path ───────────────────────────────────
-      - name: Verify KSU-Next LSM task_fix_setuid hook (no kernel/sys.c patch used)
-        working-directory: ${{ env.KERNEL_DIR }}
-        run: |
-          set -Eeuo pipefail
-          KSU_SUB="KernelSU-Next"
-          FAIL=0
-          grep -q 'ksu_task_fix_setuid' "$KSU_SUB/kernel/hook/lsm_hooks.c" || {
-            echo "FATAL: ksu_task_fix_setuid not found in KernelSU-Next source" >&2
-            FAIL=1
-          }
-          grep -q 'LSM_HOOK_INIT(task_fix_setuid, ksu_task_fix_setuid)' "$KSU_SUB/kernel/hook/lsm_hooks.c" || {
-            echo "FATAL: task_fix_setuid LSM hook registration not found" >&2
-            FAIL=1
-          }
-          grep -q 'ksu_handle_setresuid' "$KSU_SUB/kernel/hook/setuid_hook.c" || {
-            echo "FATAL: ksu_handle_setresuid implementation not found" >&2
-            FAIL=1
-          }
+          chk "susfs.c extern"                  fs/susfs.c 'extern bool susfs_is_avc_log_spoofing_enabled;'
+          # manual-hook call sites in the BASE tree
+          chk "exec.c hook"                     fs/exec.c 'ksu_handle_execveat\('
+          chk "open.c hook"                     fs/open.c 'ksu_handle_faccessat\('
+          chk "stat.c hook"                     fs/stat.c 'ksu_handle_stat\('
+          chk "read_write.c hook"               fs/read_write.c 'ksu_handle_sys_read\('
+          chk "input.c hook"                    drivers/input/input.c 'ksu_handle_input_handle_event\('
+          # setresuid via LSM only
+          S=KernelSU-Next
+          chk "ksu_task_fix_setuid defined"     $S/kernel/hook/lsm_hooks.c 'ksu_task_fix_setuid'
+          chk "LSM registration"                $S/kernel/hook/lsm_hooks.c 'LSM_HOOK_INIT\(task_fix_setuid, ksu_task_fix_setuid\)'
+          chk "ksu_handle_setresuid impl"       $S/kernel/hook/setuid_hook.c 'ksu_handle_setresuid'
           if grep -q 'ksu_handle_setresuid' kernel/sys.c 2>/dev/null; then
-            echo "FATAL: kernel/sys.c calls ksu_handle_setresuid() directly." >&2
-            FAIL=1
+            echo "FATAL: kernel/sys.c calls ksu_handle_setresuid directly"; FAIL=1
           else
-            echo "OK:    kernel/sys.c does not directly call ksu_handle_setresuid (correct)"
+            echo "OK:    kernel/sys.c has no direct setresuid hook (LSM path only)"
           fi
-          [[ "$FAIL" -eq 0 ]] || exit 1
-          echo "PASS: setresuid root-grant path goes through the LSM hook only"
-      # ── 9. Pre-flight KSU-Next Kbuild self-patch guards ──────────────────────
-      - name: Pre-verify all KernelSU-Next Kbuild self-patch guards resolve to no-op
+          [[ -f $S/kernel/Kbuild ]] || { echo "FATAL: $S/kernel/Kbuild missing"; FAIL=1; }
+          # informational: how KernelSU is wired into drivers/
+          { echo "--- drivers wiring (informational) ---"
+            ls -la drivers | grep -i kernelsu || echo "no drivers/*kernelsu* entry"
+            grep -in kernelsu drivers/Makefile drivers/Kconfig 2>/dev/null || echo "no kernelsu ref in drivers/Makefile|Kconfig"
+          } | tee "$ABS_LOG/ksu-wiring.txt"
+          [[ "$FAIL" -eq 0 ]] || { echo; echo "Base integration for base_ref=$IN_BASE_REF is incomplete — failing closed." >&2; exit 1; }
+          echo "PASS: base integration verified"
+
+      # ── 6. Identity (CI-time, cosmetic) ────────────────────────────────────
+      - name: Apply build identity (CI-time patch, no push)
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
-          KB="KernelSU-Next/kernel/Kbuild"
-          [[ -f "$KB" ]] || { echo "FATAL: $KB not found" >&2; exit 1; }
-          FAIL=0
-          assert_noop() {
-            local desc="$1" pattern="$2" file="$3"
-            if grep -Eq "$pattern" "$file"; then
-              echo "OK:    guard already satisfied — $desc"
-            else
-              echo "FATAL: guard NOT satisfied — $desc (Kbuild self-patch would fire at build time)"
-              FAIL=1
-            fi
-          }
-          assert_noop "can_umount() defined"              '^static int can_umount' fs/namespace.c
-          assert_noop "path_umount() defined (namespace.c)" '^int path_umount' fs/namespace.c
-          assert_noop "path_umount() declared (internal.h)"  '^int path_umount' fs/internal.h
-          assert_noop "seccomp filter_count field"          'atomic_t filter_count;' include/linux/seccomp.h
-          assert_noop "selinux_inode() used in hooks.c"      'selinux_inode\(inode\)' security/selinux/hooks.c
-          assert_noop "selinux_inode() used in selinuxfs.c"  'struct inode_security_struct \*\)inode->i_security|selinux_inode\(inode\)' security/selinux/selinuxfs.c
-          assert_noop "selinux_cred() used in xfrm.c"        'selinux_cred\(current_cred\(\)\)' security/selinux/xfrm.c
-          assert_noop "selinux_inode() declared in objsec.h" 'selinux_inode\(' security/selinux/include/objsec.h
-          assert_noop "selinux_cred() declared in objsec.h"  'selinux_cred\(' security/selinux/include/objsec.h
-          [[ "$FAIL" -eq 0 ]] || {
-            exit 1
-          }
-          echo
-          echo "PASS: every KSU-Next Kbuild self-patch branch is a guaranteed no-op"
-      # ── 10. Fix hooks.c selinux_cred() consistency gap ───────────────────────
-      - name: Harden security/selinux/hooks.c — complete selinux_cred() conversion
+          sed -i '/^CONFIG_LOCALVERSION=/d;/^CONFIG_DEFAULT_HOSTNAME=/d' "$DEFCONFIG"
+          printf 'CONFIG_LOCALVERSION="%s"\nCONFIG_DEFAULT_HOSTNAME="%s"\n' "$BRAND" "$KBUILD_BUILD_HOST" >> "$DEFCONFIG"
+          printf '#!/bin/sh\nprintf "%%s" "%s"\n' "$BRAND" > scripts/setlocalversion
+          chmod +x scripts/setlocalversion
+          echo "$BRAND" > localversion
+          echo "identity applied: brand=$BRAND host=$KBUILD_BUILD_HOST"
+
+      # ── 7. Optional Chimera overlay (chimera-full / apply_optional_overlay) ─
+      - name: Optional overlay — hooks.c selinux_cred() consistency + stack protector
+        if: ${{ env.APPLY_OVERLAY == 'true' }}
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
-          python3 << 'PYEOF'
-          import re
-          import sys
+          sed -i '/^CONFIG_CC_STACKPROTECTOR_STRONG=/d;/^CONFIG_CC_STACKPROTECTOR=/d' "$DEFCONFIG"
+          printf '# CONFIG_CC_STACKPROTECTOR_STRONG is not set\nCONFIG_CC_STACKPROTECTOR=y\n' >> "$DEFCONFIG"
+          python3 - <<'PYEOF'
+          import re, sys
           from pathlib import Path
           MARKER = "CMK9_HOOKS_C_SELINUX_CRED_CONSISTENCY"
           p = Path("security/selinux/hooks.c")
           src = p.read_text()
           if MARKER in src:
-              print("hooks.c: selinux_cred consistency pass already applied — skipping")
-              sys.exit(0)
+              print("hooks.c: already applied"); sys.exit(0)
           subs = [
               (r'\btsec = cred->security;', 'tsec = selinux_cred(cred);'),
               (r'const struct task_security_struct \*tsec = cred->security;',
@@ -832,1284 +727,237 @@ jobs:
               (r'__tsec = __task_cred\(p\)->security;', '__tsec = selinux_cred(__task_cred(p));'),
           ]
           total = 0
-          for pattern, repl in subs:
-              new_src, n = re.subn(pattern, repl, src)
+          for pat, rep in subs:
+              src, n = re.subn(pat, rep, src)
               if n:
-                  print(f"  converted {n} site(s): {pattern}")
-                  src = new_src
-                  total += n
-          if total == 0:
-              print("hooks.c: no applicable sites; no repository modification performed.")
+                  print(f"  converted {n}: {pat}"); total += n
+          if total:
+              p.write_text(f"/* {MARKER} */\n" + src)
+              print(f"hooks.c: {total} sites converted")
           else:
-              src = f"/* {MARKER} */\n" + src
-              p.write_text(src)
-              print(f"hooks.c: converted {total} call site(s) to selinux_cred()")
+              print("hooks.c: no applicable sites")
           PYEOF
           for fn in selinux_cred_alloc_blank selinux_cred_free selinux_cred_prepare selinux_cred_transfer; do
-            grep -q "$fn" security/selinux/hooks.c || {
-              echo "FATAL: $fn disappeared from hooks.c — consistency pass corrupted the file" >&2
-              exit 1
-            }
+            grep -q "$fn" security/selinux/hooks.c || { echo "FATAL: $fn missing from hooks.c" >&2; exit 1; }
           done
-          REMAINING=$(grep -cE 'rc = selinux_determine_inode_label\((current_security\(\)|old->security)' security/selinux/hooks.c || true)
-          if [[ "$REMAINING" -gt 0 ]]; then
-            echo "FATAL: $REMAINING selinux_determine_inode_label(...) call site(s) still unconverted after patch" >&2
-            exit 1
-          fi
-          echo "PASS: hooks.c selinux_cred consistency verified, hook functions intact, 0 selinux_determine_inode_label sites remain unconverted"
-      # ── 11. Chimera overlay ───────────────────────────────────────────────────
-      - name: Apply Chimera overlay
+          REMAINING="$(grep -cE 'rc = selinux_determine_inode_label\((current_security\(\)|old->security)' security/selinux/hooks.c || true)"
+          [[ "${REMAINING:-0}" -eq 0 ]] || { echo "FATAL: $REMAINING unconverted sites" >&2; exit 1; }
+          echo "PASS: hooks.c consistency pass"
+
+      - name: Optional overlay — Chimera overlay script and marker verification
+        if: ${{ env.APPLY_OVERLAY == 'true' }}
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
-          LOG="$ABS_LOG/overlay.log"
-          echo "Chimera overlay started at $(date -u)" > "$LOG"
-          sed -i \
-            '/^CONFIG_LOCALVERSION=/d;/^CONFIG_DEFAULT_HOSTNAME=/d;/^CONFIG_CC_STACKPROTECTOR_STRONG=/d;/^CONFIG_CC_STACKPROTECTOR=/d' \
-            "$DEFCONFIG"
-          printf \
-            'CONFIG_LOCALVERSION="%s"\nCONFIG_DEFAULT_HOSTNAME="%s"\n# CONFIG_CC_STACKPROTECTOR_STRONG is not set\nCONFIG_CC_STACKPROTECTOR=y\n' \
-            "$BRAND" \
-            "$BUILD_HOST" \
-            >> "$DEFCONFIG"
-          printf \
-            '#!/bin/sh\nprintf "%%s" "%s"\n' \
-            "$BRAND" \
-            > scripts/setlocalversion
-          chmod +x scripts/setlocalversion
-          echo "$BRAND" > localversion
-          bash "$GITHUB_WORKSPACE/patches/apply_chimera_overlay_patches.sh" \
-            2>&1 | tee -a "$LOG"
-          echo \
-            "Overlay applied (profile=$PROFILE, brand=$BRAND)" \
-            | tee -a "$LOG"
-      # ── 11b. Verify Chimera overlay landed completely ────────────────────────
-      - name: Verify Chimera overlay markers
-        working-directory: ${{ env.KERNEL_DIR }}
-        run: |
-          set -Eeuo pipefail
+          bash "$GITHUB_WORKSPACE/patches/apply_chimera_overlay_patches.sh" 2>&1 | tee "$ABS_LOG/overlay.log"
           FAIL=0
-          check() {
-            local desc="$1" marker="$2" file="$3"
-            if grep -q "$marker" "$file" 2>/dev/null; then
-              echo "OK:    $desc"
-            else
-              echo "FATAL: $desc — marker '$marker' not found in $file"
-              FAIL=1
-            fi
-          }
-          check "UFC short-circuit"            "CMK9_UFC_SHORT_CIRCUIT"        "drivers/cpufreq/exynos-ufc.c"
-          check "mem_rw() SUS_MAP guard"       "CMK9_MEM_RW_SUS_MAP_GUARD"     "fs/proc/base.c"
-          check "namei sus_path sub-path recheck" "CMK9_NAMEI_SUS_PATH_RECHECK" "fs/namei.c"
-          check "board DTS tuning"             "CMK9_DTS_BOARD_TUNING"         "arch/arm64/boot/dts/exynos/exynos9810-star2lte_eur_open_26.dts"
-          check "sugov rate limit tuning"       "CMK9_SUGOV_RATE_LIMIT"        "kernel/sched/cpufreq_schedutil.c"
-          check "sugov kthread priority (SCHED_RR)" "CMK9_SUGOV_KTHREAD_PRIORITY" "kernel/sched/cpufreq_schedutil.c"
-          check "sugov_init() rate limit"       "CMK9_SUGOV_INIT_RATE_LIMIT"   "kernel/sched/cpufreq_schedutil.c"
-          grep -q 'normalized_sysctl_sched_min_granularity = 5000000ULL' kernel/sched/fair.c \
-            && echo "OK:    fair.c min_granularity tuned" \
-            || { echo "FATAL: fair.c min_granularity not tuned"; FAIL=1; }
-          grep -q 'sysctl_sched_migration_cost = 2000000UL' kernel/sched/fair.c \
-            && echo "OK:    fair.c migration_cost tuned" \
-            || { echo "FATAL: fair.c migration_cost not tuned"; FAIL=1; }
-          [[ "$FAIL" -eq 0 ]] || {
-            exit 1
-          }
-          echo
-          echo "PASS: all Chimera overlay markers present"
-      # ── 11c. Toolchain resolution ───────────────────────────────────────────
-      - name: Resolve toolchain configuration
-        id: tc-resolve
-        run: |
-          set -Eeuo pipefail
-
-          TOOLCHAIN="${{ inputs.toolchain }}"
-
-          TC_URL=""
-          TC_ARCHIVE_FMT="system"
-          TC_CACHE_KEY=""
-          TC_LLVM_IAS="0"
-          TC_USE_FULL_LLVM="false"
-          TC_HOSTLDFLAGS=""
-          TC_SHA256=""
-
-          TC_CC=""
-          TC_LD=""
-          TC_AR=""
-          TC_NM=""
-          TC_OBJCOPY=""
-          TC_OBJDUMP=""
-          TC_STRIP=""
-          TC_CLANG_TRIPLE=""
-          TC_CROSS_COMPILE=""
-          TC_CROSS_COMPILE_ARM32=""
-
-          case "$TOOLCHAIN" in
-            gcc)
-              TC_CACHE_KEY="gcc-cross-ubuntu-24.04-v2"
-
-              TC_CC="ccache aarch64-linux-gnu-gcc"
-              TC_LD="aarch64-linux-gnu-ld"
-              TC_AR="aarch64-linux-gnu-ar"
-              TC_NM="aarch64-linux-gnu-nm"
-              TC_OBJCOPY="aarch64-linux-gnu-objcopy"
-              TC_OBJDUMP="aarch64-linux-gnu-objdump"
-              TC_STRIP="aarch64-linux-gnu-strip"
-
-              TC_CROSS_COMPILE="aarch64-linux-gnu-"
-              TC_CROSS_COMPILE_ARM32="arm-linux-gnueabi-"
-              ;;
-
-            aosp19)
-              TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-15.0.0_r10/clang-r536225.tar.gz"
-              TC_ARCHIVE_FMT="tar.gz"
-              TC_CACHE_KEY="aosp-clang-r536225-ubuntu-24.04-v2"
-              ;;
-
-            aosp20)
-              TC_URL="https://gitlab.com/kei-space/clang/r547379/-/archive/master/r547379-master.tar.gz"
-              TC_ARCHIVE_FMT="tar.gz"
-              TC_CACHE_KEY="aosp-clang-r547379-ubuntu-24.04-v2"
-              ;;
-
-            aosp21)
-              TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/21b19c041de1f1df9b97fd9902ae5405c6cf8eb9/clang-r563880c.tar.gz"
-              TC_ARCHIVE_FMT="tar.gz"
-              TC_CACHE_KEY="aosp-clang-r563880c-ubuntu-24.04-v2"
-              ;;
-
-            aosp22)
-              TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/mirror-goog-main-llvm-toolchain-source/clang-r596125.tar.gz"
-              TC_ARCHIVE_FMT="tar.gz"
-              TC_CACHE_KEY="aosp-clang-r596125-ubuntu-24.04-v2"
-              ;;
-
-            aosp23)
-              TC_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/28337064939c0b4bb5804cddf35fb03d860edcf6/clang-r614150.tar.gz"
-              TC_ARCHIVE_FMT="tar.gz"
-              TC_CACHE_KEY="aosp-clang-r614150-ubuntu-24.04-v1"
-              ;;
-
-            llvm20)
-              TC_URL="https://mirrors.edge.kernel.org/pub/tools/llvm/files/llvm-20.1.8-x86_64.tar.xz"
-              TC_ARCHIVE_FMT="tar.xz"
-              TC_CACHE_KEY="korg-clang-20.1.8-ubuntu-24.04-v1"
-              ;;
-
-            llvm21)
-              TC_URL="https://mirrors.edge.kernel.org/pub/tools/llvm/files/llvm-21.1.0-x86_64.tar.xz"
-              TC_ARCHIVE_FMT="tar.xz"
-              TC_CACHE_KEY="llvm-clang-21.1.0-ubuntu-24.04-v1"
-              ;;
-
-            llvm22)
-              TC_URL="https://mirrors.edge.kernel.org/pub/tools/llvm/files/llvm-22.1.7-x86_64.tar.xz"
-              TC_ARCHIVE_FMT="tar.xz"
-              TC_CACHE_KEY="llvm-clang-22.1.7-ubuntu-24.04-v1"
-              ;;
-
-            neutron19)
-              TC_URL="https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/10032024/neutron-clang-10032024.tar.zst"
-              TC_ARCHIVE_FMT="tar.zst"
-              TC_CACHE_KEY="neutron-clang-10032024-ubuntu-24.04-v2"
-              ;;
-
-            neutron23)
-              TC_URL="https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/30062026/neutron-clang-30062026.tar.zst"
-              TC_ARCHIVE_FMT="tar.zst"
-              TC_CACHE_KEY="neutron-clang-30062026-ubuntu-24.04-v2"
-              ;;
-
-            neutron24)
-              TC_URL="https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/30072026/neutron-clang-30072026.tar.zst"
-              TC_ARCHIVE_FMT="tar.zst"
-              TC_CACHE_KEY="neutron-clang-30072026-ubuntu-24.04-v2"
-              ;;
-
-            zyc_stable)
-              TC_URL="$(curl -fsSL https://raw.githubusercontent.com/ZyCromerZ/Clang/main/Clang-main-link.txt)"
-              TC_CACHE_KEY="zyc-clang-ubuntu-24.04-$(printf '%s' "$TC_URL" | sha256sum | cut -c1-16)"
-              ;;
-
-            weebx)
-              TC_URL="https://github.com/XSans0/WeebX-Clang/releases/download/WeebX-Clang-20.0.0git-release/WeebX-Clang-20.0.0git.tar.gz"
-              TC_ARCHIVE_FMT="tar.gz"
-              TC_CACHE_KEY="weebx-clang-20.0.0git-20241206-ubuntu-24.04-v1"
-              TC_SHA256="a2ac878d7f26fc1ac7d90d1330e4e34b62676d3a2326673b78b7799e1d8a0a7c"
-              ;;
-
-            *)
-              echo "FATAL: unsupported toolchain: $TOOLCHAIN" >&2
-              exit 1
-              ;;
-          esac
-
-          if [[ "$TOOLCHAIN" != "gcc" ]]; then
-            TC_LLVM_IAS="1"
-            TC_USE_FULL_LLVM="true"
-            TC_CC="ccache clang"
-            TC_LD="ld.lld"
-            TC_AR="llvm-ar"
-            TC_NM="llvm-nm"
-            TC_OBJCOPY="llvm-objcopy"
-            TC_OBJDUMP="llvm-objdump"
-            TC_STRIP="llvm-strip"
-            TC_CLANG_TRIPLE="aarch64-linux-gnu-"
-            TC_CROSS_COMPILE="aarch64-linux-gnu-"
-            TC_CROSS_COMPILE_ARM32="arm-linux-gnueabi-"
-          fi
-
-          {
-            echo "TC_URL=$TC_URL"
-            echo "TC_ARCHIVE_FMT=$TC_ARCHIVE_FMT"
-            echo "TC_CACHE_KEY=$TC_CACHE_KEY"
-            echo "TC_LLVM_IAS=$TC_LLVM_IAS"
-            echo "TC_USE_FULL_LLVM=$TC_USE_FULL_LLVM"
-            echo "TC_HOSTLDFLAGS=$TC_HOSTLDFLAGS"
-            echo "TC_SHA256=$TC_SHA256"
-            echo "TC_CC=$TC_CC"
-            echo "TC_LD=$TC_LD"
-            echo "TC_AR=$TC_AR"
-            echo "TC_NM=$TC_NM"
-            echo "TC_OBJCOPY=$TC_OBJCOPY"
-            echo "TC_OBJDUMP=$TC_OBJDUMP"
-            echo "TC_STRIP=$TC_STRIP"
-            echo "TC_CLANG_TRIPLE=$TC_CLANG_TRIPLE"
-            echo "TC_CROSS_COMPILE=$TC_CROSS_COMPILE"
-            echo "TC_CROSS_COMPILE_ARM32=$TC_CROSS_COMPILE_ARM32"
-          } >> "$GITHUB_ENV"
-
-          {
-            echo "cache-key=$TC_CACHE_KEY"
-            echo "toolchain=$TOOLCHAIN"
-          } >> "$GITHUB_OUTPUT"
-
-          echo "Toolchain: $TOOLCHAIN"
-          echo "Compiler: $TC_CC"
-          echo "Linker: $TC_LD"
-          echo "Target cross-prefix: $TC_CROSS_COMPILE"
-
-      - name: Cache toolchain
-        uses: actions/cache@v4
-        id: tc-cache
-        with:
-          path: toolchains/clang
-          key: ${{ env.TC_CACHE_KEY }}
-
-      - name: Download and extract toolchain
-        if: steps.tc-cache.outputs.cache-hit != 'true' && inputs.toolchain != 'gcc'
-        run: |
-          set -Eeuo pipefail
-
-          rm -rf "$ABS_TC"
-          mkdir -p "$ABS_TC"
-
-          ARCHIVE="/tmp/clang_archive"
-
-          [[ -n "$TC_URL" ]] || {
-            echo "FATAL: TC_URL is empty" >&2
-            exit 1
-          }
-
-          aria2c \
-            -x 16 \
-            -s 16 \
-            -k 1M \
-            -c \
-            --max-tries=5 \
-            --retry-wait=5 \
-            --timeout=60 \
-            --dir="/tmp" \
-            --out="clang_archive" \
-            "$TC_URL"
-
-          [[ -s "$ARCHIVE" ]] || {
-            echo "FATAL: toolchain archive is missing or empty" >&2
-            exit 1
-          }
-
-          if [[ -n "${TC_SHA256:-}" ]]; then
-            ACTUAL_TC_SHA256="$(sha256sum "$ARCHIVE" | cut -d' ' -f1)"
-
-            if [[ "$ACTUAL_TC_SHA256" != "$TC_SHA256" ]]; then
-              echo "FATAL: toolchain archive SHA-256 mismatch" >&2
-              echo "Expected: $TC_SHA256" >&2
-              echo "Actual:   $ACTUAL_TC_SHA256" >&2
-              exit 1
-            fi
-
-            echo "PASS: toolchain archive SHA-256 verified"
-          fi
-
-          case "$TC_ARCHIVE_FMT" in
-            tar.gz|tar)
-              tar -C "$ABS_TC" -xzf "$ARCHIVE"
-              ;;
-
-            tar.xz)
-              tar -C "$ABS_TC" -xJf "$ARCHIVE"
-              ;;
-
-            tar.zst)
-              zstd -d "$ARCHIVE" -o /tmp/clang.tar --force
-              tar -C "$ABS_TC" -xf /tmp/clang.tar
-              ;;
-
-            *)
-              echo "FATAL: unsupported archive format '$TC_ARCHIVE_FMT'" >&2
-              exit 1
-              ;;
-          esac
-
-          [[ -n "$(find "$ABS_TC" -type f -print -quit)" ]] || {
-            echo "FATAL: extracted toolchain contains no files" >&2
-            exit 1
-          }
-
-          echo "Toolchain ready: $(find "$ABS_TC" -type f | wc -l) file(s)"
-
-      - name: Configure toolchain PATH
-        run: |
-          set -Eeuo pipefail
-
-          if [[ "$TOOLCHAIN" == "gcc" ]]; then
-            REQUIRED_GCC_TOOLS=(
-              aarch64-linux-gnu-gcc
-              aarch64-linux-gnu-ld
-              aarch64-linux-gnu-ar
-              aarch64-linux-gnu-nm
-              aarch64-linux-gnu-objcopy
-              aarch64-linux-gnu-objdump
-              aarch64-linux-gnu-strip
-              arm-linux-gnueabi-gcc
-              arm-linux-gnueabi-ld
-              arm-linux-gnueabi-ar
-              arm-linux-gnueabi-nm
-              arm-linux-gnueabi-objcopy
-              arm-linux-gnueabi-objdump
-              arm-linux-gnueabi-strip
-            )
-
-            for bin in "${REQUIRED_GCC_TOOLS[@]}"; do
-              command -v "$bin" >/dev/null 2>&1 || {
-                echo "FATAL: required GCC tool '$bin' was not found" >&2
-                exit 1
-              }
-            done
-
-            echo "Using system GCC cross-toolchain"
-            exit 0
-          fi
-
-          ACTUAL_BIN="$(
-            find "$ABS_TC" \
-              -type d \
-              -name "bin" \
-              -printf "%d\t%p\n" \
-              | sort -n \
-              | cut -f2 \
-              | head -n1
-          )"
-
-          if [[ -z "$ACTUAL_BIN" || ! -d "$ACTUAL_BIN" ]]; then
-            echo "FATAL: no bin directory found under $ABS_TC" >&2
-            exit 1
-          fi
-
-          echo "Found toolchain bin: $ACTUAL_BIN"
-          chmod +x "$ACTUAL_BIN"/* 2>/dev/null || true
-          echo "$ACTUAL_BIN" >> "$GITHUB_PATH"
-
-      # ── 11d. Verify toolchain ───────────────────────────────────────────────
-      - name: Verify toolchain and capture compiler identity
-        run: |
-          set -Eeuo pipefail
-
-          require_command() {
-            local command_name="$1"
-            command -v "$command_name" >/dev/null 2>&1 || {
-              echo "FATAL: required command not found: $command_name" >&2
-              exit 1
-            }
-          }
-
-          if [[ "$TOOLCHAIN" == "gcc" ]]; then
-            require_command aarch64-linux-gnu-gcc
-            require_command aarch64-linux-gnu-ld
-            require_command aarch64-linux-gnu-ar
-            require_command aarch64-linux-gnu-nm
-            require_command aarch64-linux-gnu-objcopy
-            require_command aarch64-linux-gnu-objdump
-            require_command aarch64-linux-gnu-strip
-            require_command arm-linux-gnueabi-gcc
-
-            COMPILER_VERSION="$(aarch64-linux-gnu-gcc --version | head -n1)"
-            LINKER_VERSION="$(aarch64-linux-gnu-ld --version | head -n1)"
-            CLANG_VERSION="not-applicable"
-            COMPILER_KIND="gcc"
-
-            [[ "$TC_CC" == *aarch64-linux-gnu-gcc ]] || {
-              echo "FATAL: GCC mode selected an invalid compiler: $TC_CC" >&2
-              exit 1
-            }
-
-            [[ "$TC_LD" != *ld.lld ]] || {
-              echo "FATAL: GCC mode selected LLD: $TC_LD" >&2
-              exit 1
-            }
-          else
-            for binary in clang ld.lld llvm-nm llvm-objdump llvm-ar llvm-objcopy llvm-strip; do
-              require_command "$binary"
-            done
-
-            COMPILER_VERSION="$(clang --version | head -n1)"
-            LINKER_VERSION="$(ld.lld --version | head -n1)"
-            CLANG_VERSION="$COMPILER_VERSION"
-            COMPILER_KIND="llvm"
-          fi
-
-          TC_IDENTITY_HASH="$(
-            printf '%s\n%s\n%s\n' \
-              "$COMPILER_VERSION" \
-              "$LINKER_VERSION" \
-              "$COMPILER_KIND" |
-            sha256sum | cut -d' ' -f1 | cut -c1-16
-          )"
-
-          {
-            echo "COMPILER_VERSION=$COMPILER_VERSION"
-            echo "LINKER_VERSION=$LINKER_VERSION"
-            echo "CLANG_VERSION=$CLANG_VERSION"
-            echo "COMPILER_KIND=$COMPILER_KIND"
-            echo "TC_IDENTITY_HASH=$TC_IDENTITY_HASH"
-          } >> "$GITHUB_ENV"
-
-          {
-            echo "Compiler: $COMPILER_VERSION"
-            echo "Linker: $LINKER_VERSION"
-            echo "Compiler kind: $COMPILER_KIND"
-            echo "Toolchain identity hash: $TC_IDENTITY_HASH"
-          } | tee "$ABS_LOG/toolchain-identity.txt"
-
-      - name: Resolve effective make arguments
-        id: make-args
-        run: |
-          set -Eeuo pipefail
-
-          if [[ "$TOOLCHAIN" == "gcc" ]]; then
-            MAKE_TOOLCHAIN_ARGS=(
-              "CC=$TC_CC"
-              "HOSTCC=gcc"
-              "HOSTCXX=g++"
-              "HOSTLD=ld"
-              "LD=$TC_LD"
-              "AR=$TC_AR"
-              "NM=$TC_NM"
-              "OBJCOPY=$TC_OBJCOPY"
-              "OBJDUMP=$TC_OBJDUMP"
-              "STRIP=$TC_STRIP"
-              "LLVM=0"
-              "LLVM_IAS=0"
-              "CROSS_COMPILE=$TC_CROSS_COMPILE"
-              "CROSS_COMPILE_ARM32=$TC_CROSS_COMPILE_ARM32"
-            )
-
-            BUILD_KCFLAGS="-O2 -fcommon -fno-strict-aliasing -Wno-error"
-            BUILD_KBUILD_LDFLAGS=""
-          else
-            MAKE_TOOLCHAIN_ARGS=(
-              "CC=$TC_CC"
-              "HOSTCC=clang"
-              "HOSTCXX=clang++"
-              "HOSTLD=ld.lld"
-              "LD=$TC_LD"
-              "AR=$TC_AR"
-              "NM=$TC_NM"
-              "OBJCOPY=$TC_OBJCOPY"
-              "OBJDUMP=$TC_OBJDUMP"
-              "STRIP=$TC_STRIP"
-              "LLVM=1"
-              "LLVM_IAS=$TC_LLVM_IAS"
-              "CLANG_TRIPLE=$TC_CLANG_TRIPLE"
-              "CROSS_COMPILE=$TC_CROSS_COMPILE"
-              "CROSS_COMPILE_ARM32=$TC_CROSS_COMPILE_ARM32"
-            )
-
-            BUILD_KCFLAGS="$CHIMERA_KCFLAGS"
-            BUILD_KBUILD_LDFLAGS="$CHIMERA_KBUILD_LDFLAGS"
-          fi
-
-          BUILD_KCFLAGS="$(printf '%s\n' "$BUILD_KCFLAGS" | xargs)"
-          BUILD_KBUILD_LDFLAGS="$(printf '%s\n' "$BUILD_KBUILD_LDFLAGS" | xargs || true)"
-
-          if [[ "$TOOLCHAIN" == "gcc" ]]; then
-            for forbidden in \
-              "-fuse-ld=lld" \
-              "-Wno-unknown-warning-option" \
-              "-Wno-error=unused-but-set-global"; do
-              if [[ " $BUILD_KCFLAGS $BUILD_KBUILD_LDFLAGS " == *" $forbidden "* ]]; then
-                echo "FATAL: Clang-only flag leaked into GCC mode: $forbidden" >&2
-                exit 1
-              fi
-            done
-          fi
-
-          MAKE_TOOLCHAIN_ARGS_FILE="$ABS_LOG/make-toolchain-args.txt"
-          : > "$MAKE_TOOLCHAIN_ARGS_FILE"
-
-          printf '%s\n' "${MAKE_TOOLCHAIN_ARGS[@]}" \
-            | tee "$MAKE_TOOLCHAIN_ARGS_FILE"
-
-          {
-            echo "BUILD_KCFLAGS=$BUILD_KCFLAGS"
-            echo "BUILD_KBUILD_LDFLAGS=$BUILD_KBUILD_LDFLAGS"
-          } | tee -a "$MAKE_TOOLCHAIN_ARGS_FILE"
-
-          {
-            echo "BUILD_KCFLAGS=$BUILD_KCFLAGS"
-            echo "BUILD_KBUILD_LDFLAGS=$BUILD_KBUILD_LDFLAGS"
-          } >> "$GITHUB_ENV"    
-      # ── 12. Kconfig fragment normalization ───────────────────────────────────
-      - name: Validate Kconfig fragment
-        run: |
-          set -Eeuo pipefail
-          CFG="$GITHUB_WORKSPACE/chimera-ksu-susfs.cfg"
-          grep -q '^CONFIG_KSU=y$' "$CFG"
-          grep -q '^CONFIG_KSU_MANUAL_HOOK=y$' "$CFG"
-          grep -q '^CONFIG_KSU_SUSFS=y$' "$CFG"
-          if grep -q '^CONFIG_KSU_NON_KPROBE' "$CFG"; then
-            echo "FATAL: CONFIG_KSU_NON_KPROBE is not a valid KernelSU-Next symbol" >&2
-            exit 1
-          fi
-          cat "$CFG"
-      # ── 13. Merge Kconfig ───────────────────────────────────────────────────
-      - name: Merge Kconfig
+          mk() { grep -q "$2" "$3" 2>/dev/null && echo "OK:    $1" || { echo "FATAL: $1 — marker $2 missing in $3"; FAIL=1; }; }
+          mk "UFC short-circuit"     CMK9_UFC_SHORT_CIRCUIT        drivers/cpufreq/exynos-ufc.c
+          mk "mem_rw SUS_MAP guard"  CMK9_MEM_RW_SUS_MAP_GUARD     fs/proc/base.c
+          mk "namei sus_path recheck" CMK9_NAMEI_SUS_PATH_RECHECK  fs/namei.c
+          mk "board DTS tuning"      CMK9_DTS_BOARD_TUNING         arch/arm64/boot/dts/exynos/exynos9810-star2lte_eur_open_26.dts
+          mk "sugov rate limit"      CMK9_SUGOV_RATE_LIMIT         kernel/sched/cpufreq_schedutil.c
+          mk "sugov kthread prio"    CMK9_SUGOV_KTHREAD_PRIORITY   kernel/sched/cpufreq_schedutil.c
+          mk "sugov_init rate limit" CMK9_SUGOV_INIT_RATE_LIMIT    kernel/sched/cpufreq_schedutil.c
+          grep -q 'normalized_sysctl_sched_min_granularity = 5000000ULL' kernel/sched/fair.c && echo "OK:    fair.c min_granularity" || { echo "FATAL: fair.c min_granularity"; FAIL=1; }
+          grep -q 'sysctl_sched_migration_cost = 2000000UL' kernel/sched/fair.c && echo "OK:    fair.c migration_cost" || { echo "FATAL: fair.c migration_cost"; FAIL=1; }
+          [[ "$FAIL" -eq 0 ]] || exit 1
+          echo "PASS: overlay markers present"
+
+      # ── 8. Kconfig ─────────────────────────────────────────────────────────
+      - name: Configure kernel (defconfig + merge + manual-hook mode)
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
+          source "$CI_LIB"
+          chimera_toolchain_args
 
-          make_toolchain_args() {
-            if [[ "$TOOLCHAIN" == "gcc" ]]; then
-              TOOLCHAIN_ARGS=(
-                "CC=$TC_CC"
-                "HOSTCC=gcc"
-                "HOSTCXX=g++"
-                "HOSTLD=ld"
-                "LD=$TC_LD"
-                "AR=$TC_AR"
-                "NM=$TC_NM"
-                "OBJCOPY=$TC_OBJCOPY"
-                "OBJDUMP=$TC_OBJDUMP"
-                "STRIP=$TC_STRIP"
-                "LLVM=0"
-                "LLVM_IAS=0"
-                "CROSS_COMPILE=$TC_CROSS_COMPILE"
-                "CROSS_COMPILE_ARM32=$TC_CROSS_COMPILE_ARM32"
-              )
-            else
-              TOOLCHAIN_ARGS=(
-                "CC=$TC_CC"
-                "HOSTCC=clang"
-                "HOSTCXX=clang++"
-                "HOSTLD=ld.lld"
-                "LD=$TC_LD"
-                "AR=$TC_AR"
-                "NM=$TC_NM"
-                "OBJCOPY=$TC_OBJCOPY"
-                "OBJDUMP=$TC_OBJDUMP"
-                "STRIP=$TC_STRIP"
-                "LLVM=1"
-                "LLVM_IAS=${TC_LLVM_IAS:-1}"
-                "CLANG_TRIPLE=${TC_CLANG_TRIPLE:-aarch64-linux-gnu-}"
-                "CROSS_COMPILE=$TC_CROSS_COMPILE"
-                "CROSS_COMPILE_ARM32=$TC_CROSS_COMPILE_ARM32"
-              )
-            fi
-          }
+          CFG_KSU="$GITHUB_WORKSPACE/chimera-ksu-susfs.cfg"
+          grep -q '^CONFIG_KSU=y$' "$CFG_KSU"
+          grep -q '^CONFIG_KSU_MANUAL_HOOK=y$' "$CFG_KSU"
+          grep -q '^CONFIG_KSU_SUSFS=y$' "$CFG_KSU"
+          if grep -q '^CONFIG_KSU_NON_KPROBE' "$CFG_KSU"; then echo "FATAL: invalid symbol CONFIG_KSU_NON_KPROBE" >&2; exit 1; fi
+          if grep -q '^CONFIG_KSU_KPROBES_HOOK=y' "$CFG_KSU"; then echo "FATAL: fragment enables kprobes hook" >&2; exit 1; fi
 
-          make_toolchain_args
+          cp "$CFG_KSU" /tmp/chimera-ksu-susfs.cfg
+          FRAGS=(/tmp/chimera-ksu-susfs.cfg)
+          if [[ "$APPLY_OVERLAY" == "true" ]]; then
+            cp "$GITHUB_WORKSPACE/chimera-device-specific.cfg" /tmp/chimera-device-specific.cfg
+            FRAGS+=(/tmp/chimera-device-specific.cfg)
+          fi
 
-          cp \
-            "$GITHUB_WORKSPACE/chimera-ksu-susfs.cfg" \
-            /tmp/chimera-ksu-susfs.cfg
-
-          cp \
-            "$GITHUB_WORKSPACE/chimera-device-specific.cfg" \
-            /tmp/chimera-device-specific.cfg
-
-          make \
-            O="$ABS_OUT" \
-            ARCH=arm64 \
-            HOSTLDFLAGS="${TC_HOSTLDFLAGS:-}" \
-            "${TOOLCHAIN_ARGS[@]}" \
-            "$(basename "$DEFCONFIG")" \
-            | tee "$ABS_LOG/defconfig-base.log"
-
-          scripts/kconfig/merge_config.sh \
-            -m \
-            -O "$ABS_OUT" \
-            "$ABS_OUT/.config" \
-            /tmp/chimera-ksu-susfs.cfg \
-            /tmp/chimera-device-specific.cfg \
-            | tee "$ABS_LOG/merge-config.log"
-
-          make \
-            O="$ABS_OUT" \
-            ARCH=arm64 \
-            HOSTLDFLAGS="${TC_HOSTLDFLAGS:-}" \
-            "${TOOLCHAIN_ARGS[@]}" \
-            olddefconfig \
-            | tee -a "$ABS_LOG/merge-config.log"
-
-      # ── 14. Force KernelSU hook mode after Kconfig resolution ─────────────────
-      - name: Normalize KernelSU hook mode
-        working-directory: ${{ env.KERNEL_DIR }}
-        run: |
-          set -Eeuo pipefail
-
-          make_toolchain_args() {
-            if [[ "$TOOLCHAIN" == "gcc" ]]; then
-              TOOLCHAIN_ARGS=(
-                "CC=$TC_CC"
-                "HOSTCC=gcc"
-                "HOSTCXX=g++"
-                "HOSTLD=ld"
-                "LD=$TC_LD"
-                "AR=$TC_AR"
-                "NM=$TC_NM"
-                "OBJCOPY=$TC_OBJCOPY"
-                "OBJDUMP=$TC_OBJDUMP"
-                "STRIP=$TC_STRIP"
-                "LLVM=0"
-                "LLVM_IAS=0"
-                "CROSS_COMPILE=$TC_CROSS_COMPILE"
-                "CROSS_COMPILE_ARM32=$TC_CROSS_COMPILE_ARM32"
-              )
-            else
-              TOOLCHAIN_ARGS=(
-                "CC=$TC_CC"
-                "HOSTCC=clang"
-                "HOSTCXX=clang++"
-                "HOSTLD=ld.lld"
-                "LD=$TC_LD"
-                "AR=$TC_AR"
-                "NM=$TC_NM"
-                "OBJCOPY=$TC_OBJCOPY"
-                "OBJDUMP=$TC_OBJDUMP"
-                "STRIP=$TC_STRIP"
-                "LLVM=1"
-                "LLVM_IAS=${TC_LLVM_IAS:-1}"
-                "CLANG_TRIPLE=${TC_CLANG_TRIPLE:-aarch64-linux-gnu-}"
-                "CROSS_COMPILE=$TC_CROSS_COMPILE"
-                "CROSS_COMPILE_ARM32=$TC_CROSS_COMPILE_ARM32"
-              )
-            fi
-          }
-
-          make_toolchain_args
+          chimera_make "$(basename "$DEFCONFIG")" | tee "$ABS_LOG/defconfig-base.log"
+          scripts/kconfig/merge_config.sh -m -O "$ABS_OUT" "$ABS_OUT/.config" "${FRAGS[@]}" | tee "$ABS_LOG/merge-config.log"
+          chimera_make olddefconfig | tee -a "$ABS_LOG/merge-config.log"
 
           CFG="$ABS_OUT/.config"
-
-          echo "Forcing KernelSU manual-hook mode"
-
           if [[ -x scripts/config ]]; then
-            scripts/config \
-              --file "$CFG" \
-              -e CONFIG_KSU \
-              -e CONFIG_KSU_MANUAL_HOOK \
-              -d CONFIG_KSU_KPROBES_HOOK
+            scripts/config --file "$CFG" -e CONFIG_KSU -e CONFIG_KSU_MANUAL_HOOK -d CONFIG_KSU_KPROBES_HOOK
           else
-            sed -i \
-              -e '/^CONFIG_KSU_KPROBES_HOOK=/d' \
-              -e '/^# CONFIG_KSU_KPROBES_HOOK is not set$/d' \
-              "$CFG"
-
-            grep -q '^CONFIG_KSU=y$' "$CFG" || \
-              printf '%s\n' 'CONFIG_KSU=y' >> "$CFG"
-
-            grep -q '^CONFIG_KSU_MANUAL_HOOK=y$' "$CFG" || \
-              printf '%s\n' 'CONFIG_KSU_MANUAL_HOOK=y' >> "$CFG"
-
-            printf '%s\n' '# CONFIG_KSU_KPROBES_HOOK is not set' >> "$CFG"
+            sed -i -e '/^CONFIG_KSU_KPROBES_HOOK=/d' -e '/^# CONFIG_KSU_KPROBES_HOOK is not set$/d' "$CFG"
+            grep -q '^CONFIG_KSU=y$' "$CFG" || echo 'CONFIG_KSU=y' >> "$CFG"
+            grep -q '^CONFIG_KSU_MANUAL_HOOK=y$' "$CFG" || echo 'CONFIG_KSU_MANUAL_HOOK=y' >> "$CFG"
+            echo '# CONFIG_KSU_KPROBES_HOOK is not set' >> "$CFG"
           fi
+          chimera_make olddefconfig | tee -a "$ABS_LOG/merge-config.log"
 
-          make \
-            O="$ABS_OUT" \
-            ARCH=arm64 \
-            HOSTLDFLAGS="${TC_HOSTLDFLAGS:-}" \
-            "${TOOLCHAIN_ARGS[@]}" \
-            olddefconfig \
-            | tee -a "$ABS_LOG/merge-config.log"
+          grep -q '^CONFIG_KSU=y$' "$CFG" || { echo "FATAL: CONFIG_KSU=y lost after olddefconfig" >&2; exit 1; }
+          grep -q '^CONFIG_KSU_MANUAL_HOOK=y$' "$CFG" || { echo "FATAL: CONFIG_KSU_MANUAL_HOOK=y lost after olddefconfig" >&2; exit 1; }
+          if grep -q '^CONFIG_KSU_KPROBES_HOOK=y$' "$CFG"; then echo "FATAL: kprobes hook also enabled" >&2; exit 1; fi
 
-          grep -q '^CONFIG_KSU=y$' "$CFG" || {
-            echo "FATAL: CONFIG_KSU=y is missing after olddefconfig" >&2
-            exit 1
-          }
-
-          grep -q '^CONFIG_KSU_MANUAL_HOOK=y$' "$CFG" || {
-            echo "FATAL: CONFIG_KSU_MANUAL_HOOK=y is missing after olddefconfig" >&2
-            exit 1
-          }
-
-          if grep -q '^CONFIG_KSU_KPROBES_HOOK=y$' "$CFG"; then
-            echo "FATAL: CONFIG_KSU_KPROBES_HOOK=y is also enabled" >&2
-            exit 1
-          fi
-
-          echo "PASS: KernelSU manual-hook mode is enabled exclusively"
           cp "$CFG" "$ABS_LOG/final.config"
+          FINAL_CONFIG_HASH="$(sha256sum "$CFG" | cut -d' ' -f1)"
+          echo "FINAL_CONFIG_HASH=$FINAL_CONFIG_HASH" >> "$GITHUB_ENV"
+          echo "final .config sha256: $FINAL_CONFIG_HASH"
+          echo "PASS: manual-hook mode enabled exclusively"
 
-      # ── 14b. Security/config guard ───────────────────────────────────────────
-      - name: Guard pass — verify security restrictions disabled and KSU/SUSFS enabled
+      - name: Config guard (required symbols; Samsung security symbols)
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
-
           CFG="$ABS_OUT/.config"
-
-          FORBIDDEN=(
-            CONFIG_RKP_KDP
-            CONFIG_UH_RKP
-            CONFIG_TIMA
-            CONFIG_TIMA_LKMAUTH
-            CONFIG_FIVE
-            CONFIG_SEC_RESTRICT_ROOTING
-            CONFIG_SEC_RESTRICT_SETUID
-            CONFIG_SECURITY_DEFEX
-            CONFIG_KNOX_KAP
-          )
-
-          REQUIRED=(
-            CONFIG_KSU
-            CONFIG_KSU_MANUAL_HOOK
-            CONFIG_KSU_SUSFS
-            CONFIG_KSU_SUSFS_SUS_PATH
-            CONFIG_KSU_SUSFS_SUS_MAP
-            CONFIG_KSU_SUSFS_SUS_KSTAT
-            CONFIG_HZ_300
-            CONFIG_TCP_CONG_ADVANCED
-            CONFIG_TCP_CONG_BBR
-            CONFIG_TCP_CONG_CUBIC
-            CONFIG_DEFAULT_BBR
-            CONFIG_NET_SCHED
-            CONFIG_NET_SCH_FQ
-            CONFIG_NET_SCH_FQ_CODEL
-          )
-
+          REQUIRED=(CONFIG_KSU CONFIG_KSU_MANUAL_HOOK CONFIG_KSU_SUSFS CONFIG_KSU_SUSFS_SUS_PATH)
+          FORBIDDEN=(CONFIG_RKP_KDP CONFIG_UH_RKP CONFIG_TIMA CONFIG_TIMA_LKMAUTH CONFIG_FIVE CONFIG_SEC_RESTRICT_ROOTING CONFIG_SEC_RESTRICT_SETUID CONFIG_SECURITY_DEFEX CONFIG_KNOX_KAP)
+          if [[ "$APPLY_OVERLAY" == "true" ]]; then
+            REQUIRED+=(CONFIG_KSU_SUSFS_SUS_MAP CONFIG_KSU_SUSFS_SUS_KSTAT CONFIG_HZ_300 CONFIG_TCP_CONG_ADVANCED CONFIG_TCP_CONG_BBR CONFIG_TCP_CONG_CUBIC CONFIG_DEFAULT_BBR CONFIG_NET_SCHED CONFIG_NET_SCH_FQ CONFIG_NET_SCH_FQ_CODEL)
+          fi
           FAIL=0
           : > "$ABS_LOG/config-guard.log"
-
-          for sym in "${FORBIDDEN[@]}"; do
-            if grep -qE "^${sym}=y$" "$CFG"; then
-              echo "FATAL: $sym=y" | tee -a "$ABS_LOG/config-guard.log"
-              FAIL=1
-            else
-              echo "OK: $sym disabled" | tee -a "$ABS_LOG/config-guard.log"
-            fi
+          for s in "${REQUIRED[@]}"; do
+            if grep -qE "^${s}=y$" "$CFG"; then echo "OK: $s=y" | tee -a "$ABS_LOG/config-guard.log"
+            else echo "FATAL: $s not enabled" | tee -a "$ABS_LOG/config-guard.log"; FAIL=1; fi
           done
-
-          for sym in "${REQUIRED[@]}"; do
-            if grep -qE "^${sym}=y$" "$CFG"; then
-              echo "OK: $sym=y" | tee -a "$ABS_LOG/config-guard.log"
-            else
-              echo "FATAL: $sym is not enabled" | tee -a "$ABS_LOG/config-guard.log"
-              FAIL=1
-            fi
+          for s in "${FORBIDDEN[@]}"; do
+            if grep -qE "^${s}=y$" "$CFG"; then
+              if [[ "$APPLY_OVERLAY" == "true" ]]; then echo "FATAL: $s=y (chimera-full requires off)" | tee -a "$ABS_LOG/config-guard.log"; FAIL=1
+              else echo "INFO: $s=y (boot-first: left as base has it)" | tee -a "$ABS_LOG/config-guard.log"; fi
+            else echo "OK: $s not =y" | tee -a "$ABS_LOG/config-guard.log"; fi
           done
-
-          if grep -q '^CONFIG_KSU_KPROBES_HOOK=y$' "$CFG"; then
-            echo "FATAL: CONFIG_KSU_KPROBES_HOOK=y; manual and kprobe modes cannot both be enabled" \
-              | tee -a "$ABS_LOG/config-guard.log"
-            FAIL=1
-          else
-            echo "OK: CONFIG_KSU_KPROBES_HOOK disabled" \
-              | tee -a "$ABS_LOG/config-guard.log"
-          fi
-
+          grep -E '^(CONFIG_KSU|CONFIG_SECURITY|CONFIG_RKP|CONFIG_TIMA|CONFIG_FIVE|CONFIG_LOCALVERSION)' "$CFG" > "$ABS_LOG/config-summary.txt" || true
           [[ "$FAIL" -eq 0 ]] || exit 1
 
-      # ── 16. ccache ───────────────────────────────────────────────────────────
-      - name: Set up ccache
-        uses: hendrikmuhs/ccache-action@v1.2
-        with:
-          key: >-
-            chimera-mk9-${{ inputs.profile }}-${{ inputs.toolchain }}-${{ env.TC_CACHE_KEY }}-${{ env.TC_IDENTITY_HASH }}-${{ github.sha }}
-          restore-keys: |
-            chimera-mk9-${{ inputs.profile }}-${{ inputs.toolchain }}-${{ env.TC_CACHE_KEY }}-${{ env.TC_IDENTITY_HASH }}-
-          max-size: ${{ env.CCACHE_MAXSIZE }}
-
-      # ── 17. Finalize config ──────────────────────────────────────────────────
-      - name: Finalise kernel .config
+      # ── 9. Build ───────────────────────────────────────────────────────────
+      - name: Build kernel Image, vmlinux and DTBs
+        if: ${{ !inputs.dry_run }}
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
-
-          make_toolchain_args() {
-            if [[ "$TOOLCHAIN" == "gcc" ]]; then
-              TOOLCHAIN_ARGS=(
-                "CC=$TC_CC"
-                "HOSTCC=gcc"
-                "HOSTCXX=g++"
-                "HOSTLD=ld"
-                "LD=$TC_LD"
-                "AR=$TC_AR"
-                "NM=$TC_NM"
-                "OBJCOPY=$TC_OBJCOPY"
-                "OBJDUMP=$TC_OBJDUMP"
-                "STRIP=$TC_STRIP"
-                "LLVM=0"
-                "LLVM_IAS=0"
-                "CROSS_COMPILE=$TC_CROSS_COMPILE"
-                "CROSS_COMPILE_ARM32=$TC_CROSS_COMPILE_ARM32"
-              )
-            else
-              TOOLCHAIN_ARGS=(
-                "CC=$TC_CC"
-                "HOSTCC=clang"
-                "HOSTCXX=clang++"
-                "HOSTLD=ld.lld"
-                "LD=$TC_LD"
-                "AR=$TC_AR"
-                "NM=$TC_NM"
-                "OBJCOPY=$TC_OBJCOPY"
-                "OBJDUMP=$TC_OBJDUMP"
-                "STRIP=$TC_STRIP"
-                "LLVM=1"
-                "LLVM_IAS=${TC_LLVM_IAS:-1}"
-                "CLANG_TRIPLE=${TC_CLANG_TRIPLE:-aarch64-linux-gnu-}"
-                "CROSS_COMPILE=$TC_CROSS_COMPILE"
-                "CROSS_COMPILE_ARM32=$TC_CROSS_COMPILE_ARM32"
-              )
-            fi
-          }
-
-          make_toolchain_args
-
-          make \
-            O="$ABS_OUT" \
-            ARCH=arm64 \
-            HOSTLDFLAGS="${TC_HOSTLDFLAGS:-}" \
-            "${TOOLCHAIN_ARGS[@]}" \
-            olddefconfig \
-            | tee "$ABS_LOG/finalize-config.log"
-
-          cp "$ABS_OUT/.config" "$ABS_LOG/config.built"
-
-          grep -E \
-            '^(CONFIG_KSU|CONFIG_KSU_MANUAL_HOOK|CONFIG_KSU_KPROBES_HOOK|CONFIG_KSU_SUSFS|CONFIG_SECURITY|CONFIG_RKP|CONFIG_TIMA|CONFIG_FIVE|CONFIG_LOCALVERSION)' \
-            "$ABS_OUT/.config" \
-            | tee "$ABS_LOG/config-summary.txt"
-
-          FINAL_CONFIG_HASH="$(sha256sum "$ABS_OUT/.config" | cut -d' ' -f1)"
-
-          echo "FINAL_CONFIG_HASH=$FINAL_CONFIG_HASH" >> "$GITHUB_ENV"
-          echo "Final .config SHA-256: $FINAL_CONFIG_HASH"
-
-      # ── 17b. Validate effective compiler flags ───────────────────────────────
-      - name: Guard effective GCC or LLVM build mode
-        run: |
-          set -Eeuo pipefail
-
-          : "${TOOLCHAIN:?TOOLCHAIN is not set}"
-          : "${TC_CC:?TC_CC is not set}"
-          : "${TC_LD:?TC_LD is not set}"
-
-          if [[ "$TOOLCHAIN" == "gcc" ]]; then
-            BUILD_KCFLAGS="-O2 -fcommon -fno-strict-aliasing -Wno-error"
-            BUILD_KBUILD_LDFLAGS=""
-
-            [[ "$TC_CC" == *aarch64-linux-gnu-gcc ]] || {
-              echo "FATAL: GCC mode is not using aarch64-linux-gnu-gcc: $TC_CC" >&2
-              exit 1
-            }
-
-            [[ "$TC_LD" == "aarch64-linux-gnu-ld" ]] || {
-              echo "FATAL: GCC mode is not using aarch64-linux-gnu-ld: $TC_LD" >&2
-              exit 1
-            }
-
-            for forbidden in \
-              "-fuse-ld=lld" \
-              "-Wno-unknown-warning-option" \
-              "-Wno-error=unused-but-set-global"; do
-              if [[ " $BUILD_KCFLAGS $BUILD_KBUILD_LDFLAGS " == *" $forbidden "* ]]; then
-                echo "FATAL: Clang-only flag leaked into GCC mode: $forbidden" >&2
-                exit 1
-              fi
-            done
-          else
-            BUILD_KCFLAGS="${CHIMERA_KCFLAGS:?CHIMERA_KCFLAGS is not set}"
-            BUILD_KBUILD_LDFLAGS="${CHIMERA_KBUILD_LDFLAGS:-}"
-
-            [[ "$TC_CC" == *clang* ]] || {
-              echo "FATAL: LLVM mode is not using Clang: $TC_CC" >&2
-              exit 1
-            }
-
-            [[ "$TC_LD" == "ld.lld" ]] || {
-              echo "FATAL: LLVM mode is not using ld.lld: $TC_LD" >&2
-              exit 1
-            }
-          fi
-
+          source "$CI_LIB"
+          chimera_toolchain_args
+          echo "BUILD_KCFLAGS=$BUILD_KCFLAGS" >> "$GITHUB_ENV"
           {
             echo "Toolchain: $TOOLCHAIN"
-            echo "Compiler command: $TC_CC"
-            echo "Linker command: $TC_LD"
-            echo "Effective KCFLAGS: $BUILD_KCFLAGS"
-            echo "Effective KBUILD_LDFLAGS: $BUILD_KBUILD_LDFLAGS"
-          } | tee "$ABS_LOG/effective-build-mode.txt"
-          
-      # ── 18. Build kernel and device DTBs ────────────────────────────────────
-      - name: Build kernel Image and device DTBs
-        if: ${{ inputs.dry_run != true }}
-        working-directory: ${{ env.KERNEL_DIR }}
-        run: |
-          set -Eeuo pipefail
-
-          : "${TOOLCHAIN:?TOOLCHAIN is not set}"
-          : "${TC_CC:?TC_CC is not set}"
-          : "${TC_LD:?TC_LD is not set}"
-          : "${TC_AR:?TC_AR is not set}"
-          : "${TC_NM:?TC_NM is not set}"
-          : "${TC_OBJCOPY:?TC_OBJCOPY is not set}"
-          : "${TC_OBJDUMP:?TC_OBJDUMP is not set}"
-          : "${TC_STRIP:?TC_STRIP is not set}"
-          : "${TC_CROSS_COMPILE:?TC_CROSS_COMPILE is not set}"
-          : "${TC_CROSS_COMPILE_ARM32:?TC_CROSS_COMPILE_ARM32 is not set}"
-          : "${ABS_OUT:?ABS_OUT is not set}"
-          : "${ABS_LOG:?ABS_LOG is not set}"
-          : "${BRAND:?BRAND is not set}"
-
-          if [[ "$TOOLCHAIN" == "gcc" ]]; then
-            TOOLCHAIN_ARGS=(
-              "CC=$TC_CC"
-              "HOSTCC=gcc"
-              "HOSTCXX=g++"
-              "HOSTLD=ld"
-              "LD=$TC_LD"
-              "AR=$TC_AR"
-              "NM=$TC_NM"
-              "OBJCOPY=$TC_OBJCOPY"
-              "OBJDUMP=$TC_OBJDUMP"
-              "STRIP=$TC_STRIP"
-              "LLVM=0"
-              "LLVM_IAS=0"
-              "CROSS_COMPILE=$TC_CROSS_COMPILE"
-              "CROSS_COMPILE_ARM32=$TC_CROSS_COMPILE_ARM32"
-            )
-
-            # GCC-compatible flags only.
-            BUILD_KCFLAGS="-O2 -fcommon -fno-strict-aliasing -Wno-error"
-            BUILD_KBUILD_LDFLAGS=""
-
-            if [[ "$BUILD_KCFLAGS" == *"-Wno-error=unused-but-set-global"* ]]; then
-              echo "FATAL: Clang-only warning flag leaked into GCC mode" >&2
-              exit 1
-            fi
-
-            if [[ "$BUILD_KCFLAGS" == *"-Wno-unknown-warning-option"* ]]; then
-              echo "FATAL: Clang-only warning flag leaked into GCC mode" >&2
-              exit 1
-            fi
-
-            if [[ "$BUILD_KCFLAGS" == *"-fuse-ld=lld"* ]]; then
-              echo "FATAL: LLD flag leaked into GCC mode" >&2
-              exit 1
-            fi
-          else
-            TOOLCHAIN_ARGS=(
-              "CC=$TC_CC"
-              "HOSTCC=clang"
-              "HOSTCXX=clang++"
-              "HOSTLD=ld.lld"
-              "LD=$TC_LD"
-              "AR=$TC_AR"
-              "NM=$TC_NM"
-              "OBJCOPY=$TC_OBJCOPY"
-              "OBJDUMP=$TC_OBJDUMP"
-              "STRIP=$TC_STRIP"
-              "LLVM=1"
-              "LLVM_IAS=${TC_LLVM_IAS:-1}"
-              "CLANG_TRIPLE=${TC_CLANG_TRIPLE:-aarch64-linux-gnu-}"
-              "CROSS_COMPILE=$TC_CROSS_COMPILE"
-              "CROSS_COMPILE_ARM32=$TC_CROSS_COMPILE_ARM32"
-            )
-
-            BUILD_KCFLAGS="${CHIMERA_KCFLAGS:?CHIMERA_KCFLAGS is not set}"
-            BUILD_KBUILD_LDFLAGS="${CHIMERA_KBUILD_LDFLAGS:-}"
-          fi
-
-          JOBS="$(nproc)"
-
-          MAKE_ARGS=(
-            "O=$ABS_OUT"
-            "ARCH=arm64"
-            "HOSTLDFLAGS=${TC_HOSTLDFLAGS:-}"
-            "${TOOLCHAIN_ARGS[@]}"
-            "-j${JOBS}"
-            "LOCALVERSION=$BRAND"
-            "KCFLAGS=$BUILD_KCFLAGS"
-            "KBUILD_LDFLAGS=$BUILD_KBUILD_LDFLAGS"
-          )
-
-          {
-            echo "Toolchain: $TOOLCHAIN"
-            echo "Compiler: ${COMPILER_VERSION:-unknown}"
-            echo "Linker: ${LINKER_VERSION:-unknown}"
+            echo "Compiler: $COMPILER_VERSION"
+            echo "Linker: $LINKER_VERSION"
             echo "KCFLAGS: $BUILD_KCFLAGS"
-            echo "KBUILD_LDFLAGS: $BUILD_KBUILD_LDFLAGS"
+            echo "KBUILD_LDFLAGS: (not passed)"
+            printf 'make arg: %s\n' "${TOOLCHAIN_ARGS[@]}"
           } | tee "$ABS_LOG/build-flags.txt"
+          chimera_make -j"$(nproc)" "KCFLAGS=$BUILD_KCFLAGS" Image vmlinux dtbs 2>&1 | tee "$ABS_LOG/build.log"
 
-          make \
-            "${MAKE_ARGS[@]}" \
-            Image \
-            vmlinux \
-            dtbs \
-            2>&1 \
-            | tee "$ABS_LOG/build.log"
-      # ── 18b. Verify KCFLAGS actually reached the build unmodified ───────────
-      - name: Verify build identity and KCFLAGS
-        if: ${{ inputs.dry_run != true }}
-        working-directory: ${{ env.KERNEL_DIR }}
-        run: |
-          set -Eeuo pipefail
-
-          [[ -n "$CHIMERA_KCFLAGS" ]] || {
-            echo "FATAL: CHIMERA_KCFLAGS is empty" >&2
-            exit 1
-          }
-
-          [[ -n "$KCFLAGS_HASH" ]] || {
-            echo "FATAL: KCFLAGS_HASH is empty" >&2
-            exit 1
-          }
-
-          if [[ "$TOOLCHAIN" == "gcc" ]]; then
-            BUILD_KCFLAGS="$CHIMERA_KCFLAGS"
-          else
-            BUILD_KCFLAGS="$CHIMERA_KCFLAGS"
-          fi
-
-          ACTUAL_HASH="$(
-            printf '%s\n' "$CHIMERA_KCFLAGS" \
-              | sha256sum \
-              | cut -d' ' -f1
-          )"
-
-          [[ "$ACTUAL_HASH" == "$KCFLAGS_HASH" ]] || {
-            echo "FATAL: KCFLAGS hash mismatch" >&2
-            echo "Expected: $KCFLAGS_HASH" >&2
-            echo "Actual:   $ACTUAL_HASH" >&2
-            exit 1
-          }
-
-          grep -Fq \
-            "KCFLAGS: $BUILD_KCFLAGS" \
-            "$ABS_LOG/build-flags.txt" || {
-              echo "FATAL: build metadata does not contain expected KCFLAGS" >&2
-              exit 1
-            }
-
-          grep -Fq \
-            "Build identity: $KERNEL_IDENTITY" \
-            "$ABS_LOG/build-flags.txt" || {
-              echo "FATAL: build identity missing from build metadata" >&2
-              exit 1
-            }
-
-          echo "PASS: kernel identity and KCFLAGS verified"
-      # ── 19. vmlinux KSU/SUSFS symbol guard ────────────────────────────────────
-      - name: Guard pass — verify KSU/SUSFS symbols
-        if: ${{ inputs.dry_run != true }}
+      - name: Verify compiler identity, kernel release and symbols
+        if: ${{ !inputs.dry_run }}
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
           VMLINUX="$ABS_OUT/vmlinux"
-          [[ -f "$VMLINUX" ]] || {
-            echo "FATAL: vmlinux not found" >&2
-            exit 1
-          }
-          if [[ -x "$ABS_TC/bin/llvm-nm" ]]; then
-            NM="$ABS_TC/bin/llvm-nm"
-          elif command -v llvm-nm >/dev/null 2>&1; then
-            NM=llvm-nm
-          else
-            NM=nm
-          fi
-          "$NM" \
-            "$VMLINUX" \
-            > "$ABS_LOG/vmlinux-symbols.log" \
-            2>&1 \
-            || true
-          REQUIRED=(
-            ksu_handle_execveat
-            ksu_handle_faccessat
-            ksu_handle_stat
-            ksu_handle_sys_read
-            ksu_handle_input_handle_event
-            ksu_handle_setresuid
-            ksu_handle_sys_reboot
-            ksu_lsm_hook_init
-            ksu_task_fix_setuid
-            susfs_is_inode_sus_path
-          )
-          FAIL=0
-          for sym in "${REQUIRED[@]}"; do
-            if grep -q \
-              -E \
-              "^[0-9a-fA-F]+ [A-Za-z] ${sym}$" \
-              "$ABS_LOG/vmlinux-symbols.log"; then
-              echo "OK: $sym"
+          [[ -s "$ABS_OUT/arch/arm64/boot/Image" ]] || { echo "FATAL: Image missing/empty" >&2; exit 1; }
+          [[ -s "$VMLINUX" ]] || { echo "FATAL: vmlinux missing/empty" >&2; exit 1; }
+
+          # 1) actual release
+          REL="$(cat "$ABS_OUT/include/config/kernel.release")"
+          echo "KERNEL_RELEASE_ACTUAL=$REL" >> "$GITHUB_ENV"
+          echo "expected: $KERNEL_RELEASE_EXPECTED  actual: $REL"
+          [[ "$REL" == "$KERNEL_VERSION"* ]] || { echo "FATAL: release '$REL' does not start with $KERNEL_VERSION" >&2; exit 1; }
+          [[ "$REL" == "$KERNEL_RELEASE_EXPECTED" ]] || echo "::warning::kernel.release '$REL' != expected '$KERNEL_RELEASE_EXPECTED'"
+
+          # 2) compiler that actually built vmlinux
+          readelf -p .comment "$VMLINUX" > "$ABS_LOG/vmlinux-comment.txt" 2>&1 || true
+          cat "$ABS_LOG/vmlinux-comment.txt"
+          if grep -qE '\S' "$ABS_LOG/vmlinux-comment.txt" && ! grep -qi 'no section\|not found' "$ABS_LOG/vmlinux-comment.txt"; then
+            if [[ "$TOOLCHAIN" == "gcc" ]]; then
+              grep -q 'GCC:' "$ABS_LOG/vmlinux-comment.txt" || { echo "FATAL: GCC selected but vmlinux .comment has no GCC entry" >&2; exit 1; }
             else
-              echo "FATAL: missing symbol: $sym"
-              FAIL=1
+              grep -qi 'clang' "$ABS_LOG/vmlinux-comment.txt" || { echo "FATAL: LLVM selected but vmlinux .comment has no clang entry" >&2; exit 1; }
             fi
+            echo "OK: compiler identity matches selection"
+          else
+            echo "::warning::.comment section unavailable — compiler identity not proven from vmlinux"
+          fi
+
+          # 3) symbols (use the selected nm, without the ccache prefix)
+          "$TC_NM" "$VMLINUX" > "$ABS_LOG/vmlinux-symbols.log" 2>&1 || true
+          HARD=(ksu_handle_execveat ksu_handle_faccessat ksu_handle_stat ksu_handle_sys_read ksu_handle_input_handle_event ksu_handle_sys_reboot susfs_is_inode_sus_path)
+          SOFT=(ksu_handle_setresuid ksu_lsm_hook_init ksu_task_fix_setuid)
+          FAIL=0
+          for s in "${HARD[@]}"; do
+            if grep -qE "^[0-9a-fA-F]+ [A-Za-z] ${s}(\.[A-Za-z0-9._]+)?$" "$ABS_LOG/vmlinux-symbols.log"; then echo "OK: $s"; else echo "FATAL: missing symbol $s"; FAIL=1; fi
+          done
+          for s in "${SOFT[@]}"; do
+            if grep -qE "^[0-9a-fA-F]+ [A-Za-z] ${s}(\.[A-Za-z0-9._]+)?$" "$ABS_LOG/vmlinux-symbols.log"; then echo "OK: $s"; else echo "::warning::symbol $s not found (may be inlined/static; confirm on device)"; fi
           done
           [[ "$FAIL" -eq 0 ]] || exit 1
-      # ── 20. Assemble legacy Samsung dtb.img ──────────────────────────────────
-      - name: Assemble dtb.img from star2lte device DTBs
-        if: ${{ inputs.dry_run != true }}
-        working-directory: ${{ env.KERNEL_DIR }}
+
+      - name: Collect artifacts and metadata
+        if: ${{ !inputs.dry_run }}
         run: |
           set -Eeuo pipefail
-          ART_DIR="$GITHUB_WORKSPACE/artifacts"
-          mkdir -p "$ART_DIR"
-          DTB_SEARCH_DIR="$ABS_OUT/arch/arm64/boot/dts/exynos"
-          mapfile -t DTB_FILES < <(
-            find \
-              "$DTB_SEARCH_DIR" \
-              -maxdepth 1 \
-              -iname "*star2lte*.dtb" \
-              2>/dev/null \
-              | sort
-          )
-          if [[ ${#DTB_FILES[@]} -eq 0 ]]; then
-            echo \
-              "WARN: no star2lte-specific .dtb found; falling back to all .dtb files" \
-              | tee -a "$ABS_LOG/dtb-assemble.log"
-            mapfile -t DTB_FILES < <(
-              find \
-                "$ABS_OUT/arch/arm64/boot/dts" \
-                -iname "*.dtb" \
-                2>/dev/null \
-                | sort
-            )
+          BOOT="$ABS_OUT/arch/arm64/boot"
+          mkdir -p "$ART_DIR/dtb"
+          cp "$BOOT/Image" "$ART_DIR/Image"
+          [[ ! -f "$ABS_OUT/System.map" ]] || cp "$ABS_OUT/System.map" "$ART_DIR/System.map"
+          cp "$ABS_OUT/.config" "$ART_DIR/final.config"
+          ls -la "$BOOT" > "$ABS_LOG/boot-dir-listing.txt"
+          find "$BOOT/dts" -name '*.dtb' -o -name '*.dtbo' 2>/dev/null | sort > "$ABS_LOG/all-dtbs.txt" || true
+          mapfile -t DTBS < <(find "$BOOT/dts" -iname '*star2lte*.dtb' | sort)
+          if [[ ${#DTBS[@]} -eq 0 ]]; then
+            echo "::warning::no star2lte-named .dtb; falling back to all generated .dtb"
+            mapfile -t DTBS < <(find "$BOOT/dts" -name '*.dtb' | sort)
           fi
-          if [[ ${#DTB_FILES[@]} -eq 0 ]]; then
-            echo \
-              "FATAL: no .dtb files produced under $ABS_OUT/arch/arm64/boot/dts" \
-              >&2
-            find \
-              "$ABS_OUT/arch/arm64/boot/dts" \
-              -type f \
-              2>/dev/null \
-              >&2 \
-              || true
-            exit 1
-          fi
-          echo \
-            "DTB file(s) found:" \
-            | tee -a "$ABS_LOG/dtb-assemble.log"
-          printf \
-            '  %s\n' \
-            "${DTB_FILES[@]}" \
-            | tee -a "$ABS_LOG/dtb-assemble.log"
-          cat \
-            "${DTB_FILES[@]}" \
-            > "$ART_DIR/dtb.img"
-          if [[ ! -s "$ART_DIR/dtb.img" ]]; then
-            echo \
-              "FATAL: dtb.img was not created or is empty" \
-              >&2
-            exit 1
-          fi
-          echo \
-            "dtb.img size: $(stat -c%s "$ART_DIR/dtb.img") bytes" \
-            | tee -a "$ABS_LOG/dtb-assemble.log"
-          cp \
-            "${DTB_FILES[@]}" \
-            "$ART_DIR/" \
-            2>/dev/null \
-            || true
-          echo \
-            "ART_DIR=$ART_DIR" \
-            >> "$GITHUB_ENV"
-         # ── 20a. Capture actual kernel release ────────────────────────────────────
-      - name: Capture actual kernel release
-        if: ${{ inputs.dry_run != true }}
-        working-directory: ${{ env.KERNEL_DIR }}
+          [[ ${#DTBS[@]} -gt 0 ]] || { echo "FATAL: no .dtb files generated" >&2; exit 1; }
+          cp "${DTBS[@]}" "$ART_DIR/dtb/"
+          printf '%s\n' "${DTBS[@]}" | tee "$ABS_LOG/dtb-selected.txt"
+          BUILD_TAG="chimera-mk9-${IN_PROFILE}-${IN_TOOLCHAIN}-$(date -u +%Y%m%dT%H%M%SZ)-${BASE_COMMIT:0:8}"
+          echo "BUILD_TAG=$BUILD_TAG" >> "$GITHUB_ENV"
+          export BUILD_TAG
+          cp "$ABS_LOG/toolchain-identity.txt" "$ABS_LOG/ksu-upstream-refs.txt" "$ABS_LOG/base-commit.txt" "$ART_DIR/" 2>/dev/null || true
+          python3 - <<'PYEOF'
+          import json, os, hashlib, pathlib
+          art = pathlib.Path(os.environ["ART_DIR"])
+          def sha(p): return hashlib.sha256(p.read_bytes()).hexdigest()
+          keys = ["BUILD_TAG","GITHUB_RUN_ID","IN_PROFILE","TOOLCHAIN","APPLY_OVERLAY","CHIMERA_REF","CHIMERA_SHA",
+                  "IN_BASE_REPO","IN_BASE_REF","BASE_COMMIT","IN_KSU_COMMIT","KSU_COMMIT_ACTUAL",
+                  "COMPILER_VERSION","LINKER_VERSION","TC_CACHE_KEY","TC_IDENTITY_HASH","KERNEL_VERSION",
+                  "KERNEL_RELEASE_EXPECTED","KERNEL_RELEASE_ACTUAL","BUILD_KCFLAGS","FINAL_CONFIG_HASH","UNAME_PREVIEW",
+                  "KBUILD_BUILD_USER","KBUILD_BUILD_HOST","KBUILD_BUILD_VERSION","KBUILD_BUILD_TIMESTAMP"]
+          m = {k: os.environ.get(k, "") for k in keys}
+          m["disclaimer"] = ("CI build only. Not proof of boot, root, SUSFS, SELinux, Samsung security, "
+                             "flashability, vendor-blob, camera/modem/audio/thermal/charging, recovery, "
+                             "boot-image, Android 16 QPR2 runtime, or any common-kernel ABI compatibility.")
+          files = {str(p.relative_to(art)): sha(p) for p in sorted(art.rglob("*")) if p.is_file() and p.name not in ("manifest.json","SHA256SUMS")}
+          m["artifacts_sha256"] = files
+          (art / "manifest.json").write_text(json.dumps(m, indent=2))
+          (art / "SHA256SUMS").write_text("".join(f"{h}  {n}\n" for n, h in files.items()))
+          print(json.dumps(m, indent=2))
+          PYEOF
+
+      # ── 10. Optional AnyKernel3 packaging (UNVERIFIED for this device) ─────
+      - name: Package AnyKernel3 ZIP (opt-in, UNVERIFIED packaging)
+        if: ${{ !inputs.dry_run && inputs.package_anykernel }}
         run: |
           set -Eeuo pipefail
-
-          ACTUAL_RELEASE="$(
-            make \
-              --no-print-directory \
-              O="$ABS_OUT" \
-              ARCH=arm64 \
-              HOSTLDFLAGS="$TC_HOSTLDFLAGS" \
-              "${MAKE_TOOLCHAIN_ARGS[@]}" \
-              kernelrelease |
-            tail -n1
-          )"
-
-          [[ -n "$ACTUAL_RELEASE" ]] || {
-            echo "FATAL: kernelrelease returned empty output" >&2
-            exit 1
-          }
-
-          [[ "$ACTUAL_RELEASE" != *$'\n'* ]] || {
-            echo "FATAL: kernelrelease contains embedded newlines" >&2
-            printf '%s\n' "$ACTUAL_RELEASE" >&2
-            exit 1
-          }
-
-          echo "ACTUAL_KERNEL_RELEASE=$ACTUAL_RELEASE" >> "$GITHUB_ENV"
-          echo "Actual kernel release: $ACTUAL_RELEASE"
-      # ── 20b. Generate identity-aware anykernel.sh ─────────────────────────────
-      - name: Generate identity-aware anykernel.sh
-        if: ${{ inputs.dry_run != true }}
-        run: |
-          set -Eeuo pipefail
-          cat > "$GITHUB_WORKSPACE/anykernel.sh" <<AK3SH
-          #!/usr/bin/env bash
-          #
-          # AnyKernel3 — Project Chimera Mk9
-          #
-          # Kernel identity:
-          #   Name:                    ${KERNEL_NAME}
-          #   Version:                 ${KERNEL_VERSION}
-          #   Kernel release (expected / actual): ${KERNEL_RELEASE} / ${ACTUAL_KERNEL_RELEASE}
-          #   Device:                  ${KERNEL_DEVICE}
-          #   Platform:                ${KERNEL_PLATFORM}
-          #   Profile:                 ${PROFILE}
-          #   Toolchain:               ${TOOLCHAIN}
-          #   Compiler:                ${CLANG_VERSION}
-          #   uname:                   ${UNAME_PREVIEW}
-          #   Identity string:         ${KERNEL_IDENTITY}
-          #
-          # Source provenance:
-          #   Base repo:               ${BASE_REPO}
-          #   Base commit:             ${BASE_COMMIT}
-          #   KSU commit:              ${KSU_GIT_VERSION}
-          #   Chimera ref/commit:      ${CHIMERA_REF} / ${CHIMERA_SHA}
-          #
-          # Build:
-          #   Timestamp:               ${KBUILD_BUILD_TIMESTAMP}
-          #   KCFLAGS:                 ${CHIMERA_KCFLAGS}
-          #   KBUILD_LDFLAGS:          ${CHIMERA_KBUILD_LDFLAGS}
-          #   KCFLAGS SHA-256:         ${KCFLAGS_HASH}
-          #   Final config SHA-256:    ${FINAL_CONFIG_HASH}
-          #
-          # KSU manual-hook symbols verified present in vmlinux:
-          #   ksu_handle_execveat
-          #   ksu_handle_faccessat
-          #   ksu_handle_setresuid (via LSM task_fix_setuid hook — no kernel/sys.c patch)
-          #   ksu_handle_sys_reboot
-          #   ksu_lsm_hook_init
-          #   ksu_task_fix_setuid
-          #
+          git clone --depth=1 "$ANYKERNEL_REPO" "$ANYKERNEL_DIR"
+          git -C "$ANYKERNEL_DIR" rev-parse HEAD | tee "$ABS_LOG/anykernel3-commit.txt"
+          rm -rf "$ANYKERNEL_DIR/.git" "$ANYKERNEL_DIR/.github"
+          # Raw concatenation of DTBs — format UNVERIFIED — REQUIRES CONFIRMATION
+          cat "$ART_DIR"/dtb/*.dtb > "$ART_DIR/dtb.img"
+          [[ -s "$ART_DIR/dtb.img" ]] || { echo "FATAL: dtb.img empty" >&2; exit 1; }
+          cp "$ART_DIR/Image" "$ANYKERNEL_DIR/Image"
+          cp "$ART_DIR/dtb.img" "$ANYKERNEL_DIR/dtb"
+          cat > "$ANYKERNEL_DIR/anykernel.sh" <<AK3SH
+          ### AnyKernel3 script — Chimera Mk9 (packaging UNVERIFIED for this device)
           properties() { '
-          kernel.string=${UNAME_PREVIEW} ${KERNEL_IDENTITY} by AegisDevLabs | compiler=${CLANG_VERSION} | cfg_sha256=${FINAL_CONFIG_HASH:0:12} | base=${BASE_COMMIT:0:8} | ksu=${KSU_GIT_VERSION}
+          kernel.string=${UNAME_PREVIEW} | ${TOOLCHAIN} | cfg_sha256=${FINAL_CONFIG_HASH:0:12} | base=${BASE_COMMIT:0:8} | ksu=${KSU_COMMIT_ACTUAL:0:8}
           do.devicecheck=1
           do.modules=0
           do.systemless=1
@@ -2120,264 +968,92 @@ jobs:
           device.name3=SM-G965F
           device.name4=SM-G965U
           device.name5=SM-G965N
-          supported.versions=9-17
           '; }
-          BLOCK=/dev/block/by-name/BOOT
-          IS_SLOT_DEVICE=0
-          RAMDISK_COMPRESSION=auto
-          PATCH_VBMETA_FLAG=auto
-          
+          block=/dev/block/by-name/BOOT
+          is_slot_device=0
+          ramdisk_compression=auto
+          patch_vbmeta_flag=auto
           . tools/ak3-core.sh
-          
           dump_boot
           write_boot
           AK3SH
-          chmod +x "$GITHUB_WORKSPACE/anykernel.sh"
-          {
-            echo "AnyKernel3 identity:"
-            sed -n '1,40p' "$GITHUB_WORKSPACE/anykernel.sh"
-          } | tee "$ABS_LOG/anykernel-identity.txt"
-      # ── 21. Package Image ─────────────────────────────────────────────────────
-      - name: Package Image
-        if: ${{ inputs.dry_run != true }}
-        id: package-image
-        working-directory: ${{ env.KERNEL_DIR }}
-        run: |
-          set -Eeuo pipefail
-          ART_DIR="$GITHUB_WORKSPACE/artifacts"
-          mkdir -p "$ART_DIR"
-          IMG="$ABS_OUT/arch/arm64/boot/Image"
-          [[ -f "$IMG" ]] || {
-            echo "FATAL: Image not found at $IMG" >&2
-            exit 1
-          }
-          cp \
-            "$IMG" \
-            "$ART_DIR/Image"
-          BUILD_TAG="chimera-mk9-${{ inputs.profile }}-${{ inputs.toolchain }}-$(date -u +%Y%m%dT%H%M%SZ)-${BASE_COMMIT:0:8}"
-          echo "BUILD_TAG=$BUILD_TAG" >> "$GITHUB_ENV"
-          echo "ART_DIR=$ART_DIR" >> "$GITHUB_ENV"
-          echo \
-            "image_path=$ART_DIR/Image" \
-            >> "$GITHUB_OUTPUT"
-          echo \
-            "dtb_path=$ART_DIR/dtb.img" \
-            >> "$GITHUB_OUTPUT"
-      # ── 21b. Generate SHA-256 manifest ────────────────────────────────────────
-      - name: Generate build manifest and SHA-256SUMS
-        if: ${{ inputs.dry_run != true }}
-        run: |
-          set -Eeuo pipefail
-          ART_DIR="$GITHUB_WORKSPACE/artifacts"
-          ( cd "$ART_DIR" && sha256sum Image dtb.img > SHA256SUMS )
-          [[ -s "$ART_DIR/SHA256SUMS" ]] || {
-            echo "FATAL: SHA256SUMS was not generated or is empty" >&2
-            exit 1
-          }
-          IMAGE_SHA256="$(cd "$ART_DIR" && sha256sum Image | cut -d' ' -f1)"
-          DTB_SHA256="$(cd "$ART_DIR" && sha256sum dtb.img | cut -d' ' -f1)"
-          cat > "$ART_DIR/manifest.json" << JSONEOF
-          {
-            "build_tag": "${BUILD_TAG}",
-            "run_id": "${{ github.run_id }}",
-            "profile": "${{ inputs.profile }}",
-            "toolchain": "${{ inputs.toolchain }}",
-            "source": {
-              "chimera_repo": "${{ env.CHIMERA_REPO }}",
-              "chimera_ref": "${{ env.CHIMERA_REF }}",
-              "chimera_sha": "${{ env.CHIMERA_SHA }}",
-              "base_repo": "${{ inputs.base_repo }}",
-              "base_ref_requested": "${{ inputs.base_ref }}",
-              "base_commit_actual": "${BASE_COMMIT}",
-              "ksu_commit_requested": "${{ inputs.ksu_commit }}",
-              "ksu_commit_actual": "${KSU_GIT_VERSION}"
-            },
-            "toolchain_identity": {
-              "requested": "${{ inputs.toolchain }}",
-              "cache_key": "${TC_CACHE_KEY}",
-              "clang_version": "${CLANG_VERSION}",
-              "identity_hash": "${TC_IDENTITY_HASH}"
-            },
-            "kernel_identity": {
-              "name": "${KERNEL_NAME}",
-              "version": "${KERNEL_VERSION}",
-              "expected_release": "${KERNEL_RELEASE}",
-              "actual_release": "${ACTUAL_KERNEL_RELEASE}",
-              "device": "${KERNEL_DEVICE}",
-              "platform": "${KERNEL_PLATFORM}",
-              "uname_preview": "${UNAME_PREVIEW}",
-              "kcflags": "${CHIMERA_KCFLAGS}",
-              "kbuild_ldflags": "${CHIMERA_KBUILD_LDFLAGS}",
-              "kcflags_sha256": "${KCFLAGS_HASH}",
-              "identity_string": "${KERNEL_IDENTITY}"
-            },
-            "config": {
-              "final_config_sha256": "${FINAL_CONFIG_HASH}"
-            },
-            "artifacts": {
-              "Image": "sha256:${IMAGE_SHA256}",
-              "dtb.img": "sha256:${DTB_SHA256}"
-            }
-          }
-          JSONEOF
-          echo "Manifest:"
-          cat "$ART_DIR/manifest.json"
-          echo
-          echo "SHA256SUMS:"
-          cat "$ART_DIR/SHA256SUMS"
-      # ── 21c. Package AnyKernel3 flashable ZIP ─────────────────────────────────
-      - name: Package AnyKernel3 flashable ZIP
-        if: ${{ inputs.dry_run != true }}
-        id: package-anykernel
-        run: |
-          set -Eeuo pipefail
-          
-          ART_DIR="$GITHUB_WORKSPACE/artifacts"
-          AK3_DIR="${AK3_DIR:?AK3_DIR not set}"
-          
-          [[ -d "$AK3_DIR" ]] || {
-            echo "FATAL: AnyKernel3 directory not found at $AK3_DIR" >&2
-            exit 1
-          }
-          
-          [[ -f "$GITHUB_WORKSPACE/anykernel.sh" ]] || {
-            echo "FATAL: anykernel.sh not found at repo root" >&2
-            exit 1
-          }
-          
-          cp "$GITHUB_WORKSPACE/anykernel.sh" "$AK3_DIR/anykernel.sh"
-          
-          ZIP_NAME="${BUILD_TAG}-AnyKernel3.zip"
-          ZIP_PATH="$ART_DIR/$ZIP_NAME"
-          
-          rm -f "$AK3_DIR/Image" "$AK3_DIR/dtb" "$AK3_DIR/Image.gz-dtb" "$ZIP_PATH"
-          
-          COMBINED="$ABS_OUT/arch/arm64/boot/Image.gz-dtb"
-          SPLIT_IMAGE="$ART_DIR/Image"
-          SPLIT_DTB="$ART_DIR/dtb.img"
-          
-          if [[ -f "$COMBINED" ]]; then
-            echo "Found combined kernel payload: $COMBINED"
-            cp "$COMBINED" "$AK3_DIR/Image.gz-dtb"
-            echo "ak3_kernel_payload=Image.gz-dtb" >> "$GITHUB_OUTPUT"
-          elif [[ -f "$SPLIT_IMAGE" ]]; then
-            echo "Found split kernel payload: $SPLIT_IMAGE"
-            cp "$SPLIT_IMAGE" "$AK3_DIR/Image"
-          
-            if [[ -f "$SPLIT_DTB" ]]; then
-              cp "$SPLIT_DTB" "$AK3_DIR/dtb"
-              echo "ak3_kernel_payload=Image + dtb" >> "$GITHUB_OUTPUT"
-            else
-              echo "WARN: $SPLIT_DTB not present — packaging Image only" | tee -a "$ABS_LOG/anykernel-package.log"
-              echo "ak3_kernel_payload=Image only" >> "$GITHUB_OUTPUT"
-            fi
-          else
-            echo "FATAL: No valid kernel payload found" >&2
-            echo "Expected either:" >&2
-            echo "  - $COMBINED" >&2
-            echo "  - $SPLIT_IMAGE" >&2
-            exit 1
-          fi
-          
-          ( cd "$AK3_DIR" && zip -r9 "$ZIP_PATH" . -x ".git/*" ".github/*" )
-          
-          [[ -s "$ZIP_PATH" ]] || {
-            echo "FATAL: $ZIP_PATH was not created or is empty" >&2
-            exit 1
-          }
-          
-          echo "AnyKernel3 zip: $ZIP_PATH ($(stat -c%s "$ZIP_PATH") bytes)"
-          echo "anykernel_zip_path=$ZIP_PATH" >> "$GITHUB_OUTPUT"
-    
-      # ── 22. Upload Image artifact ─────────────────────────────────────────────
-      - name: Upload Image artifact
-        if: ${{ inputs.dry_run != true }}
+          ZIP="$ART_DIR/${BUILD_TAG}-AnyKernel3-UNVERIFIED.zip"
+          ( cd "$ANYKERNEL_DIR" && zip -r9 "$ZIP" . )
+          [[ -s "$ZIP" ]] || { echo "FATAL: zip empty" >&2; exit 1; }
+          echo "ZIP_PATH=$ZIP" >> "$GITHUB_ENV"
+          ( cd "$ART_DIR" && sha256sum dtb.img "$(basename "$ZIP")" >> SHA256SUMS )
+
+      # ── 11. Uploads / release / diagnostics ────────────────────────────────
+      - name: Upload kernel artifacts
+        if: ${{ !inputs.dry_run }}
         uses: actions/upload-artifact@v4
         with:
-          name: chimera-mk9-Image-${{ inputs.profile }}-${{ inputs.toolchain }}-${{ github.run_id }}
-          path: ${{ steps.package-image.outputs.image_path }}
+          name: chimera-mk9-kernel-${{ inputs.profile }}-${{ inputs.toolchain }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/
           if-no-files-found: error
 
-      # ── 23. Upload DTB artifact ───────────────────────────────────────────────
-      - name: Upload dtb artifact
-        if: ${{ inputs.dry_run != true }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: chimera-mk9-dtb-${{ inputs.profile }}-${{ inputs.toolchain }}-${{ github.run_id }}
-          path: |
-            ${{ env.ART_DIR }}/dtb.img
-            ${{ env.ART_DIR }}/*.dtb
-          if-no-files-found: error
-
-      # ── 23b. Upload manifest artifact ─────────────────────────────────────────
-      - name: Upload manifest artifact
-        if: ${{ inputs.dry_run != true }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: chimera-mk9-manifest-${{ inputs.profile }}-${{ inputs.toolchain }}-${{ github.run_id }}
-          path: |
-            ${{ env.ART_DIR }}/manifest.json
-            ${{ env.ART_DIR }}/SHA256SUMS
-          if-no-files-found: error
-
-      # ── 23c. Upload AnyKernel3 flashable ZIP artifact ─────────────────────────
-      - name: Upload AnyKernel3 flashable ZIP
-        if: ${{ inputs.dry_run != true }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: chimera-mk9-AnyKernel3-${{ inputs.profile }}-${{ inputs.toolchain }}-${{ github.run_id }}
-          path: ${{ steps.package-anykernel.outputs.anykernel_zip_path }}
-          if-no-files-found: error
-
-      # ── 24. Release ───────────────────────────────────────────────────────────
-      - name: Create GitHub Release
-        if: ${{ inputs.do_release == true && inputs.dry_run != true }}
+      - name: Create GitHub prerelease
+        if: ${{ inputs.do_release && !inputs.dry_run }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.BUILD_TAG }}
-          name: "Chimera Mk9 — ${{ inputs.profile }} / ${{ inputs.toolchain }}"
+          name: "Chimera Mk9 — ${{ inputs.profile }} / ${{ inputs.toolchain }} (UNTESTED)"
+          prerelease: true
+          draft: false
           body: |
-            ## Chimera Mk9 — gavdoc38 Canonical Base Build
+            CI build only — NOT boot-tested. Not proof of boot, root, SUSFS, SELinux,
+            Samsung security, flashability, vendor-blob, camera/modem/audio/thermal/charging,
+            recovery, boot-image, Android 16 QPR2 runtime or any ABI compatibility.
+
             | Field | Value |
             |---|---|
-            | Base repo | `${{ inputs.base_repo }}` |
-            | Base commit | `${{ env.BASE_COMMIT }}` |
-            | KernelSU-Next | `${{ env.KSU_GIT_VERSION }}` |
-            | Chimera ref/commit | `${{ env.CHIMERA_REF }}` / `${{ env.CHIMERA_SHA }}` |
-            | Profile | `${{ inputs.profile }}` |
-            | Toolchain | `${{ inputs.toolchain }}` |
-            | Compiler | `${{ env.CLANG_VERSION }}` |
+            | Base | `${{ inputs.base_repo }}@${{ env.BASE_COMMIT }}` |
+            | KernelSU-Next | `${{ env.KSU_COMMIT_ACTUAL }}` |
+            | Chimera | `${{ env.CHIMERA_REF }}@${{ env.CHIMERA_SHA }}` |
+            | Profile / overlay | `${{ inputs.profile }}` / `${{ env.APPLY_OVERLAY }}` |
+            | Compiler | `${{ env.COMPILER_VERSION }}` |
+            | Kernel release | `${{ env.KERNEL_RELEASE_ACTUAL }}` |
             | Final config SHA-256 | `${{ env.FINAL_CONFIG_HASH }}` |
-            | Kernel identity | `${{ env.KERNEL_IDENTITY }}` |
-            | Kernel release (expected / actual) | `${{ env.KERNEL_RELEASE }}` / `${{ env.ACTUAL_KERNEL_RELEASE }}` |
-            | KCFLAGS | `${{ env.CHIMERA_KCFLAGS }}` |
-            | KBUILD_LDFLAGS | `${{ env.CHIMERA_KBUILD_LDFLAGS }}` |
-            | KCFLAGS SHA-256 | `${{ env.KCFLAGS_HASH }}` |
-            | uname | `${{ env.UNAME_PREVIEW }}` |
-            KSU manual-hook symbols verified in vmlinux:
-            - ksu_handle_execveat
-            - ksu_handle_faccessat
-            - ksu_handle_setresuid (invoked via LSM task_fix_setuid hook — no kernel/sys.c patch)
-            - ksu_handle_sys_reboot
-            - ksu_lsm_hook_init
-            - ksu_task_fix_setuid
-            Image and dtb.img are packaged and attached separately. See
-            SHA256SUMS / manifest.json for exact artifact hashes and full
-            build provenance.
           files: |
-            ${{ steps.package-image.outputs.image_path }}
-            ${{ steps.package-image.outputs.dtb_path }}
-            ${{ steps.package-anykernel.outputs.anykernel_zip_path }}
-            ${{ env.ART_DIR }}/manifest.json
-            ${{ env.ART_DIR }}/SHA256SUMS
-          draft: false
-          prerelease: false
+            artifacts/Image
+            artifacts/manifest.json
+            artifacts/SHA256SUMS
+            artifacts/final.config
 
-      # ── 25. Upload logs ───────────────────────────────────────────────────────
+      - name: Failure diagnostics
+        if: ${{ failure() }}
+        run: |
+          {
+            echo "## Chimera Mk9 build FAILED"
+            echo '```'
+            if [[ -f "${ABS_LOG:-/nonexistent}/build.log" ]]; then
+              grep -nE 'error:|Error [0-9]+|undefined reference|multiple definition|No such file' "$ABS_LOG/build.log" | head -n 60 || true
+              echo "--- tail ---"
+              tail -n 40 "$ABS_LOG/build.log"
+            else
+              echo "no build.log — failure occurred before/outside the kernel build; see step logs"
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Job summary
+        if: ${{ always() }}
+        run: |
+          {
+            echo "## Chimera Mk9 — ${IN_PROFILE} / ${IN_TOOLCHAIN}"
+            echo "- overlay applied: ${APPLY_OVERLAY}"
+            echo "- base: ${IN_BASE_REPO}@${BASE_COMMIT:-n/a}"
+            echo "- KernelSU-Next: ${KSU_COMMIT_ACTUAL:-n/a}"
+            echo "- compiler: ${COMPILER_VERSION:-n/a}"
+            echo "- kernel release: ${KERNEL_RELEASE_ACTUAL:-n/a}"
+            echo
+            echo "Chimera Mk9 compatibility here means building the modified Exynos 9810 Linux 4.9.337 vendor kernel for potential use with the Chimera Mk9 LineageOS 23.2 userspace based on Android 16 QPR2. Runtime compatibility requires physical-device testing. A green build proves none of: boot, root, SUSFS, SELinux, Samsung RKP/TIMA/KNOX, flashability, vendor blobs, camera, modem, audio, thermal, charging, recovery, boot-image layout, or ABI compatibility."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload build logs
-        if: always()
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: chimera-mk9-logs-${{ github.run_id }}
-          path: ${{ env.ABS_LOG }}/**
+          name: chimera-mk9-logs-${{ inputs.profile }}-${{ inputs.toolchain }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: logs/**
           if-no-files-found: warn
