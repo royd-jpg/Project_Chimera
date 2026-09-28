@@ -1,8 +1,16 @@
-name: Project Chimera Mk9 — boot-first kernel build v.20260928-r2
+name: Project Chimera Mk9 — boot-first kernel build v.20260928-r3
 # ─────────────────────────────────────────────────────────────────────────────
-# VERSION HISTORY (append-only; earlier entries condensed — the attached
-# previous file's full text was truncated mid-entry at v.20260822a)
+# VERSION HISTORY (append-only; earlier entries condensed — the original file's
+# full text was truncated mid-entry at v.20260822a in the copy I worked from.
+# Append your pre-v.20260928 history here before committing.)
 #
+# v.20260928-r3 — GCC 13 vs bcmdhd_101_16 (run #238 failure).
+#   Added -Wno-error=unused-function to CHIMERA_KCFLAGS_COMMON. Added
+#   relax_bcmdhd_werror input (GCC only, default true): CI-time removal of
+#   -Werror from drivers/net/wireless/bcmdhd_101_16 build files, logged
+#   before/after. Failure diagnostics now print refcount.h context and the
+#   refcount_* / bcmdhd -Werror greps. The cause of GCC calling the plain
+#   refcount.h prototypes "static" is UNVERIFIED.
 # v.20260928-r2 — Boot-first restructure. profile is now boot-first |
 #   chimera-full. Shared toolchain library (no bash arrays across steps).
 #   Fixed: unexported KBUILD_BUILD_USER/HOST/VERSION; empty-default
@@ -51,6 +59,12 @@ on:
         required: false
         type: boolean
         default: false
+
+      relax_bcmdhd_werror:
+        description: "GCC only: strip -Werror from drivers/net/wireless/bcmdhd_101_16 build files at CI time (no-op if none found)"
+        required: false
+        type: boolean
+        default: true
 
       dry_run:
         description: "Validate + configure only — skip build and packaging"
@@ -180,7 +194,9 @@ env:
   BUILD_DATE_DEFAULT: "Thu Jan 1 00:00:00 UTC 2026"
 
   # Common target CFLAGS. LLVM mode appends -fuse-ld=lld in the shared library.
-  CHIMERA_KCFLAGS_COMMON: "-O2 -fcommon -fno-strict-aliasing -Wno-error"
+  # -Wno-error=unused-function: per-warning demotion; wins over a later plain -Werror
+  # (run #238: bcmdhd_101_16 failed on refcount.h [-Werror=unused-function]).
+  CHIMERA_KCFLAGS_COMMON: "-O2 -fcommon -fno-strict-aliasing -Wno-error -Wno-error=unused-function"
 
   CI_LIB: "/tmp/chimera-ci-lib.sh"
 
@@ -202,6 +218,7 @@ env:
   IN_BUILD_DATE: ${{ inputs.build_date }}
   IN_CUSTOM_BUILD_DATE: ${{ inputs.custom_build_date }}
   FORCE_REPATCH: ${{ inputs.force_repatch }}
+  RELAX_BCMDHD_WERROR: ${{ inputs.relax_bcmdhd_werror }}
   APPLY_OVERLAY: ${{ inputs.profile == 'chimera-full' || inputs.apply_optional_overlay }}
 
 jobs:
@@ -688,6 +705,22 @@ jobs:
           echo "$BRAND" > localversion
           echo "identity applied: brand=$BRAND host=$KBUILD_BUILD_HOST"
 
+      # ── 6b. GCC-only CI-time patch: bcmdhd -Werror (run #238) ──────────────
+      - name: CI-time patch — drop -Werror from bcmdhd_101_16 (GCC only)
+        if: ${{ inputs.toolchain == 'gcc' && inputs.relax_bcmdhd_werror }}
+        working-directory: ${{ env.KERNEL_DIR }}
+        run: |
+          set -Eeuo pipefail
+          D=drivers/net/wireless/bcmdhd_101_16
+          [[ -d "$D" ]] || { echo "::warning::$D not found — nothing to patch"; exit 0; }
+          grep -rnE -- '-Werror' "$D" | tee "$ABS_LOG/bcmdhd-werror-before.txt" || echo "no -Werror found (before)" | tee "$ABS_LOG/bcmdhd-werror-before.txt"
+          mapfile -t F < <(grep -rlE -- '-Werror' "$D" --include='Makefile' --include='Kbuild' --include='*.mk' || true)
+          for f in "${F[@]}"; do
+            sed -i -E 's/-Werror(=[A-Za-z0-9_-]+)?([[:space:]]|$)/ /g' "$f"
+            echo "patched: $f"
+          done
+          grep -rnE -- '-Werror' "$D" | tee "$ABS_LOG/bcmdhd-werror-after.txt" || echo "no -Werror remains" | tee "$ABS_LOG/bcmdhd-werror-after.txt"
+
       # ── 7. Optional Chimera overlay (chimera-full / apply_optional_overlay) ─
       - name: Optional overlay — hooks.c selinux_cred() consistency + stack protector
         if: ${{ env.APPLY_OVERLAY == 'true' }}
@@ -929,7 +962,8 @@ jobs:
                   "IN_BASE_REPO","IN_BASE_REF","BASE_COMMIT","IN_KSU_COMMIT","KSU_COMMIT_ACTUAL",
                   "COMPILER_VERSION","LINKER_VERSION","TC_CACHE_KEY","TC_IDENTITY_HASH","KERNEL_VERSION",
                   "KERNEL_RELEASE_EXPECTED","KERNEL_RELEASE_ACTUAL","BUILD_KCFLAGS","FINAL_CONFIG_HASH","UNAME_PREVIEW",
-                  "KBUILD_BUILD_USER","KBUILD_BUILD_HOST","KBUILD_BUILD_VERSION","KBUILD_BUILD_TIMESTAMP"]
+                  "KBUILD_BUILD_USER","KBUILD_BUILD_HOST","KBUILD_BUILD_VERSION","KBUILD_BUILD_TIMESTAMP",
+                  "RELAX_BCMDHD_WERROR"]
           m = {k: os.environ.get(k, "") for k in keys}
           m["disclaimer"] = ("CI build only. Not proof of boot, root, SUSFS, SELinux, Samsung security, "
                              "flashability, vendor-blob, camera/modem/audio/thermal/charging, recovery, "
@@ -1034,6 +1068,19 @@ jobs:
               echo "no build.log — failure occurred before/outside the kernel build; see step logs"
             fi
             echo '```'
+            if [[ -d "${ABS_KERNEL:-/nonexistent}" ]]; then
+              echo "### refcount / bcmdhd diagnostics"
+              echo '```'
+              echo "--- include/linux/refcount.h 195-245 ---"
+              sed -n '195,245p' "$ABS_KERNEL/include/linux/refcount.h" 2>&1 || true
+              echo "--- refcount_dec_and_lock / refcount_dec_if_one references ---"
+              grep -rn "refcount_dec_and_lock\|refcount_dec_if_one" "$ABS_KERNEL/lib" "$ABS_KERNEL/include" 2>/dev/null | head -n 20 || true
+              echo "--- bcmdhd_101_16 -Werror ---"
+              grep -rnE -- '-Werror' "$ABS_KERNEL/drivers/net/wireless/bcmdhd_101_16" 2>/dev/null | head -n 20 || true
+              echo "--- CONFIG_REFCOUNT* ---"
+              grep -n "REFCOUNT" "${ABS_OUT:-/nonexistent}/.config" 2>/dev/null || true
+              echo '```'
+            fi
           } >> "$GITHUB_STEP_SUMMARY" || true
 
       - name: Job summary
