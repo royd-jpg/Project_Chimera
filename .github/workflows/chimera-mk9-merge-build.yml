@@ -297,8 +297,12 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             aria2 bc bison build-essential ccache curl flex \
             gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi \
-            git libelf-dev libssl-dev lz4 lzop python3 rsync \
+            git libelf-dev libssl-dev lz4 lzop pahole python3 rsync \
             zstd xz-utils cpio zip
+          # CONFIG_DEBUG_INFO_BTF=y is set in exynos9810-star2lte_defconfig (base + known-good);
+          # vmlinux link hard-fails without pahole. Fail here, not 40 min into the build.
+          command -v pahole >/dev/null || { echo "::error::pahole missing (needed for DEBUG_INFO_BTF)"; exit 1; }
+          pahole --version
           python3 --version
           aarch64-linux-gnu-gcc --version | head -n1
           arm-linux-gnueabi-gcc --version | head -n1
