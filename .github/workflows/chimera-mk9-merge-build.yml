@@ -100,13 +100,13 @@ on:
         description: "Base ref: full 40-hex commit SHA only. Live branch tip is logged for drift, never substituted."
         required: false
         type: string
-        default: "0cb89107c970173b7900c3cea4d82c33572a9af1"
+        default: "e23886d73b8ae43faf55848418cb64b3a241a948"
 
       ksu_commit:
         description: "KernelSU-Next exact commit SHA (full 40-hex). Bump together with base_ref."
         required: false
         type: string
-        default: "685b4a6ba3d2befdf40b3c67cf096d050c7aa6cb"
+        default: "14521a1a0d97d18dc873df85be13ebba75d2bc11"
 
       base_branch_hint:
         description: "Branch name to compare base_ref against for drift logging ONLY"
