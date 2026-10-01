@@ -1,9 +1,13 @@
-name: Project Chimera Mk9 — xthorfinnx/16 boot-first kernel build v.20261002-r1
+name: Project Chimera Mk9 — xthorfinnx/16 boot-first kernel build v.20261002-r2
 # ─────────────────────────────────────────────────────────────────────────────
 # VERSION HISTORY (append-only; earlier entries condensed — the original file's
 # full text was truncated mid-entry at v.20260822a in the copy I worked from.
 # Append your pre-v.20260928 history here before committing.)
 #
+# v.20261002-r2 — Fragment cleanup applied at CI time to the TEMP fragment copies (repo files
+#   untouched, idempotent): drops symbols verified absent/hidden in xthorfinnx/16 + pinned KSU-Next
+#   (SPOOF_SELINUX, KPROBES_HOOK, UH_RKP, RKP_KDP, SEC_RESTRICT_SETUID, FIVE, DEFEX, SECURITY_DEFEX,
+#   DEFAULT_NET_SCH, DEFAULT_FQ_CODEL, CRC32_ARMV8_CRC, MFD_CS47L92_GPIO). Log: fragment-cleanup.txt.
 # v.20261002-r1 — Kernel base moved from gavdoc38 to xthorfinnx branch 16.
 #   Base: xthorfinnx/android_kernel_samsung_exynos9810@8255de66... (Linux 4.9.337,
 #   no KernelSU/SUSFS, no submodules). KSU-Next + SUSFS are re-applied at CI time:
@@ -915,6 +919,28 @@ jobs:
             cp "$GITHUB_WORKSPACE/chimera-device-specific.cfg" /tmp/chimera-device-specific.cfg
             FRAGS+=(/tmp/chimera-device-specific.cfg)
           fi
+          # Fragment cleanup (CI-time, temp copies only; repo files are not modified).
+          # These symbols were verified NOT to exist (or to be hidden by unmet dependencies)
+          # in xthorfinnx/16 + the pinned KernelSU-Next/SUSFS. Idempotent: a no-op if the
+          # fragments in Project_Chimera were already cleaned.
+          DROP_SYMS=(
+            CONFIG_KSU_SUSFS_SPOOF_SELINUX CONFIG_KSU_KPROBES_HOOK
+            CONFIG_UH_RKP CONFIG_RKP_KDP CONFIG_SEC_RESTRICT_SETUID CONFIG_FIVE CONFIG_DEFEX CONFIG_SECURITY_DEFEX
+            CONFIG_DEFAULT_NET_SCH CONFIG_DEFAULT_FQ_CODEL CONFIG_CRC32_ARMV8_CRC CONFIG_MFD_CS47L92_GPIO
+          )
+          : > "$ABS_LOG/fragment-cleanup.txt"
+          for fr in "${FRAGS[@]}"; do
+            for sym in "${DROP_SYMS[@]}"; do
+              if grep -qE "^(# )?${sym}(=.*| is not set)?\$" "$fr"; then
+                grep -nE "^(# )?${sym}(=.*| is not set)?\$" "$fr" | sed "s|^|$(basename "$fr"): removed |" | tee -a "$ABS_LOG/fragment-cleanup.txt"
+                sed -i -E "/^(# )?${sym}(=.*| is not set)?\$/d" "$fr"
+              fi
+            done
+          done
+          [[ -s "$ABS_LOG/fragment-cleanup.txt" ]] || echo "fragment cleanup: nothing to remove (fragments already clean)" | tee "$ABS_LOG/fragment-cleanup.txt"
+          # Safety: the hook-mode requirements must survive the cleanup.
+          grep -q '^CONFIG_KSU=y$' /tmp/chimera-ksu-susfs.cfg && grep -q '^CONFIG_KSU_MANUAL_HOOK=y$' /tmp/chimera-ksu-susfs.cfg \
+            && grep -q '^CONFIG_KSU_SUSFS=y$' /tmp/chimera-ksu-susfs.cfg || { echo "FATAL: cleanup damaged the KSU fragment" >&2; exit 1; }
 
           chimera_make "$(basename "$DEFCONFIG")" | tee "$ABS_LOG/defconfig-base.log"
           scripts/kconfig/merge_config.sh -m -O "$ABS_OUT" "$ABS_OUT/.config" "${FRAGS[@]}" | tee "$ABS_LOG/merge-config.log"
@@ -1067,7 +1093,8 @@ jobs:
           echo "BUILD_TAG=$BUILD_TAG" >> "$GITHUB_ENV"
           export BUILD_TAG
           cp "$ABS_LOG/toolchain-identity.txt" "$ABS_LOG/ksu-upstream-refs.txt" "$ABS_LOG/base-commit.txt" \
-             "$ABS_LOG/integration-patch-info.txt" "$ABS_LOG/fragment-dropped-symbols.txt" "$ART_DIR/" 2>/dev/null || true
+             "$ABS_LOG/integration-patch-info.txt" "$ABS_LOG/fragment-dropped-symbols.txt" \
+             "$ABS_LOG/fragment-cleanup.txt" "$ART_DIR/" 2>/dev/null || true
           python3 - <<'PYEOF'
           import json, os, hashlib, pathlib
           art = pathlib.Path(os.environ["ART_DIR"])
@@ -1199,7 +1226,7 @@ jobs:
             echo '```'
             echo "### integration diagnostics"
             echo '```'
-            for f in integration-patch-info.txt integration-apply-check.log ksu-commit.txt fragment-dropped-symbols.txt config-guard.log bcmdhd-werror-before.txt bcmdhd-werror-after.txt; do
+            for f in integration-patch-info.txt integration-apply-check.log ksu-commit.txt fragment-cleanup.txt fragment-dropped-symbols.txt config-guard.log bcmdhd-werror-before.txt bcmdhd-werror-after.txt; do
               if [[ -f "${ABS_LOG:-/nonexistent}/$f" ]]; then echo "--- $f ---"; head -n 40 "$ABS_LOG/$f"; fi
             done
             echo '```'
