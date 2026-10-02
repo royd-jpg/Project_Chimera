@@ -1,9 +1,16 @@
-name: Project Chimera Mk9 — xthorfinnx/16 boot-first kernel build v.20261002-r2
+name: Project Chimera Mk9 — xthorfinnx/16 boot-first kernel build v.20261002-r3
 # ─────────────────────────────────────────────────────────────────────────────
 # VERSION HISTORY (append-only; earlier entries condensed — the original file's
 # full text was truncated mid-entry at v.20260822a in the copy I worked from.
 # Append your pre-v.20260928 history here before committing.)
 #
+# v.20261002-r3 — Branding: brand options are now "-Chimera_Mk9r2" and "-c9r2x[git7]"
+#   ('-c9r2x' + first 7 hex of base_ref; default). Artifacts are uploaded as SEPARATE,
+#   UNZIPPED files (actions/upload-artifact@v7, archive: false — single file per artifact,
+#   artifact name = file name): Image, System.map, final.config, star2lte dtb,
+#   manifest.json, SHA256SUMS, integration patch, and (opt-in) dtb.img + AnyKernel3 ZIP.
+#   Build logs stay one zipped artifact (multi-file). Metadata .txt files are no longer
+#   duplicated into the kernel artifacts (they remain in the logs artifact).
 # v.20261002-r2 — Fragment cleanup applied at CI time to the TEMP fragment copies (repo files
 #   untouched, idempotent): drops symbols verified absent/hidden in xthorfinnx/16 + pinned KSU-Next
 #   (SPOOF_SELINUX, KPROBES_HOOK, UH_RKP, RKP_KDP, SEC_RESTRICT_SETUID, FIVE, DEFEX, SECURITY_DEFEX,
@@ -133,15 +140,15 @@ on:
         default: "14521a1a0d97d18dc873df85be13ebba75d2bc11"
 
       brand:
-        description: "LOCALVERSION suffix (starts with '-'). '-cm9x[git7]' = '-cm9x' + first 7 hex of base_ref."
+        description: "LOCALVERSION suffix (starts with '-'). '-c9r2x[git7]' = '-c9r2x' + first 7 hex of base_ref."
         required: true
         type: choice
         options:
-          - "-Chimera_Mk9"
+          - "-Chimera_Mk9r2"
           - "-24463729"
-          - "-cm9x[git7]"
+          - "-c9r2x[git7]"
           - "Other"
-        default: "-cm9x[git7]"
+        default: "-c9r2x[git7]"
       custom_brand:
         description: "Custom brand — only if brand=Other (must start with '-')"
         required: false
@@ -280,8 +287,8 @@ jobs:
           set -Eeuo pipefail
           if [[ "$IN_BRAND" == "Other" ]]; then
             FINAL_BRAND="$IN_CUSTOM_BRAND"
-          elif [[ "$IN_BRAND" == "-cm9x[git7]" ]]; then
-            FINAL_BRAND="-cm9x${IN_BASE_REF:0:7}"
+          elif [[ "$IN_BRAND" == "-c9r2x[git7]" ]]; then
+            FINAL_BRAND="-c9r2x${IN_BASE_REF:0:7}"
           else
             FINAL_BRAND="$IN_BRAND"
           fi
@@ -1092,9 +1099,8 @@ jobs:
           BUILD_TAG="chimera-mk9-${IN_PROFILE}-${IN_TOOLCHAIN}-$(date -u +%Y%m%dT%H%M%SZ)-${BASE_COMMIT:0:8}"
           echo "BUILD_TAG=$BUILD_TAG" >> "$GITHUB_ENV"
           export BUILD_TAG
-          cp "$ABS_LOG/toolchain-identity.txt" "$ABS_LOG/ksu-upstream-refs.txt" "$ABS_LOG/base-commit.txt" \
-             "$ABS_LOG/integration-patch-info.txt" "$ABS_LOG/fragment-dropped-symbols.txt" \
-             "$ABS_LOG/fragment-cleanup.txt" "$ART_DIR/" 2>/dev/null || true
+          # NOTE: identity/diagnostic .txt files (toolchain-identity, ksu-upstream-refs, base-commit,
+          # integration-patch-info, fragment-*.txt) stay in the logs artifact only.
           python3 - <<'PYEOF'
           import json, os, hashlib, pathlib
           art = pathlib.Path(os.environ["ART_DIR"])
@@ -1169,12 +1175,79 @@ jobs:
           ( cd "$ART_DIR" && sha256sum dtb.img "$(basename "$ZIP")" >> SHA256SUMS )
 
       # ── 11. Uploads / release / diagnostics ────────────────────────────────
-      - name: Upload kernel artifacts
+      # actions/upload-artifact@v7 with archive: false uploads ONE file, UNZIPPED; the
+      # artifact name is the file name (the 'name' input is ignored). Hence one step per file.
+      - name: Upload Image
         if: ${{ !inputs.dry_run }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: chimera-mk9-kernel-${{ inputs.profile }}-${{ inputs.toolchain }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: artifacts/
+          path: artifacts/Image
+          archive: false
+          if-no-files-found: error
+
+      - name: Upload final.config
+        if: ${{ !inputs.dry_run }}
+        uses: actions/upload-artifact@v7
+        with:
+          path: artifacts/final.config
+          archive: false
+          if-no-files-found: error
+
+      - name: Upload star2lte DTB
+        if: ${{ !inputs.dry_run }}
+        uses: actions/upload-artifact@v7
+        with:
+          # basename of STAR2_DTB_REL (dts/exynos/exynos9810-star2lte_eur_open_26.dtb)
+          path: artifacts/dtb/exynos9810-star2lte_eur_open_26.dtb
+          archive: false
+          if-no-files-found: error
+
+      - name: Upload System.map
+        if: ${{ !inputs.dry_run }}
+        uses: actions/upload-artifact@v7
+        with:
+          path: artifacts/System.map
+          archive: false
+          if-no-files-found: ignore
+
+      - name: Upload integration patch
+        if: ${{ !inputs.dry_run }}
+        uses: actions/upload-artifact@v7
+        with:
+          path: artifacts/gavdoc38-ksun-susfs-integration.patch
+          archive: false
+          if-no-files-found: error
+
+      - name: Upload manifest.json
+        if: ${{ !inputs.dry_run }}
+        uses: actions/upload-artifact@v7
+        with:
+          path: artifacts/manifest.json
+          archive: false
+          if-no-files-found: error
+
+      - name: Upload SHA256SUMS
+        if: ${{ !inputs.dry_run }}
+        uses: actions/upload-artifact@v7
+        with:
+          path: artifacts/SHA256SUMS
+          archive: false
+          if-no-files-found: error
+
+      - name: Upload dtb.img (opt-in packaging, UNVERIFIED)
+        if: ${{ !inputs.dry_run && inputs.package_anykernel }}
+        uses: actions/upload-artifact@v7
+        with:
+          path: artifacts/dtb.img
+          archive: false
+          if-no-files-found: error
+
+      - name: Upload AnyKernel3 ZIP (opt-in packaging, UNVERIFIED)
+        if: ${{ !inputs.dry_run && inputs.package_anykernel }}
+        uses: actions/upload-artifact@v7
+        with:
+          path: ${{ env.ZIP_PATH }}
+          archive: false
           if-no-files-found: error
 
       - name: Create GitHub prerelease
@@ -1249,6 +1322,7 @@ jobs:
           {
             echo "## Chimera Mk9 — ${IN_PROFILE} / ${IN_TOOLCHAIN}"
             echo "- overlay applied: ${APPLY_OVERLAY}"
+            echo "- brand: ${BRAND:-n/a}"
             echo "- kernel base: ${IN_BASE_REPO}@${BASE_COMMIT:-n/a}"
             echo "- KSU/SUSFS donor: ${GV_REPO} ${IN_INT_BASE:0:12} -> ${IN_INT_REF:0:12} (patch sha256 ${INT_PATCH_SHA256_ACTUAL:-n/a})"
             echo "- KernelSU-Next: ${KSU_COMMIT_ACTUAL:-n/a}"
@@ -1258,9 +1332,10 @@ jobs:
             echo "Chimera Mk9 compatibility here means building the modified Exynos 9810 Linux 4.9.337 vendor kernel for potential use with the Chimera Mk9 LineageOS 23.2 userspace based on Android 16 QPR2. Runtime compatibility requires physical-device testing. A green build proves none of: boot, root, SUSFS, SELinux, Samsung RKP/TIMA/KNOX, flashability, vendor blobs, camera, modem, audio, thermal, charging, recovery, boot-image layout, or ABI compatibility."
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # Build logs are many files, so they stay ONE zipped artifact (archive: false allows a single file only).
       - name: Upload build logs
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: chimera-mk9-logs-${{ inputs.profile }}-${{ inputs.toolchain }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: logs/**
