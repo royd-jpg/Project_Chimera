@@ -47,7 +47,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: chimera-mk9-${{ github.event.inputs.profile }}-${{ github.event.inputs.toolchain }}-${{ github.event.inputs.base_ref }}
+  group: chimera-mk9-${{ github.event.inputs.profile }}-${{ github.event.inputs.overlay_profile }}-${{ github.event.inputs.toolchain }}-${{ github.event.inputs.base_ref }}
   cancel-in-progress: false
 
 on:
@@ -72,6 +72,13 @@ on:
         required: false
         type: boolean
         default: false
+
+      overlay_profile:
+        description: "Chimera mk/grep overlay set (only used when the overlay is active: profile=chimera-full or apply_optional_overlay). full = apply_chimera_overlay_patches.sh (all 9 sections incl. DTS + madera). lite = apply_chimera_overlay_lite.sh (UFC, mem_rw SUS_MAP, namei sus_path, sugov x3, fair.c tuning only). none = no Chimera mk/grep overlays. hooks.c selinux_cred + stack-protector + chimera-device-specific.cfg are applied in ALL three."
+        required: false
+        type: choice
+        options: [full, lite, none]
+        default: full
 
       relax_bcmdhd_werror:
         description: "Strip -Werror from drivers/net/wireless/bcmdhd_101_16 build files at CI time (needed for GCC 13; no-op if none found)"
@@ -252,6 +259,9 @@ env:
   IN_CUSTOM_BUILD_DATE: ${{ inputs.custom_build_date }}
   RELAX_BCMDHD_WERROR: ${{ inputs.relax_bcmdhd_werror }}
   APPLY_OVERLAY: ${{ inputs.profile == 'chimera-full' || inputs.apply_optional_overlay }}
+  IN_OVERLAY_PROFILE: ${{ inputs.overlay_profile }}
+  # 'off' when the overlay is not active (boot-first without apply_optional_overlay); else the chosen profile.
+  OVERLAY_PROFILE_EFFECTIVE: ${{ (inputs.profile == 'chimera-full' || inputs.apply_optional_overlay) && inputs.overlay_profile || 'off' }}
 
 jobs:
   build:
@@ -269,6 +279,7 @@ jobs:
           set -Eeuo pipefail
           FAIL=0
           [[ "$IN_PROFILE" =~ ^(boot-first|chimera-full)$ ]] || { echo "FATAL: bad profile '$IN_PROFILE'" >&2; FAIL=1; }
+          [[ "$IN_OVERLAY_PROFILE" =~ ^(full|lite|none)$ ]] || { echo "FATAL: bad overlay_profile '$IN_OVERLAY_PROFILE'" >&2; FAIL=1; }
           [[ "$IN_TOOLCHAIN" =~ ^(gcc|llvm22|llvm21|llvm20|aosp23|aosp22|aosp21|aosp20|aosp19|neutron19|neutron23|neutron24|zyc_stable|weebx)$ ]] || { echo "FATAL: bad toolchain '$IN_TOOLCHAIN'" >&2; FAIL=1; }
           [[ "$IN_BASE_REF" =~ ^[0-9a-f]{40}$ ]] || { echo "FATAL: base_ref must be a full 40-hex SHA" >&2; FAIL=1; }
           [[ "$IN_INT_BASE" =~ ^[0-9a-f]{40}$ ]] || { echo "FATAL: integration_base must be a full 40-hex SHA" >&2; FAIL=1; }
@@ -280,7 +291,10 @@ jobs:
           [[ "$IN_BUILD_VERSION" =~ ^[0-9]+$ ]] || { echo "FATAL: build_version must be digits" >&2; FAIL=1; }
           [[ "$IN_BUILD_HOST" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "FATAL: bad build_host" >&2; FAIL=1; }
           [[ "$FAIL" -eq 0 ]] || exit 1
-          echo "PASS: inputs valid (APPLY_OVERLAY=$APPLY_OVERLAY)"
+          if [[ "$APPLY_OVERLAY" != "true" && "$IN_OVERLAY_PROFILE" != "full" ]]; then
+            echo "::notice::overlay_profile=$IN_OVERLAY_PROFILE ignored: overlay inactive (profile=$IN_PROFILE, apply_optional_overlay=false)"
+          fi
+          echo "PASS: inputs valid (APPLY_OVERLAY=$APPLY_OVERLAY, OVERLAY_PROFILE_EFFECTIVE=$OVERLAY_PROFILE_EFFECTIVE)"
 
       - name: Resolve build identity inputs
         run: |
@@ -365,7 +379,12 @@ jobs:
           echo "Chimera ref: $CHIMERA_REF  commit: $SHA (branch tip — not an immutable pin)"
           NEED=(chimera-ksu-susfs.cfg)
           if [[ "$APPLY_OVERLAY" == "true" ]]; then
-            NEED+=(patches/apply_chimera_overlay_patches.sh chimera-device-specific.cfg patches/0001-mfd-madera-core-settle-delay-after-reset-release.patch)
+            NEED+=(chimera-device-specific.cfg)   # merged in ALL overlay profiles
+            case "$IN_OVERLAY_PROFILE" in
+              full) NEED+=(patches/apply_chimera_overlay_patches.sh patches/0001-mfd-madera-core-settle-delay-after-reset-release.patch) ;;
+              lite) NEED+=(patches/apply_chimera_overlay_lite.sh) ;;
+              none) ;;
+            esac
           fi
           MISSING=0
           for f in "${NEED[@]}"; do
@@ -373,6 +392,7 @@ jobs:
           done
           [[ "$MISSING" -eq 0 ]] || exit 1
           [[ ! -f patches/apply_chimera_overlay_patches.sh ]] || chmod +x patches/apply_chimera_overlay_patches.sh
+          [[ ! -f patches/apply_chimera_overlay_lite.sh ]] || chmod +x patches/apply_chimera_overlay_lite.sh
 
       - name: Checkout kernel base (pinned commit, no submodules)
         uses: actions/checkout@v4
@@ -884,8 +904,8 @@ jobs:
           [[ "${REMAINING:-0}" -eq 0 ]] || { echo "FATAL: $REMAINING unconverted sites" >&2; exit 1; }
           echo "PASS: hooks.c consistency pass"
 
-      - name: Optional overlay — Chimera overlay script and marker verification
-        if: ${{ env.APPLY_OVERLAY == 'true' }}
+      - name: Optional overlay — Chimera overlay script and marker verification (profile full)
+        if: ${{ env.OVERLAY_PROFILE_EFFECTIVE == 'full' }}
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
@@ -904,6 +924,46 @@ jobs:
           grep -q 'Allow internal boot ROM / SPI interface to become ready' drivers/mfd/madera-core.c && echo "OK:    madera-core settle delay" || { echo "FATAL: madera-core settle delay"; FAIL=1; }
           [[ "$FAIL" -eq 0 ]] || exit 1
           echo "PASS: overlay markers present"
+
+      - name: Optional overlay — Chimera LITE overlay script and marker verification (profile lite)
+        if: ${{ env.OVERLAY_PROFILE_EFFECTIVE == 'lite' }}
+        working-directory: ${{ env.KERNEL_DIR }}
+        run: |
+          set -Eeuo pipefail
+          bash "$GITHUB_WORKSPACE/patches/apply_chimera_overlay_lite.sh" 2>&1 | tee "$ABS_LOG/overlay.log"
+          FAIL=0
+          mk() { grep -q "$2" "$3" 2>/dev/null && echo "OK:    $1" || { echo "FATAL: $1 — marker $2 missing in $3"; FAIL=1; }; }
+          mk "UFC short-circuit"      CMK9_UFC_SHORT_CIRCUIT        drivers/cpufreq/exynos-ufc.c
+          mk "mem_rw SUS_MAP guard"   CMK9_MEM_RW_SUS_MAP_GUARD     fs/proc/base.c
+          mk "namei sus_path recheck" CMK9_NAMEI_SUS_PATH_RECHECK   fs/namei.c
+          mk "sugov rate limit"       CMK9_SUGOV_RATE_LIMIT         kernel/sched/cpufreq_schedutil.c
+          mk "sugov kthread prio"     CMK9_SUGOV_KTHREAD_PRIORITY   kernel/sched/cpufreq_schedutil.c
+          mk "sugov_init rate limit"  CMK9_SUGOV_INIT_RATE_LIMIT    kernel/sched/cpufreq_schedutil.c
+          grep -q 'normalized_sysctl_sched_min_granularity = 5000000ULL' kernel/sched/fair.c && echo "OK:    fair.c min_granularity" || { echo "FATAL: fair.c min_granularity"; FAIL=1; }
+          grep -q 'sysctl_sched_migration_cost = 2000000UL' kernel/sched/fair.c && echo "OK:    fair.c migration_cost" || { echo "FATAL: fair.c migration_cost"; FAIL=1; }
+          # lite must NOT carry the full-only DTS tuning
+          if grep -q 'CMK9_DTS_BOARD_TUNING' arch/arm64/boot/dts/exynos/exynos9810-star2lte_eur_open_26.dts; then
+            echo "FATAL: DTS board tuning present in lite profile"; FAIL=1
+          fi
+          [[ "$FAIL" -eq 0 ]] || exit 1
+          echo "PASS: lite overlay markers present (6 mk + 2 fair.c), no DTS tuning"
+
+      - name: Optional overlay — none (no Chimera mk/grep overlays) leak check
+        if: ${{ env.OVERLAY_PROFILE_EFFECTIVE == 'none' }}
+        working-directory: ${{ env.KERNEL_DIR }}
+        run: |
+          set -Eeuo pipefail
+          FAIL=0
+          leak() { if grep -q "$1" "$2" 2>/dev/null; then echo "FATAL: marker $1 present in $2 (profile none)"; FAIL=1; fi; }
+          leak CMK9_UFC_SHORT_CIRCUIT        drivers/cpufreq/exynos-ufc.c
+          leak CMK9_MEM_RW_SUS_MAP_GUARD     fs/proc/base.c
+          leak CMK9_NAMEI_SUS_PATH_RECHECK   fs/namei.c
+          leak CMK9_DTS_BOARD_TUNING         arch/arm64/boot/dts/exynos/exynos9810-star2lte_eur_open_26.dts
+          leak CMK9_SUGOV_RATE_LIMIT         kernel/sched/cpufreq_schedutil.c
+          leak CMK9_SUGOV_KTHREAD_PRIORITY   kernel/sched/cpufreq_schedutil.c
+          leak CMK9_SUGOV_INIT_RATE_LIMIT    kernel/sched/cpufreq_schedutil.c
+          [[ "$FAIL" -eq 0 ]] || exit 1
+          echo "PASS: overlay_profile=none — no Chimera mk overlay markers present (hooks.c / stack-protector / device cfg still applied)"
 
       # ── 8. Kconfig ─────────────────────────────────────────────────────────
       - name: Configure kernel (defconfig + merge + manual-hook mode)
@@ -1111,7 +1171,7 @@ jobs:
                   "COMPILER_VERSION","LINKER_VERSION","TC_CACHE_KEY","TC_IDENTITY_HASH","KERNEL_VERSION",
                   "KERNEL_RELEASE_EXPECTED","KERNEL_RELEASE_ACTUAL","BUILD_KCFLAGS","FINAL_CONFIG_HASH","UNAME_PREVIEW",
                   "KBUILD_BUILD_USER","KBUILD_BUILD_HOST","KBUILD_BUILD_VERSION","KBUILD_BUILD_TIMESTAMP",
-                  "RELAX_BCMDHD_WERROR"]
+                  "RELAX_BCMDHD_WERROR","OVERLAY_PROFILE_EFFECTIVE"]
           m = {k: os.environ.get(k, "") for k in keys}
           m["compatibility"] = ("Chimera Mk9 compatibility here means building the modified Exynos 9810 Linux 4.9.337 "
                                 "vendor kernel for potential use with the Chimera Mk9 LineageOS 23.2 userspace based on "
@@ -1272,7 +1332,7 @@ jobs:
             | Integration patch SHA-256 | `${{ env.INT_PATCH_SHA256_ACTUAL }}` |
             | KernelSU-Next | `${{ env.KSU_COMMIT_ACTUAL }}` |
             | Chimera | `${{ env.CHIMERA_REF }}@${{ env.CHIMERA_SHA }}` |
-            | Profile / overlay | `${{ inputs.profile }}` / `${{ env.APPLY_OVERLAY }}` |
+            | Profile / overlay / overlay profile | `${{ inputs.profile }}` / `${{ env.APPLY_OVERLAY }}` / `${{ env.OVERLAY_PROFILE_EFFECTIVE }}` |
             | Compiler | `${{ env.COMPILER_VERSION }}` |
             | Kernel release | `${{ env.KERNEL_RELEASE_ACTUAL }}` |
             | Final config SHA-256 | `${{ env.FINAL_CONFIG_HASH }}` |
@@ -1321,7 +1381,7 @@ jobs:
         run: |
           {
             echo "## Chimera Mk9 — ${IN_PROFILE} / ${IN_TOOLCHAIN}"
-            echo "- overlay applied: ${APPLY_OVERLAY}"
+            echo "- overlay applied: ${APPLY_OVERLAY} (profile: ${OVERLAY_PROFILE_EFFECTIVE})"
             echo "- brand: ${BRAND:-n/a}"
             echo "- kernel base: ${IN_BASE_REPO}@${BASE_COMMIT:-n/a}"
             echo "- KSU/SUSFS donor: ${GV_REPO} ${IN_INT_BASE:0:12} -> ${IN_INT_REF:0:12} (patch sha256 ${INT_PATCH_SHA256_ACTUAL:-n/a})"
