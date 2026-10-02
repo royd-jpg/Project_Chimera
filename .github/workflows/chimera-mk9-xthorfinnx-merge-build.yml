@@ -1,9 +1,16 @@
-name: Project Chimera Mk9 — xthorfinnx/16 boot-first kernel build v.20261002-r4
+name: Project Chimera Mk9 — xthorfinnx/16 boot-first kernel build v.20261002-r5
 # ─────────────────────────────────────────────────────────────────────────────
 # VERSION HISTORY (append-only; earlier entries condensed — the original file's
 # full text was truncated mid-entry at v.20260822a in the copy I worked from.
 # Append your pre-v.20260928 history here before committing.)
 #
+# v.20261002-r5 — Kernel-side overlay fixes. (1) mem_rw() SUS_MAP guard now holds mm->mmap_sem (read)
+#   around find_vma() + the vma->vm_file deref (was lockless: UAF/oops race with munmap) and requires
+#   vma->vm_start <= addr (find_vma returns the NEXT vma for addr in a hole). (2) Removed the
+#   CMK9_NAMEI_SUS_PATH_RECHECK patch: it repeated, after may_lookup(), the identical sus_path test the
+#   integration patch already does at the loop top (nd->path.dentry cannot change in between).
+#   namei is now VERIFY-ONLY in both overlay scripts; the namei mk check is gone (the 'none' leak check
+#   is kept and now also guards against the old block reappearing).
 # v.20261002-r4 — overlay_profile input (full|lite|none; default full; only effective when the
 #   overlay is active). lite = patches/apply_chimera_overlay_lite.sh (UFC, mem_rw SUS_MAP, namei
 #   sus_path, sugov x3, fair.c). hooks.c selinux_cred + stack-protector + chimera-device-specific.cfg
@@ -923,7 +930,6 @@ jobs:
           mk() { grep -q "$2" "$3" 2>/dev/null && echo "OK:    $1" || { echo "FATAL: $1 — marker $2 missing in $3"; FAIL=1; }; }
           mk "UFC short-circuit"     CMK9_UFC_SHORT_CIRCUIT        drivers/cpufreq/exynos-ufc.c
           mk "mem_rw SUS_MAP guard"  CMK9_MEM_RW_SUS_MAP_GUARD     fs/proc/base.c
-          mk "namei sus_path recheck" CMK9_NAMEI_SUS_PATH_RECHECK  fs/namei.c
           mk "board DTS tuning"      CMK9_DTS_BOARD_TUNING         arch/arm64/boot/dts/exynos/exynos9810-star2lte_eur_open_26.dts
           mk "sugov rate limit"      CMK9_SUGOV_RATE_LIMIT         kernel/sched/cpufreq_schedutil.c
           mk "sugov kthread prio"    CMK9_SUGOV_KTHREAD_PRIORITY   kernel/sched/cpufreq_schedutil.c
@@ -944,7 +950,6 @@ jobs:
           mk() { grep -q "$2" "$3" 2>/dev/null && echo "OK:    $1" || { echo "FATAL: $1 — marker $2 missing in $3"; FAIL=1; }; }
           mk "UFC short-circuit"      CMK9_UFC_SHORT_CIRCUIT        drivers/cpufreq/exynos-ufc.c
           mk "mem_rw SUS_MAP guard"   CMK9_MEM_RW_SUS_MAP_GUARD     fs/proc/base.c
-          mk "namei sus_path recheck" CMK9_NAMEI_SUS_PATH_RECHECK   fs/namei.c
           mk "sugov rate limit"       CMK9_SUGOV_RATE_LIMIT         kernel/sched/cpufreq_schedutil.c
           mk "sugov kthread prio"     CMK9_SUGOV_KTHREAD_PRIORITY   kernel/sched/cpufreq_schedutil.c
           mk "sugov_init rate limit"  CMK9_SUGOV_INIT_RATE_LIMIT    kernel/sched/cpufreq_schedutil.c
@@ -955,7 +960,7 @@ jobs:
             echo "FATAL: DTS board tuning present in lite profile"; FAIL=1
           fi
           [[ "$FAIL" -eq 0 ]] || exit 1
-          echo "PASS: lite overlay markers present (6 mk + 2 fair.c), no DTS tuning"
+          echo "PASS: lite overlay markers present (5 mk + 2 fair.c), no DTS tuning"
 
       - name: Optional overlay — none (no Chimera mk/grep overlays) leak check
         if: ${{ env.OVERLAY_PROFILE_EFFECTIVE == 'none' }}
