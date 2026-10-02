@@ -4,7 +4,7 @@
 # Applies ONLY:
 #   [1] drivers/cpufreq/exynos-ufc.c            CMK9_UFC_SHORT_CIRCUIT
 #   [2] fs/proc/base.c                          CMK9_MEM_RW_SUS_MAP_GUARD
-#   [3] fs/namei.c                              CMK9_NAMEI_SUS_PATH_RECHECK
+#   [3] fs/namei.c                              verify-only (primary sus_path hook present; no duplicate re-check patch)
 #   [4] kernel/sched/fair.c                     min_granularity = 5000000ULL, migration_cost = 2000000UL
 #   [5] kernel/sched/cpufreq_schedutil.c        CMK9_SUGOV_RATE_LIMIT
 #   [6] kernel/sched/cpufreq_schedutil.c        CMK9_SUGOV_KTHREAD_PRIORITY
@@ -128,18 +128,15 @@ if not m2:
 
 guard = (
     "#ifdef CONFIG_KSU_SUSFS_SUS_MAP\n"
+    "\t\tdown_read(&mm->mmap_sem); /* find_vma() + vm_file deref need mmap_sem */\n"
     "\t\tvma = find_vma(mm, addr);\n"
-    "\t\tif (vma && vma->vm_file) {\n"
-    "\t\t\tstruct inode *inode = file_inode(vma->vm_file);\n"
-    "\t\t\tif (SUSFS_IS_INODE_SUS_MAP(inode)) {\n"
-    "\t\t\t\tif (write) {\n"
-    "\t\t\t\t\tcopied = -EFAULT;\n"
-    "\t\t\t\t} else {\n"
-    "\t\t\t\t\tcopied = -EIO;\n"
-    "\t\t\t\t}\n"
-    "\t\t\t\tbreak;\n"
-    "\t\t\t}\n"
+    "\t\tif (vma && vma->vm_start <= addr && vma->vm_file &&\n"
+    "\t\t    SUSFS_IS_INODE_SUS_MAP(file_inode(vma->vm_file))) {\n"
+    "\t\t\tup_read(&mm->mmap_sem);\n"
+    "\t\t\tcopied = write ? -EFAULT : -EIO;\n"
+    "\t\t\tbreak;\n"
     "\t\t}\n"
+    "\t\tup_read(&mm->mmap_sem);\n"
     "#endif\n"
 )
 src = src[:m2.end()] + guard + src[m2.end():]
@@ -155,72 +152,46 @@ grep -q "SUSFS_IS_INODE_SUS_MAP" "$BASE_C" || \
 log "VERIFIED: SUS_MAP guard present in $BASE_C"
 
 # ─────────────────────────────────────────────────────────────────────────
-# [3] fs/namei.c extra sus_path sub-path denial
+# [3] fs/namei.c sus_path sub-path denial — VERIFY ONLY (no patch applied)
+#     The former CMK9_NAMEI_SUS_PATH_RECHECK block re-ran, right after may_lookup(),
+#     the identical susfs_is_inode_sus_path(nd->path.dentry->d_inode) test that the
+#     KSU/SUSFS integration patch already performs at the top of the link_path_walk()
+#     loop. nd->path.dentry cannot change in between, so it was dead duplicate code.
+#     This section now only proves the primary hook exists (fail closed if not).
 # ─────────────────────────────────────────────────────────────────────────
-log "=== [3/7] fs/namei.c extra sus_path sub-path denial ==="
-export NAMEI_MARKER="CMK9_NAMEI_SUS_PATH_RECHECK"
+log "=== [3/7] fs/namei.c sus_path sub-path denial (verify only) ==="
 export NAMEI_C="fs/namei.c"
 
 [[ -f "$NAMEI_C" ]] || fatal "$NAMEI_C not found"
 
-grep -q "susfs_is_inode_sus_path" "$NAMEI_C" || \
-  fatal "no susfs_is_inode_sus_path call sites found — base regressed, primary sus_path hooks missing"
-log "VERIFIED: pre-existing fs/namei.c sus_path hooks intact"
-
-if grep -q "$NAMEI_MARKER" "$NAMEI_C"; then
-  log "$NAMEI_C: sus_path sub-path re-check already present — skipping"
-else
-  python3 << 'PYEOF'
-
+python3 << 'PYEOF'
 import os, re, sys
 from pathlib import Path
 
-MARKER = os.environ["NAMEI_MARKER"]
-p = Path(os.environ["NAMEI_C"])
-src = p.read_text()
-
+src = Path(os.environ["NAMEI_C"]).read_text()
 pattern = re.compile(
-    r"(\t/\* At this point we know we have a real path component\. \*/\n"
-    r"\tfor\(;;\) \{\n"
+    r"\tfor\(;;\) {\n"
     r"\t\tu64 hash_len;\n"
     r"\t\tint type;\n\n"
     r"#ifdef CONFIG_KSU_SUSFS_SUS_PATH\n"
     r"\t\tstruct dentry \*dentry = nd->path\.dentry;\n"
-    r"\t\tif \(dentry->d_inode && susfs_is_inode_sus_path\(dentry->d_inode\)\) \{\n"
-    r"\t\t\t// - No need to dput\(\) here\n"
-    r"\t\t\t// - return -ENOENT here since it is walking the sub path of sus path\n"
+    r"\t\tif \(dentry->d_inode && susfs_is_inode_sus_path\(dentry->d_inode\)\) {\n"
+    r"(?:\t\t\t//[^\n]*\n)*"
     r"\t\t\treturn -ENOENT;\n"
-    r"\t\t\}\n"
+    r"\t\t}\n"
     r"#endif\n\n"
     r"\t\terr = may_lookup\(nd\);\n"
-    r"\t\tif \(err\)\n"
-    r"\t\t\treturn err;\n)"
 )
-
-m = pattern.search(src)
-if not m:
-    print("FATAL: link_path_walk() sus_path anchor not found — base has changed", file=sys.stderr)
+n = len(pattern.findall(src))
+if n != 1:
+    print(f"FATAL: expected exactly 1 primary sus_path hook before may_lookup() in link_path_walk(), found {n}", file=sys.stderr)
     sys.exit(1)
-
-recheck = (
-    "#ifdef CONFIG_KSU_SUSFS_SUS_PATH\n"
-    "\t\t{\n"
-    "\t\tstruct dentry *dentry = nd->path.dentry; /* " + MARKER + " */\n"
-    "\t\tif (dentry->d_inode && susfs_is_inode_sus_path(dentry->d_inode)) {\n"
-    "\t\t\t// - No need to dput() here\n"
-    "\t\t\t// - return -ENOENT here since it is walking the sub path of sus path\n"
-    "\t\t\treturn -ENOENT;\n"
-    "\t\t}\n"
-    "\t\t}\n"
-    "#endif\n\n"
-)
-src = src[:m.end()] + recheck + src[m.end():]
-
-p.write_text(src)
-print(f"{p}: sus_path sub-path re-check applied after may_lookup() (marker: {MARKER})")
+if "CMK9_NAMEI_SUS_PATH_RECHECK" in src:
+    print("FATAL: stale duplicate CMK9_NAMEI_SUS_PATH_RECHECK block present in fs/namei.c", file=sys.stderr)
+    sys.exit(1)
+print("fs/namei.c: primary sus_path hook present exactly once; no duplicate recheck")
 PYEOF
-  log "PASS: namei.c sus_path sub-path re-check applied"
-fi
+log "VERIFIED: fs/namei.c primary sus_path hook intact (no duplicate re-check)"
 
 # ─────────────────────────────────────────────────────────────────────────
 # [4] kernel/sched/fair.c scheduler tuning (same sed edits as the full script)
@@ -473,7 +444,6 @@ fi
 chk() { grep -q "$2" "$3" || fatal "$1 — marker '$2' missing in $3"; }
 chk "UFC short-circuit"      CMK9_UFC_SHORT_CIRCUIT       drivers/cpufreq/exynos-ufc.c
 chk "mem_rw SUS_MAP guard"   CMK9_MEM_RW_SUS_MAP_GUARD    fs/proc/base.c
-chk "namei sus_path recheck" CMK9_NAMEI_SUS_PATH_RECHECK  fs/namei.c
 chk "sugov rate limit"       CMK9_SUGOV_RATE_LIMIT        kernel/sched/cpufreq_schedutil.c
 chk "sugov kthread prio"     CMK9_SUGOV_KTHREAD_PRIORITY  kernel/sched/cpufreq_schedutil.c
 chk "sugov_init rate limit"  CMK9_SUGOV_INIT_RATE_LIMIT   kernel/sched/cpufreq_schedutil.c
