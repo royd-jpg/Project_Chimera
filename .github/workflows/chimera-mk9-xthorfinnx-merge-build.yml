@@ -1,9 +1,15 @@
-name: Project Chimera Mk9 — xthorfinnx/16 boot-first kernel build v.20261002-r3
+name: Project Chimera Mk9 — xthorfinnx/16 boot-first kernel build v.20261002-r4
 # ─────────────────────────────────────────────────────────────────────────────
 # VERSION HISTORY (append-only; earlier entries condensed — the original file's
 # full text was truncated mid-entry at v.20260822a in the copy I worked from.
 # Append your pre-v.20260928 history here before committing.)
 #
+# v.20261002-r4 — overlay_profile input (full|lite|none; default full; only effective when the
+#   overlay is active). lite = patches/apply_chimera_overlay_lite.sh (UFC, mem_rw SUS_MAP, namei
+#   sus_path, sugov x3, fair.c). hooks.c selinux_cred + stack-protector + chimera-device-specific.cfg
+#   are applied in every active profile. FIX: stack-protector edit appended CONFIG_CC_STACKPROTECTOR=y,
+#   which is a hidden def_bool in this tree; the choice defaulted to NONE (run 36988907877: final.config
+#   had CC_STACKPROTECTOR_NONE=y). Now selects CC_STACKPROTECTOR_REGULAR and the config guard requires it.
 # v.20261002-r3 — Branding: brand options are now "-Chimera_Mk9r2" and "-c9r2x[git7]"
 #   ('-c9r2x' + first 7 hex of base_ref; default). Artifacts are uploaded as SEPARATE,
 #   UNZIPPED files (actions/upload-artifact@v7, archive: false — single file per artifact,
@@ -854,8 +860,11 @@ jobs:
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
-          sed -i '/^CONFIG_CC_STACKPROTECTOR_STRONG=/d;/^CONFIG_CC_STACKPROTECTOR=/d' "$DEFCONFIG"
-          printf '# CONFIG_CC_STACKPROTECTOR_STRONG is not set\nCONFIG_CC_STACKPROTECTOR=y\n' >> "$DEFCONFIG"
+          # CONFIG_CC_STACKPROTECTOR is a hidden def_bool selected by the choice
+          # (NONE | REGULAR | STRONG); setting it directly is ignored and the choice
+          # falls back to NONE. Select the choice member instead.
+          sed -i -E '/^(# )?CONFIG_CC_STACKPROTECTOR(_NONE|_REGULAR|_STRONG)?([= ]|$)/d' "$DEFCONFIG"
+          printf '# CONFIG_CC_STACKPROTECTOR_NONE is not set\nCONFIG_CC_STACKPROTECTOR_REGULAR=y\n# CONFIG_CC_STACKPROTECTOR_STRONG is not set\n' >> "$DEFCONFIG"
           python3 - <<'PYEOF'
           import re, sys
           from pathlib import Path
@@ -1053,7 +1062,7 @@ jobs:
           REQUIRED=(CONFIG_KSU CONFIG_KSU_MANUAL_HOOK CONFIG_KSU_SUSFS CONFIG_KSU_SUSFS_SUS_PATH CONFIG_THREAD_INFO_IN_TASK CONFIG_SECURITY_SELINUX CONFIG_SOC_EXYNOS9810 CONFIG_DTS_9810_STAR2)
           FORBIDDEN=(CONFIG_RKP_KDP CONFIG_UH_RKP CONFIG_TIMA CONFIG_TIMA_LKMAUTH CONFIG_FIVE CONFIG_SEC_RESTRICT_ROOTING CONFIG_SEC_RESTRICT_SETUID CONFIG_SECURITY_DEFEX CONFIG_KNOX_KAP)
           if [[ "$APPLY_OVERLAY" == "true" ]]; then
-            REQUIRED+=(CONFIG_KSU_SUSFS_SUS_MAP CONFIG_KSU_SUSFS_SUS_KSTAT CONFIG_HZ_300 CONFIG_TCP_CONG_ADVANCED CONFIG_TCP_CONG_BBR CONFIG_TCP_CONG_CUBIC CONFIG_DEFAULT_BBR CONFIG_NET_SCHED CONFIG_NET_SCH_FQ CONFIG_NET_SCH_FQ_CODEL CONFIG_MFD_MADERA CONFIG_MFD_MADERA_SPI CONFIG_MFD_CS47L92 CONFIG_PINCTRL_MADERA CONFIG_GPIO_MADERA)
+            REQUIRED+=(CONFIG_CC_STACKPROTECTOR CONFIG_CC_STACKPROTECTOR_REGULAR CONFIG_KSU_SUSFS_SUS_MAP CONFIG_KSU_SUSFS_SUS_KSTAT CONFIG_HZ_300 CONFIG_TCP_CONG_ADVANCED CONFIG_TCP_CONG_BBR CONFIG_TCP_CONG_CUBIC CONFIG_DEFAULT_BBR CONFIG_NET_SCHED CONFIG_NET_SCH_FQ CONFIG_NET_SCH_FQ_CODEL CONFIG_MFD_MADERA CONFIG_MFD_MADERA_SPI CONFIG_MFD_CS47L92 CONFIG_PINCTRL_MADERA CONFIG_GPIO_MADERA)
           fi
           FAIL=0
           : > "$ABS_LOG/config-guard.log"
@@ -1061,6 +1070,11 @@ jobs:
             if grep -qE "^${s}=y$" "$CFG"; then echo "OK: $s=y" | tee -a "$ABS_LOG/config-guard.log"
             else echo "FATAL: $s not enabled" | tee -a "$ABS_LOG/config-guard.log"; FAIL=1; fi
           done
+          if [[ "$APPLY_OVERLAY" == "true" ]]; then
+            for s in CONFIG_CC_STACKPROTECTOR_NONE CONFIG_CC_STACKPROTECTOR_STRONG; do
+              if grep -qE "^${s}=y$" "$CFG"; then echo "FATAL: $s=y (overlay requires CC_STACKPROTECTOR_REGULAR)" | tee -a "$ABS_LOG/config-guard.log"; FAIL=1; fi
+            done
+          fi
           for s in "${FORBIDDEN[@]}"; do
             if grep -qE "^${s}=y$" "$CFG"; then
               if [[ "$APPLY_OVERLAY" == "true" ]]; then echo "FATAL: $s=y (chimera-full requires off)" | tee -a "$ABS_LOG/config-guard.log"; FAIL=1
