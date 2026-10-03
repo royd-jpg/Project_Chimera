@@ -1,9 +1,17 @@
-name: Project Chimera Mk9 — xthorfinnx/16 boot-first kernel build v.20261002-r5
+name: Project Chimera Mk9 — xthorfinnx/16 boot-first kernel build v.20261003-r1
 # ─────────────────────────────────────────────────────────────────────────────
-# VERSION HISTORY (append-only; earlier entries condensed — the original file's
-# full text was truncated mid-entry at v.20260822a in the copy I worked from.
-# Append your pre-v.20260928 history here before committing.)
+# VERSION HISTORY (append-only; earlier entries condensed)
 #
+# v.20261003-r1 — Hardening/refactor (no redesign). (1) Least privilege: top-level contents: read; the
+#   GitHub release moved to a separate 'release' job (needs: build; the only contents: write). It downloads the
+#   unzipped artifacts, verifies them against SHA256SUMS and renders the body from manifest.json.
+#   (2) CHIMERA_REF is an immutable 40-hex commit (was branch lineage-23.2-ksun3-susfs2); the checkout is
+#   verified against it and CHIMERA_SHA is still recorded. (3) overlay_profile 'none' renamed 'security-only'
+#   (behavior unchanged: hooks.c selinux_cred + stack-protector + chimera-device-specific.cfg; no mk/grep source
+#   overlays). (4) Config guard split into BASE / SECURITY / LITE / FULL symbol sets. (5) Input dry_run replaced by
+#   build_scope = full | config-only (config-only compiles nothing). (6) Default toolchain is now gcc (the only
+#   compile-tested option); all others are labeled experimental. (7) Release notes / manifest now say
+#   "compile-verified only; no claim of boot/root/SUSFS proof".
 # v.20261002-r5 — Kernel-side overlay fixes. (1) mem_rw() SUS_MAP guard now holds mm->mmap_sem (read)
 #   around find_vma() + the vma->vm_file deref (was lockless: UAF/oops race with munmap) and requires
 #   vma->vm_start <= addr (find_vma returns the NEXT vma for addr in a hole). (2) Removed the
@@ -55,9 +63,11 @@ name: Project Chimera Mk9 — xthorfinnx/16 boot-first kernel build v.20261002-r
 # v.20260822a — AArch64 VDSO linker failure fix (-fuse-ld=lld).
 # ─────────────────────────────────────────────────────────────────────────────
 
-# contents: write is required ONLY for do_release (creates a tag + release).
+# Least privilege: the build job only reads. The separate 'release' job (do_release) is the ONLY place
+# with contents: write (it creates a tag + release). Artifact upload/download and caches use the runtime
+# token, not GITHUB_TOKEN permissions.
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: chimera-mk9-${{ github.event.inputs.profile }}-${{ github.event.inputs.overlay_profile }}-${{ github.event.inputs.toolchain }}-${{ github.event.inputs.base_ref }}
@@ -74,11 +84,11 @@ on:
         default: boot-first
 
       toolchain:
-        description: "Toolchain: gcc/llvm22/llvm21/llvm20/aosp23/aosp22/aosp21/aosp20/aosp19/neutron19/neutron23/neutron24/zyc_stable/weebx"
+        description: "gcc = DEFAULT, compile-tested (Ubuntu 24.04 gcc-aarch64-linux-gnu 13.3). EXPERIMENTAL — URLs and archive layouts not re-verified in this revision, compile status unknown: llvm22 / llvm21 / llvm20 / aosp23 / aosp22 / aosp21 / aosp20 / aosp19 / neutron19 / neutron23 / neutron24 / zyc_stable / weebx"
         required: true
         type: choice
         options: [gcc, llvm22, llvm21, llvm20, aosp23, aosp22, aosp21, aosp20, aosp19, neutron19, neutron23, neutron24, zyc_stable, weebx]
-        default: llvm22
+        default: gcc
 
       apply_optional_overlay:
         description: "Apply the optional Chimera overlay/tuning even in boot-first"
@@ -87,10 +97,10 @@ on:
         default: false
 
       overlay_profile:
-        description: "Chimera mk/grep overlay set (only used when the overlay is active: profile=chimera-full or apply_optional_overlay). full = apply_chimera_overlay_patches.sh (all 9 sections incl. DTS + madera). lite = apply_chimera_overlay_lite.sh (UFC, mem_rw SUS_MAP, namei sus_path, sugov x3, fair.c tuning only). none = no Chimera mk/grep overlays. hooks.c selinux_cred + stack-protector + chimera-device-specific.cfg are applied in ALL three."
+        description: "Chimera source-overlay set. Only used when the overlay is active (profile=chimera-full or apply_optional_overlay=true); otherwise ignored. full = apply_chimera_overlay_patches.sh (all 9 sections incl. DTS + madera). lite = apply_chimera_overlay_lite.sh (UFC, mem_rw SUS_MAP, namei sus_path verify, sugov x3, fair.c tuning only). security-only = NO mk/grep source overlays. In ALL three, the hooks.c selinux_cred() pass, the stack-protector edit and chimera-device-specific.cfg are still applied (that cfg also carries non-security symbols such as HZ_300/BBR/Madera). For an unmodified base use profile=boot-first with apply_optional_overlay=false."
         required: false
         type: choice
-        options: [full, lite, none]
+        options: [full, lite, security-only]
         default: full
 
       relax_bcmdhd_werror:
@@ -99,20 +109,21 @@ on:
         type: boolean
         default: true
 
-      dry_run:
-        description: "Validate + configure only — skip build and packaging"
+      build_scope:
+        description: "full = compile Image/vmlinux/dtbs, verify hook symbols, collect artifacts (+ optional packaging / release). config-only = apply patches, run Kconfig and validate the final .config, then STOP: it does NOT compile, link, boot, or validate KSU/SUSFS runtime behavior or packaging (package_anykernel and do_release are ignored)."
         required: false
-        type: boolean
-        default: false
+        type: choice
+        options: [full, config-only]
+        default: full
 
       package_anykernel:
-        description: "Also build an AnyKernel3 ZIP + raw dtb concat (packaging is UNVERIFIED for this device)"
+        description: "Also build an AnyKernel3 ZIP + raw dtb concat (packaging is UNVERIFIED for this device). Only with build_scope=full."
         required: false
         type: boolean
         default: false
 
       do_release:
-        description: "Create a GitHub prerelease (creates a tag — repository mutation)"
+        description: "Create a GitHub prerelease (creates a tag — repository mutation). Only with build_scope=full; runs in a separate release job with contents: write."
         required: false
         type: boolean
         default: false
@@ -220,7 +231,11 @@ on:
 
 env:
   CHIMERA_REPO: "https://github.com/royd-jpg/Project_Chimera.git"
-  CHIMERA_REF: "lineage-23.2-ksun3-susfs2"
+  # Immutable pin (40-hex commit) of royd-jpg/Project_Chimera. Source branch: lineage-23.2-ksun3-susfs2
+  # (tip when pinned, 2026-10-03: "Update workflow for Project Chimera Mk9 to v.20261002-r5"; contains the
+  # mem_rw mmap_sem fix and the verify-only namei section). Bump deliberately after reviewing the overlay
+  # scripts/fragments; the checkout is verified against this value.
+  CHIMERA_REF: "7fe07e9c414d2278ddcedaf99d598e855b0248a7"
 
   # KSU-Next + SUSFS donor (pinned by integration_base / integration_ref / ksu_commit inputs)
   GV_REPO: "gavdoc38/android_kernel_samsung_exynos9810"
@@ -273,6 +288,9 @@ env:
   RELAX_BCMDHD_WERROR: ${{ inputs.relax_bcmdhd_werror }}
   APPLY_OVERLAY: ${{ inputs.profile == 'chimera-full' || inputs.apply_optional_overlay }}
   IN_OVERLAY_PROFILE: ${{ inputs.overlay_profile }}
+  IN_BUILD_SCOPE: ${{ inputs.build_scope }}
+  IN_PACKAGE_ANYKERNEL: ${{ inputs.package_anykernel }}
+  IN_DO_RELEASE: ${{ inputs.do_release }}
   # 'off' when the overlay is not active (boot-first without apply_optional_overlay); else the chosen profile.
   OVERLAY_PROFILE_EFFECTIVE: ${{ (inputs.profile == 'chimera-full' || inputs.apply_optional_overlay) && inputs.overlay_profile || 'off' }}
 
@@ -292,7 +310,9 @@ jobs:
           set -Eeuo pipefail
           FAIL=0
           [[ "$IN_PROFILE" =~ ^(boot-first|chimera-full)$ ]] || { echo "FATAL: bad profile '$IN_PROFILE'" >&2; FAIL=1; }
-          [[ "$IN_OVERLAY_PROFILE" =~ ^(full|lite|none)$ ]] || { echo "FATAL: bad overlay_profile '$IN_OVERLAY_PROFILE'" >&2; FAIL=1; }
+          [[ "$IN_OVERLAY_PROFILE" =~ ^(full|lite|security-only)$ ]] || { echo "FATAL: bad overlay_profile '$IN_OVERLAY_PROFILE'" >&2; FAIL=1; }
+          [[ "$IN_BUILD_SCOPE" =~ ^(full|config-only)$ ]] || { echo "FATAL: bad build_scope '$IN_BUILD_SCOPE'" >&2; FAIL=1; }
+          [[ "$CHIMERA_REF" =~ ^[0-9a-f]{40}$ ]] || { echo "FATAL: CHIMERA_REF must be an immutable 40-hex commit SHA" >&2; FAIL=1; }
           [[ "$IN_TOOLCHAIN" =~ ^(gcc|llvm22|llvm21|llvm20|aosp23|aosp22|aosp21|aosp20|aosp19|neutron19|neutron23|neutron24|zyc_stable|weebx)$ ]] || { echo "FATAL: bad toolchain '$IN_TOOLCHAIN'" >&2; FAIL=1; }
           [[ "$IN_BASE_REF" =~ ^[0-9a-f]{40}$ ]] || { echo "FATAL: base_ref must be a full 40-hex SHA" >&2; FAIL=1; }
           [[ "$IN_INT_BASE" =~ ^[0-9a-f]{40}$ ]] || { echo "FATAL: integration_base must be a full 40-hex SHA" >&2; FAIL=1; }
@@ -307,7 +327,10 @@ jobs:
           if [[ "$APPLY_OVERLAY" != "true" && "$IN_OVERLAY_PROFILE" != "full" ]]; then
             echo "::notice::overlay_profile=$IN_OVERLAY_PROFILE ignored: overlay inactive (profile=$IN_PROFILE, apply_optional_overlay=false)"
           fi
-          echo "PASS: inputs valid (APPLY_OVERLAY=$APPLY_OVERLAY, OVERLAY_PROFILE_EFFECTIVE=$OVERLAY_PROFILE_EFFECTIVE)"
+          if [[ "$IN_BUILD_SCOPE" == "config-only" && ( "$IN_PACKAGE_ANYKERNEL" == "true" || "$IN_DO_RELEASE" == "true" ) ]]; then
+            echo "::notice::build_scope=config-only: package_anykernel / do_release are ignored (nothing is compiled)"
+          fi
+          echo "PASS: inputs valid (APPLY_OVERLAY=$APPLY_OVERLAY, OVERLAY_PROFILE_EFFECTIVE=$OVERLAY_PROFILE_EFFECTIVE, BUILD_SCOPE=$IN_BUILD_SCOPE)"
 
       - name: Resolve build identity inputs
         run: |
@@ -389,14 +412,15 @@ jobs:
           set -Eeuo pipefail
           SHA="$(git rev-parse HEAD)"
           echo "CHIMERA_SHA=$SHA" >> "$GITHUB_ENV"
-          echo "Chimera ref: $CHIMERA_REF  commit: $SHA (branch tip — not an immutable pin)"
+          echo "Chimera pin: $CHIMERA_REF  checked-out commit: $SHA"
+          [[ "$SHA" == "$CHIMERA_REF" ]] || { echo "FATAL: Project_Chimera checkout $SHA != pinned CHIMERA_REF $CHIMERA_REF" >&2; exit 1; }
           NEED=(chimera-ksu-susfs.cfg)
           if [[ "$APPLY_OVERLAY" == "true" ]]; then
             NEED+=(chimera-device-specific.cfg)   # merged in ALL overlay profiles
             case "$IN_OVERLAY_PROFILE" in
               full) NEED+=(patches/apply_chimera_overlay_patches.sh patches/0001-mfd-madera-core-settle-delay-after-reset-release.patch) ;;
               lite) NEED+=(patches/apply_chimera_overlay_lite.sh) ;;
-              none) ;;
+              security-only) ;;   # no mk/grep scripts; hooks.c + stack-protector + device cfg only
             esac
           fi
           MISSING=0
@@ -507,9 +531,14 @@ jobs:
           echo "library written: $CI_LIB"
 
       # ── 4. Toolchain resolution ────────────────────────────────────────────
-      # URLs/layouts below are carried over from the previous workflow revision and were
-      # NOT re-downloaded while authoring this revision — UNVERIFIED — REQUIRES CONFIRMATION
-      # (only the gcc option was compile-tested, with Ubuntu GCC 13.3).
+      # SUPPORT STATUS — only the 'gcc' option (default) was compile-tested (Ubuntu GCC 13.3 cross).
+      # Every other option is EXPERIMENTAL: URLs/layouts carried over from earlier revisions and NOT
+      # re-downloaded or compile-tested here — UNVERIFIED — REQUIRES CONFIRMATION.
+      # Existence-only check on 2026-10-03: the neutron19/23/24 and weebx release assets and the zyc_stable
+      # link file answered HTTP 200 (github-hosted). kernel.org (llvm*), android.googlesource.com (aosp19/21/23)
+      # and gitlab.com (aosp20) could not be reached from the checking environment, so they are unchecked.
+      # aosp20 (mirror 'master') and aosp22 (branch URL) are mutable. Nothing was clearly broken, so no option
+      # was removed.
       - name: Resolve toolchain configuration
         id: tc-resolve
         run: |
@@ -667,7 +696,7 @@ jobs:
           } | tee "$ABS_LOG/toolchain-identity.txt"
 
       - name: Set up ccache
-        if: ${{ !inputs.dry_run }}
+        if: ${{ inputs.build_scope == 'full' }}
         uses: hendrikmuhs/ccache-action@v1.2
         with:
           key: chimera-mk9-${{ inputs.toolchain }}-${{ env.TC_CACHE_KEY }}-${{ env.TC_IDENTITY_HASH }}-${{ github.sha }}
@@ -861,7 +890,9 @@ jobs:
           { grep -rnE --include='Makefile' --include='Kbuild' --include='*.mk' -e '-Werror' "$D" || echo "no -Werror remains in build files"; } | tee "$ABS_LOG/bcmdhd-werror-after.txt"
 
       # ── 7. Optional Chimera overlay (chimera-full / apply_optional_overlay) ─
-      # Retained ONLY for chimera-full. None of this is required for KSU/SUSFS or boot.
+      # Active when profile=chimera-full or apply_optional_overlay=true. overlay_profile (full | lite |
+      # security-only) selects the mk/grep source-overlay set; the hooks.c/stack-protector step below and
+      # chimera-device-specific.cfg apply in ALL active forms. None of this is required for KSU/SUSFS or boot.
       - name: Optional overlay — hooks.c selinux_cred() consistency + stack protector
         if: ${{ env.APPLY_OVERLAY == 'true' }}
         working-directory: ${{ env.KERNEL_DIR }}
@@ -962,13 +993,13 @@ jobs:
           [[ "$FAIL" -eq 0 ]] || exit 1
           echo "PASS: lite overlay markers present (5 mk + 2 fair.c), no DTS tuning"
 
-      - name: Optional overlay — none (no Chimera mk/grep overlays) leak check
-        if: ${{ env.OVERLAY_PROFILE_EFFECTIVE == 'none' }}
+      - name: Optional overlay — security-only (no Chimera mk/grep source overlays) leak check
+        if: ${{ env.OVERLAY_PROFILE_EFFECTIVE == 'security-only' }}
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
           FAIL=0
-          leak() { if grep -q "$1" "$2" 2>/dev/null; then echo "FATAL: marker $1 present in $2 (profile none)"; FAIL=1; fi; }
+          leak() { if grep -q "$1" "$2" 2>/dev/null; then echo "FATAL: marker $1 present in $2 (profile security-only)"; FAIL=1; fi; }
           leak CMK9_UFC_SHORT_CIRCUIT        drivers/cpufreq/exynos-ufc.c
           leak CMK9_MEM_RW_SUS_MAP_GUARD     fs/proc/base.c
           leak CMK9_NAMEI_SUS_PATH_RECHECK   fs/namei.c
@@ -977,7 +1008,7 @@ jobs:
           leak CMK9_SUGOV_KTHREAD_PRIORITY   kernel/sched/cpufreq_schedutil.c
           leak CMK9_SUGOV_INIT_RATE_LIMIT    kernel/sched/cpufreq_schedutil.c
           [[ "$FAIL" -eq 0 ]] || exit 1
-          echo "PASS: overlay_profile=none — no Chimera mk overlay markers present (hooks.c / stack-protector / device cfg still applied)"
+          echo "PASS: overlay_profile=security-only — no Chimera mk overlay markers present (hooks.c / stack-protector / device cfg still applied)"
 
       # ── 8. Kconfig ─────────────────────────────────────────────────────────
       - name: Configure kernel (defconfig + merge + manual-hook mode)
@@ -1064,13 +1095,32 @@ jobs:
         run: |
           set -Eeuo pipefail
           CFG="$ABS_OUT/.config"
-          REQUIRED=(CONFIG_KSU CONFIG_KSU_MANUAL_HOOK CONFIG_KSU_SUSFS CONFIG_KSU_SUSFS_SUS_PATH CONFIG_THREAD_INFO_IN_TASK CONFIG_SECURITY_SELINUX CONFIG_SOC_EXYNOS9810 CONFIG_DTS_9810_STAR2)
+          # Required-symbol sets, appended conditionally below:
+          #   BASE     — always: KSU manual-hook + SUSFS sus_path, plus SoC/DTS/SELinux/task_struct prerequisites.
+          #   SECURITY — any active overlay (security-only | lite | full): stack-protector REGULAR (the edit is
+          #              applied in every active form) and SUSFS sus_kstat.
+          #   LITE     — lite | full: what the mk/grep source overlays need compiled in: SUS_MAP (mem_rw guard is
+          #              #ifdef CONFIG_KSU_SUSFS_SUS_MAP), schedutil (sugov x3), Exynos UFC (UFC short-circuit).
+          #   FULL     — full only: device-cfg symbols asserted only for the full set (DTS + madera patch):
+          #              HZ_300, BBR/FQ/FQ_CoDel network stack, Madera/CS47L92 audio codec.
+          # (chimera-device-specific.cfg is still merged in every active form; lite/security-only just don't assert FULL.)
+          REQUIRED_BASE=(CONFIG_KSU CONFIG_KSU_MANUAL_HOOK CONFIG_KSU_SUSFS CONFIG_KSU_SUSFS_SUS_PATH CONFIG_THREAD_INFO_IN_TASK CONFIG_SECURITY_SELINUX CONFIG_SOC_EXYNOS9810 CONFIG_DTS_9810_STAR2)
+          REQUIRED_SECURITY=(CONFIG_CC_STACKPROTECTOR CONFIG_CC_STACKPROTECTOR_REGULAR CONFIG_KSU_SUSFS_SUS_KSTAT)
+          REQUIRED_LITE=(CONFIG_KSU_SUSFS_SUS_MAP CONFIG_CPU_FREQ_GOV_SCHEDUTIL CONFIG_ARM_EXYNOS_UFC)
+          REQUIRED_FULL=(CONFIG_HZ_300 CONFIG_TCP_CONG_ADVANCED CONFIG_TCP_CONG_BBR CONFIG_TCP_CONG_CUBIC CONFIG_DEFAULT_BBR CONFIG_NET_SCHED CONFIG_NET_SCH_FQ CONFIG_NET_SCH_FQ_CODEL CONFIG_MFD_MADERA CONFIG_MFD_MADERA_SPI CONFIG_MFD_CS47L92 CONFIG_PINCTRL_MADERA CONFIG_GPIO_MADERA)
           FORBIDDEN=(CONFIG_RKP_KDP CONFIG_UH_RKP CONFIG_TIMA CONFIG_TIMA_LKMAUTH CONFIG_FIVE CONFIG_SEC_RESTRICT_ROOTING CONFIG_SEC_RESTRICT_SETUID CONFIG_SECURITY_DEFEX CONFIG_KNOX_KAP)
-          if [[ "$APPLY_OVERLAY" == "true" ]]; then
-            REQUIRED+=(CONFIG_CC_STACKPROTECTOR CONFIG_CC_STACKPROTECTOR_REGULAR CONFIG_KSU_SUSFS_SUS_MAP CONFIG_KSU_SUSFS_SUS_KSTAT CONFIG_HZ_300 CONFIG_TCP_CONG_ADVANCED CONFIG_TCP_CONG_BBR CONFIG_TCP_CONG_CUBIC CONFIG_DEFAULT_BBR CONFIG_NET_SCHED CONFIG_NET_SCH_FQ CONFIG_NET_SCH_FQ_CODEL CONFIG_MFD_MADERA CONFIG_MFD_MADERA_SPI CONFIG_MFD_CS47L92 CONFIG_PINCTRL_MADERA CONFIG_GPIO_MADERA)
-          fi
+          REQUIRED=("${REQUIRED_BASE[@]}")
+          SETS="BASE"
+          case "$OVERLAY_PROFILE_EFFECTIVE" in
+            off) ;;
+            security-only) REQUIRED+=("${REQUIRED_SECURITY[@]}"); SETS+="+SECURITY" ;;
+            lite)          REQUIRED+=("${REQUIRED_SECURITY[@]}" "${REQUIRED_LITE[@]}"); SETS+="+SECURITY+LITE" ;;
+            full)          REQUIRED+=("${REQUIRED_SECURITY[@]}" "${REQUIRED_LITE[@]}" "${REQUIRED_FULL[@]}"); SETS+="+SECURITY+LITE+FULL" ;;
+            *) echo "FATAL: unexpected OVERLAY_PROFILE_EFFECTIVE '$OVERLAY_PROFILE_EFFECTIVE'" >&2; exit 1 ;;
+          esac
           FAIL=0
           : > "$ABS_LOG/config-guard.log"
+          echo "guard symbol sets: $SETS (overlay profile: $OVERLAY_PROFILE_EFFECTIVE)" | tee -a "$ABS_LOG/config-guard.log"
           for s in "${REQUIRED[@]}"; do
             if grep -qE "^${s}=y$" "$CFG"; then echo "OK: $s=y" | tee -a "$ABS_LOG/config-guard.log"
             else echo "FATAL: $s not enabled" | tee -a "$ABS_LOG/config-guard.log"; FAIL=1; fi
@@ -1082,7 +1132,7 @@ jobs:
           fi
           for s in "${FORBIDDEN[@]}"; do
             if grep -qE "^${s}=y$" "$CFG"; then
-              if [[ "$APPLY_OVERLAY" == "true" ]]; then echo "FATAL: $s=y (chimera-full requires off)" | tee -a "$ABS_LOG/config-guard.log"; FAIL=1
+              if [[ "$APPLY_OVERLAY" == "true" ]]; then echo "FATAL: $s=y (active overlay requires off)" | tee -a "$ABS_LOG/config-guard.log"; FAIL=1
               else echo "INFO: $s=y (boot-first: left as base has it)" | tee -a "$ABS_LOG/config-guard.log"; fi
             else echo "OK: $s not =y" | tee -a "$ABS_LOG/config-guard.log"; fi
           done
@@ -1091,9 +1141,13 @@ jobs:
           grep -E '^(CONFIG_KSU|CONFIG_SECURITY|CONFIG_RKP|CONFIG_TIMA|CONFIG_FIVE|CONFIG_LOCALVERSION|CONFIG_KPROBES|CONFIG_KRETPROBES|CONFIG_DEBUG_INFO_BTF|CONFIG_HZ_)' "$CFG" > "$ABS_LOG/config-summary.txt" || true
           [[ "$FAIL" -eq 0 ]] || exit 1
 
-      # ── 9. Build ───────────────────────────────────────────────────────────
+      - name: Config-only scope — stop notice
+        if: ${{ inputs.build_scope == 'config-only' }}
+        run: echo "::notice::build_scope=config-only — config and .config validated only; no compile, link, packaging, boot or KSU/SUSFS runtime validation was performed."
+
+      # ── 9. Build (build_scope=full only) ───────────────────────────────────
       - name: Build kernel Image, vmlinux and DTBs
-        if: ${{ !inputs.dry_run }}
+        if: ${{ inputs.build_scope == 'full' }}
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
@@ -1111,7 +1165,7 @@ jobs:
           chimera_make -j"$(nproc)" "KCFLAGS=$BUILD_KCFLAGS" Image vmlinux dtbs 2>&1 | tee "$ABS_LOG/build.log"
 
       - name: Verify compiler identity, kernel release, hook symbols and DTB
-        if: ${{ !inputs.dry_run }}
+        if: ${{ inputs.build_scope == 'full' }}
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
@@ -1160,7 +1214,7 @@ jobs:
           echo "PASS: symbol/identity checks"
 
       - name: Collect artifacts and metadata
-        if: ${{ !inputs.dry_run }}
+        if: ${{ inputs.build_scope == 'full' }}
         run: |
           set -Eeuo pipefail
           BOOT="$ABS_OUT/arch/arm64/boot"
@@ -1195,7 +1249,8 @@ jobs:
           m["compatibility"] = ("Chimera Mk9 compatibility here means building the modified Exynos 9810 Linux 4.9.337 "
                                 "vendor kernel for potential use with the Chimera Mk9 LineageOS 23.2 userspace based on "
                                 "Android 16 QPR2. Runtime compatibility requires physical-device testing.")
-          m["disclaimer"] = ("CI build only. Not proof of boot, root, SUSFS, SELinux, Samsung security, "
+          m["disclaimer"] = ("Compile-verified only; no claim of boot, root or SUSFS proof. CI build only. "
+                             "Not proof of boot, root, SUSFS, SELinux, Samsung security, "
                              "flashability, vendor-blob, camera/modem/audio/thermal/charging, recovery, "
                              "boot-image, Android 16 QPR2 runtime, or any common-kernel ABI compatibility.")
           files = {str(p.relative_to(art)): sha(p) for p in sorted(art.rglob("*")) if p.is_file() and p.name not in ("manifest.json","SHA256SUMS")}
@@ -1207,7 +1262,7 @@ jobs:
 
       # ── 10. Optional AnyKernel3 packaging (UNVERIFIED for this device) ─────
       - name: Package AnyKernel3 ZIP (opt-in, UNVERIFIED packaging)
-        if: ${{ !inputs.dry_run && inputs.package_anykernel }}
+        if: ${{ inputs.build_scope == 'full' && inputs.package_anykernel }}
         run: |
           set -Eeuo pipefail
           git clone --depth=1 "$ANYKERNEL_REPO" "$ANYKERNEL_DIR"
@@ -1257,7 +1312,7 @@ jobs:
       # actions/upload-artifact@v7 with archive: false uploads ONE file, UNZIPPED; the
       # artifact name is the file name (the 'name' input is ignored). Hence one step per file.
       - name: Upload Image
-        if: ${{ !inputs.dry_run }}
+        if: ${{ inputs.build_scope == 'full' }}
         uses: actions/upload-artifact@v7
         with:
           path: artifacts/Image
@@ -1265,7 +1320,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload final.config
-        if: ${{ !inputs.dry_run }}
+        if: ${{ inputs.build_scope == 'full' }}
         uses: actions/upload-artifact@v7
         with:
           path: artifacts/final.config
@@ -1273,7 +1328,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload star2lte DTB
-        if: ${{ !inputs.dry_run }}
+        if: ${{ inputs.build_scope == 'full' }}
         uses: actions/upload-artifact@v7
         with:
           # basename of STAR2_DTB_REL (dts/exynos/exynos9810-star2lte_eur_open_26.dtb)
@@ -1282,7 +1337,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload System.map
-        if: ${{ !inputs.dry_run }}
+        if: ${{ inputs.build_scope == 'full' }}
         uses: actions/upload-artifact@v7
         with:
           path: artifacts/System.map
@@ -1290,7 +1345,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload integration patch
-        if: ${{ !inputs.dry_run }}
+        if: ${{ inputs.build_scope == 'full' }}
         uses: actions/upload-artifact@v7
         with:
           path: artifacts/gavdoc38-ksun-susfs-integration.patch
@@ -1298,7 +1353,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload manifest.json
-        if: ${{ !inputs.dry_run }}
+        if: ${{ inputs.build_scope == 'full' }}
         uses: actions/upload-artifact@v7
         with:
           path: artifacts/manifest.json
@@ -1306,7 +1361,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload SHA256SUMS
-        if: ${{ !inputs.dry_run }}
+        if: ${{ inputs.build_scope == 'full' }}
         uses: actions/upload-artifact@v7
         with:
           path: artifacts/SHA256SUMS
@@ -1314,7 +1369,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload dtb.img (opt-in packaging, UNVERIFIED)
-        if: ${{ !inputs.dry_run && inputs.package_anykernel }}
+        if: ${{ inputs.build_scope == 'full' && inputs.package_anykernel }}
         uses: actions/upload-artifact@v7
         with:
           path: artifacts/dtb.img
@@ -1322,45 +1377,12 @@ jobs:
           if-no-files-found: error
 
       - name: Upload AnyKernel3 ZIP (opt-in packaging, UNVERIFIED)
-        if: ${{ !inputs.dry_run && inputs.package_anykernel }}
+        if: ${{ inputs.build_scope == 'full' && inputs.package_anykernel }}
         uses: actions/upload-artifact@v7
         with:
           path: ${{ env.ZIP_PATH }}
           archive: false
           if-no-files-found: error
-
-      - name: Create GitHub prerelease
-        if: ${{ inputs.do_release && !inputs.dry_run }}
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.BUILD_TAG }}
-          name: "Chimera Mk9 — ${{ inputs.profile }} / ${{ inputs.toolchain }} (UNTESTED)"
-          prerelease: true
-          draft: false
-          body: |
-            CI build only — NOT boot-tested. Not proof of boot, root, SUSFS, SELinux,
-            Samsung security, flashability, vendor-blob, camera/modem/audio/thermal/charging,
-            recovery, boot-image, Android 16 QPR2 runtime or any ABI compatibility.
-
-            Chimera Mk9 compatibility here means building the modified Exynos 9810 Linux 4.9.337 vendor kernel for potential use with the Chimera Mk9 LineageOS 23.2 userspace based on Android 16 QPR2. Runtime compatibility requires physical-device testing.
-
-            | Field | Value |
-            |---|---|
-            | Kernel base | `${{ inputs.base_repo }}@${{ env.BASE_COMMIT }}` |
-            | KSU/SUSFS donor | `${{ env.GV_REPO }}` `${{ inputs.integration_base }}` → `${{ inputs.integration_ref }}` |
-            | Integration patch SHA-256 | `${{ env.INT_PATCH_SHA256_ACTUAL }}` |
-            | KernelSU-Next | `${{ env.KSU_COMMIT_ACTUAL }}` |
-            | Chimera | `${{ env.CHIMERA_REF }}@${{ env.CHIMERA_SHA }}` |
-            | Profile / overlay / overlay profile | `${{ inputs.profile }}` / `${{ env.APPLY_OVERLAY }}` / `${{ env.OVERLAY_PROFILE_EFFECTIVE }}` |
-            | Compiler | `${{ env.COMPILER_VERSION }}` |
-            | Kernel release | `${{ env.KERNEL_RELEASE_ACTUAL }}` |
-            | Final config SHA-256 | `${{ env.FINAL_CONFIG_HASH }}` |
-          files: |
-            artifacts/Image
-            artifacts/manifest.json
-            artifacts/SHA256SUMS
-            artifacts/final.config
-            artifacts/gavdoc38-ksun-susfs-integration.patch
 
       - name: Failure diagnostics
         if: ${{ failure() }}
@@ -1400,7 +1422,12 @@ jobs:
         run: |
           {
             echo "## Chimera Mk9 — ${IN_PROFILE} / ${IN_TOOLCHAIN}"
+            echo "- build scope: ${IN_BUILD_SCOPE}"
+            if [[ "$IN_BUILD_SCOPE" == "config-only" ]]; then
+              echo "- **config-only**: patches applied and final .config validated; NOTHING was compiled, linked, packaged or released. No KSU/SUSFS runtime behavior, boot or packaging was validated."
+            fi
             echo "- overlay applied: ${APPLY_OVERLAY} (profile: ${OVERLAY_PROFILE_EFFECTIVE})"
+            echo "- Project_Chimera pin: ${CHIMERA_SHA:-n/a}"
             echo "- brand: ${BRAND:-n/a}"
             echo "- kernel base: ${IN_BASE_REPO}@${BASE_COMMIT:-n/a}"
             echo "- KSU/SUSFS donor: ${GV_REPO} ${IN_INT_BASE:0:12} -> ${IN_INT_REF:0:12} (patch sha256 ${INT_PATCH_SHA256_ACTUAL:-n/a})"
@@ -1419,3 +1446,111 @@ jobs:
           name: chimera-mk9-logs-${{ inputs.profile }}-${{ inputs.toolchain }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: logs/**
           if-no-files-found: warn
+
+  # Separate job: the ONLY place with contents: write. Runs only when requested and the build job succeeded.
+  # Compile-verified only — no claim of boot/root/SUSFS proof.
+  release:
+    name: Release ${{ inputs.profile }} / ${{ inputs.toolchain }}
+    needs: build
+    if: ${{ inputs.do_release && inputs.build_scope == 'full' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      # download-artifact@v8 is required for the unzipped (archive: false) artifacts uploaded by upload-artifact@v7.
+      - name: Download Image
+        uses: actions/download-artifact@v8
+        with:
+          name: Image
+          path: release-assets
+
+      - name: Download final.config
+        uses: actions/download-artifact@v8
+        with:
+          name: final.config
+          path: release-assets
+
+      - name: Download manifest.json
+        uses: actions/download-artifact@v8
+        with:
+          name: manifest.json
+          path: release-assets
+
+      - name: Download SHA256SUMS
+        uses: actions/download-artifact@v8
+        with:
+          name: SHA256SUMS
+          path: release-assets
+
+      - name: Download integration patch
+        uses: actions/download-artifact@v8
+        with:
+          name: gavdoc38-ksun-susfs-integration.patch
+          path: release-assets
+
+      - name: Verify assets against SHA256SUMS and render release body from manifest.json
+        id: prep
+        run: |
+          set -Eeuo pipefail
+          cd release-assets
+          for f in Image final.config manifest.json SHA256SUMS gavdoc38-ksun-susfs-integration.patch; do
+            [[ -s "$f" ]] || { echo "FATAL: missing/empty release asset $f" >&2; exit 1; }
+          done
+          grep -E '^[0-9a-f]{64}  (Image|final\.config|gavdoc38-ksun-susfs-integration\.patch)$' SHA256SUMS > /tmp/release-sums.txt || true
+          [[ "$(wc -l < /tmp/release-sums.txt)" -eq 3 ]] || { echo "FATAL: SHA256SUMS lacks entries for Image/final.config/integration patch" >&2; exit 1; }
+          sha256sum -c /tmp/release-sums.txt
+          cd ..
+          python3 - <<'PYEOF'
+          import json, os, re
+          from pathlib import Path
+          m = json.loads(Path("release-assets/manifest.json").read_text())
+          tag = str(m.get("BUILD_TAG", ""))
+          if not re.fullmatch(r"chimera-mk9-[A-Za-z0-9._-]+", tag):
+              raise SystemExit(f"FATAL: unexpected BUILD_TAG in manifest: {tag!r}")
+          def v(k):
+              return str(m.get(k, "n/a")).replace("`", "'").replace("\r", " ").replace("\n", " ")
+          body = (
+              "CI build only — compile-verified only; NOT boot-tested. No claim of boot, root or SUSFS proof. "
+              "Not proof of boot, root, SUSFS, SELinux,\n"
+              "Samsung security, flashability, vendor-blob, camera/modem/audio/thermal/charging,\n"
+              "recovery, boot-image, Android 16 QPR2 runtime or any ABI compatibility.\n\n"
+              "Chimera Mk9 compatibility here means building the modified Exynos 9810 Linux 4.9.337 vendor kernel "
+              "for potential use with the Chimera Mk9 LineageOS 23.2 userspace based on Android 16 QPR2. "
+              "Runtime compatibility requires physical-device testing.\n\n"
+              "| Field | Value |\n|---|---|\n"
+              f"| Kernel base | `{v('IN_BASE_REPO')}@{v('BASE_COMMIT')}` |\n"
+              f"| KSU/SUSFS donor | `{v('GV_REPO')}` `{v('IN_INT_BASE')}` → `{v('IN_INT_REF')}` |\n"
+              f"| Integration patch SHA-256 | `{v('INT_PATCH_SHA256_ACTUAL')}` |\n"
+              f"| KernelSU-Next | `{v('KSU_COMMIT_ACTUAL')}` |\n"
+              f"| Chimera (pinned commit, checkout verified) | `{v('CHIMERA_SHA')}` |\n"
+              f"| Profile / overlay / overlay profile | `{v('IN_PROFILE')}` / `{v('APPLY_OVERLAY')}` / `{v('OVERLAY_PROFILE_EFFECTIVE')}` |\n"
+              f"| Compiler | `{v('COMPILER_VERSION')}` |\n"
+              f"| Kernel release | `{v('KERNEL_RELEASE_ACTUAL')}` |\n"
+              f"| Final config SHA-256 | `{v('FINAL_CONFIG_HASH')}` |\n"
+          )
+          Path("release-body.md").write_text(body)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
+              fh.write(f"tag={tag}\n")
+          print(body)
+          PYEOF
+
+      - name: Create GitHub prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.prep.outputs.tag }}
+          name: "Chimera Mk9 — ${{ inputs.profile }} / ${{ inputs.toolchain }} (UNTESTED)"
+          prerelease: true
+          draft: false
+          body_path: release-body.md
+          fail_on_unmatched_files: true
+          files: |
+            release-assets/Image
+            release-assets/manifest.json
+            release-assets/SHA256SUMS
+            release-assets/final.config
+            release-assets/gavdoc38-ksun-susfs-integration.patch
