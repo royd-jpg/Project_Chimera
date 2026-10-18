@@ -1,26 +1,30 @@
-# Base workflow: chimera-mk9r2-v20261014-r2.yml, as supplied by the user.
+# Workflow: chimera-mk10r2-v20261018-r3.yml (streamlined from chimera-mk9r2-v20261014-r2.yml)
 # gavdoc38: gavdoc38/android_kernel_samsung_exynos9810; branch lineage-24.0-xxksu3-susfs2; pinned 70afe12930584d6eb5beca9a903f78e1e167d3a2.
 # Project_Chimera: royd-jpg/Project_Chimera; branch lineage-24.0-xxksu3-susfs2; pinned 95b8142e6763cf6af9534fb1e4495fd59013d6eb.
 # krazey repo/ref: UNVERIFIED until supplied; fetched only and never merged into the kernel tree.
-# Changed behavior: immutable gavdoc/chimera pins; chimera-full requires the overlay toggle; enabled overlays preflight all required files; config-only stops after Config guard.
+# Overlay control: `profile` is the ONLY selector (boot-first | chimera-lite | chimera-full). No separate overlay toggle exists.
+# r3 changes vs r2:
+#   - chimera-lite/full with the known overlay-less chimera_ref (CHIMERA_NO_OVERLAY_SHA) is rejected in input validation (seconds, not minutes).
+#   - concurrency group includes build_scope (config-only and full runs no longer queue behind each other).
+#   - release body shows 'none (boot-first)' when no Chimera checkout was made.
 
-name: Project Chimera Mk10r2 — gavdoc38 lineage-24.0-xxksu3-susfs2 (boot-first / chimera-full)
+name: Project Chimera Mk10r2 — gavdoc38 lineage-24.0-xxksu3-susfs2
 
 permissions:
   contents: read
 
 concurrency:
-  group: chimera-mk10-g38-${{ github.event.inputs.profile }}-${{ github.event.inputs.overlay_profile }}-${{ github.event.inputs.toolchain }}-${{ github.event.inputs.gavdoc_ref }}
+  group: chimera-mk10-g38-${{ github.event.inputs.profile }}-${{ github.event.inputs.build_scope }}-${{ github.event.inputs.toolchain }}-${{ github.event.inputs.gavdoc_ref }}
   cancel-in-progress: false
 
 on:
   workflow_dispatch:
     inputs:
       profile:
-        description: "boot-first (gavdoc38 xxksu3-susfs2 branch as-is) or chimera-full (adds optional Chimera overlay/tuning)"
+        description: "boot-first = pinned gavdoc kernel only (recommended first run); chimera-lite/full = apply the matching Chimera overlay. The default chimera_ref has NO overlay files, so choose boot-first or provide an overlay-containing chimera_ref."
         required: true
         type: choice
-        options: [boot-first, chimera-full]
+        options: [boot-first, chimera-lite, chimera-full]
         default: boot-first
 
       toolchain:
@@ -29,19 +33,6 @@ on:
         type: choice
         options: [gcc, llvm-full, llvm22, llvm21, llvm20, aosp23, aosp22, aosp21, aosp20, aosp19, neutron19, neutron23, neutron24, zyc_stable, weebx]
         default: gcc
-
-      apply_optional_overlay:
-        description: "Apply the optional Chimera overlay/tuning even in boot-first"
-        required: false
-        type: boolean
-        default: false
-
-      overlay_profile:
-        description: "Chimera source-overlay set. Used only when apply_optional_overlay=true. full = apply_chimera_overlay_patches.sh; lite = apply_chimera_overlay_lite.sh. Both also apply the hooks.c pass, stack-protector setting, and chimera-device-specific.cfg."
-        required: false
-        type: choice
-        options: [full, lite]
-        default: full
 
       relax_bcmdhd_werror:
         description: "Strip -Werror from drivers/net/wireless/bcmdhd_101_16 build files at CI time (GCC 13; no-op if dir/flags not present)"
@@ -81,7 +72,7 @@ on:
         default: ""
 
       chimera_ref:
-        description: "Project_Chimera overlay commit: required immutable 40-hex SHA"
+        description: "Project_Chimera commit: required immutable 40-hex SHA. Default 95b8142e... contains chimera-xxksu-susfs.cfg but NOT the Chimera overlay files; it works only with boot-first (chimera-lite/full with this SHA is rejected at input validation)."
         required: true
         type: string
         default: "95b8142e6763cf6af9534fb1e4495fd59013d6eb"
@@ -163,6 +154,8 @@ env:
   CHIMERA_REPO_SLUG: "royd-jpg/Project_Chimera"
   CHIMERA_REPO: "https://github.com/royd-jpg/Project_Chimera.git"
   CHIMERA_BRANCH: "lineage-24.0-xxksu3-susfs2"
+  # Known to contain chimera-xxksu-susfs.cfg but NO overlay/patch files; rejected for chimera-lite/full at validation.
+  CHIMERA_NO_OVERLAY_SHA: "95b8142e6763cf6af9534fb1e4495fd59013d6eb"
   OVERLAY_DIR_NAME: "chimera_overlay"
   KRAZEY_DIR_NAME: "krazey_upstream"
 
@@ -207,12 +200,11 @@ env:
   IN_BUILD_DATE: ${{ inputs.build_date }}
   IN_CUSTOM_BUILD_DATE: ${{ inputs.custom_build_date }}
   RELAX_BCMDHD_WERROR: ${{ inputs.relax_bcmdhd_werror }}
-  APPLY_OVERLAY: ${{ inputs.apply_optional_overlay }}
-  IN_OVERLAY_PROFILE: ${{ inputs.overlay_profile }}
+  APPLY_OVERLAY: ${{ inputs.profile != 'boot-first' }}
   IN_BUILD_SCOPE: ${{ inputs.build_scope }}
   IN_PACKAGE_ANYKERNEL: ${{ inputs.package_anykernel }}
   IN_DO_RELEASE: ${{ inputs.do_release }}
-  OVERLAY_PROFILE_EFFECTIVE: ${{ inputs.apply_optional_overlay && inputs.overlay_profile || 'off' }}
+  OVERLAY_PROFILE_EFFECTIVE: ${{ inputs.profile == 'chimera-full' && 'full' || inputs.profile == 'chimera-lite' && 'lite' || 'off' }}
 
 jobs:
   build:
@@ -229,8 +221,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           FAIL=0
-          [[ "$IN_PROFILE" =~ ^(boot-first|chimera-full)$ ]] || { echo "FATAL: bad profile '$IN_PROFILE'" >&2; FAIL=1; }
-          [[ "$IN_OVERLAY_PROFILE" =~ ^(full|lite)$ ]] || { echo "FATAL: bad overlay_profile '$IN_OVERLAY_PROFILE'" >&2; FAIL=1; }
+          [[ "$IN_PROFILE" =~ ^(boot-first|chimera-lite|chimera-full)$ ]] || { echo "FATAL: bad profile '$IN_PROFILE'" >&2; FAIL=1; }
           [[ "$IN_BUILD_SCOPE" =~ ^(full|config-only)$ ]] || { echo "FATAL: bad build_scope '$IN_BUILD_SCOPE'" >&2; FAIL=1; }
           [[ "$IN_TOOLCHAIN" =~ ^(gcc|llvm-full|llvm22|llvm21|llvm20|aosp23|aosp22|aosp21|aosp20|aosp19|neutron19|neutron23|neutron24|zyc_stable|weebx)$ ]] || { echo "FATAL: bad toolchain '$IN_TOOLCHAIN'" >&2; FAIL=1; }
           [[ "$IN_GAVDOC_REF" =~ ^[0-9a-f]{40}$ ]] || { echo "FATAL: gavdoc_ref must be an immutable full 40-hex SHA (branch names and short SHAs are rejected)" >&2; FAIL=1; }
@@ -244,12 +235,15 @@ jobs:
           fi
           [[ "$IN_BUILD_VERSION" =~ ^[0-9]+$ ]] || { echo "FATAL: build_version must be digits" >&2; FAIL=1; }
           [[ "$IN_BUILD_HOST" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "FATAL: bad build_host" >&2; FAIL=1; }
-          if [[ "$IN_PROFILE" == "chimera-full" && "$APPLY_OVERLAY" != "true" ]]; then
-            echo "FATAL: profile=chimera-full requires apply_optional_overlay=true. Use profile=boot-first with apply_optional_overlay=false to build without the Chimera overlay." >&2; FAIL=1
+          if [[ "$IN_PROFILE" != "boot-first" && "$IN_CHIMERA_REF" == "$CHIMERA_NO_OVERLAY_SHA" ]]; then
+            echo "FATAL: profile=$IN_PROFILE needs an overlay-containing chimera_ref; $CHIMERA_NO_OVERLAY_SHA has only chimera-xxksu-susfs.cfg and no overlay/patch files. Use profile=boot-first or supply another 40-hex SHA." >&2
+            FAIL=1
           fi
           [[ "$FAIL" -eq 0 ]] || exit 1
-          if [[ "$APPLY_OVERLAY" != "true" && "$IN_OVERLAY_PROFILE" != "full" ]]; then
-            echo "::notice::overlay_profile=$IN_OVERLAY_PROFILE ignored: overlay inactive (profile=$IN_PROFILE, apply_optional_overlay=false)"
+          if [[ "$IN_PROFILE" == "boot-first" ]]; then
+            echo "::notice::profile=boot-first: no Chimera overlay will be checked out or applied (unless merge_ksu_fragment=true)."
+          else
+            echo "::notice::profile=$IN_PROFILE: the pinned chimera_ref must contain the required overlay files before any patch is applied."
           fi
           if [[ "$IN_BUILD_SCOPE" == "config-only" && ( "$IN_PACKAGE_ANYKERNEL" == "true" || "$IN_DO_RELEASE" == "true" ) ]]; then
             echo "::notice::build_scope=config-only: package_anykernel / do_release are ignored (nothing is compiled)"
@@ -329,6 +323,7 @@ jobs:
 
       # ── 2. Checkouts ───────────────────────────────────────────────────────
       - name: Checkout Project_Chimera overlay repo (full checkout; no sparse filter)
+        if: ${{ inputs.profile != 'boot-first' || inputs.merge_ksu_fragment }}
         uses: actions/checkout@v4
         with:
           repository: ${{ env.CHIMERA_REPO_SLUG }}
@@ -338,6 +333,7 @@ jobs:
           clean: false
 
       - name: Record Project_Chimera revision and verify required files
+        if: ${{ inputs.profile != 'boot-first' || inputs.merge_ksu_fragment }}
         run: |
           set -Eeuo pipefail
           OV="$GITHUB_WORKSPACE/$OVERLAY_DIR_NAME"
@@ -361,7 +357,7 @@ jobs:
               patches/apply_chimera_overlay_patches.sh
               patches/0001-mfd-madera-core-settle-delay-after-reset-release.patch
             )
-            case "$IN_OVERLAY_PROFILE" in
+            case "$OVERLAY_PROFILE_EFFECTIVE" in
               full) ;;
               lite) NEED+=(patches/apply_chimera_overlay_lite.sh) ;;
             esac
@@ -378,7 +374,7 @@ jobs:
             git -C "$OV" ls-tree --name-only HEAD | tr '\n' ' ' >&2; echo >&2
             echo "--- chimera*, patches/, *.cfg, apply_* entries ---" >&2
             git -C "$OV" ls-tree -r --name-only HEAD | grep -E '(^|/)(chimera[^/]*|patches/.*|[^/]*\.cfg|apply_[^/]*)$' >&2 || echo "(none)" >&2
-            echo "::error::Use profile=boot-first with apply_optional_overlay=false, or select a chimera_ref commit containing the listed overlay files." >&2
+            echo "::error::Use profile=boot-first, or select a chimera_ref commit containing the listed overlay files." >&2
             exit 1
           fi
           [[ ! -f "$OV/patches/apply_chimera_overlay_patches.sh" ]] || chmod +x "$OV/patches/apply_chimera_overlay_patches.sh"
@@ -796,14 +792,14 @@ jobs:
           fi
           { grep -rnE --include='Makefile' --include='Kbuild' --include='*.mk' -e '-Werror' "$D" || echo "no -Werror remains in build files"; } | tee "$ABS_LOG/bcmdhd-werror-after.txt"
 
-      # ── 7. Optional Chimera overlay (chimera-full / apply_optional_overlay) ─
+      # ── 7. Chimera overlay (chimera-lite / chimera-full only) ──────────────
       - name: Optional overlay — hooks.c selinux_cred() consistency + stack protector
         if: ${{ env.APPLY_OVERLAY == 'true' }}
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
           grep -q 'selinux_cred(' security/selinux/include/objsec.h || {
-            echo "FATAL: security/selinux/include/objsec.h has no selinux_cred() helper on this branch — the hooks.c selinux_cred() overlay pass is INCOMPATIBLE with the gavdoc38 lineage-24.0-xxksu3-susfs2 tree (UNVERIFIED). Use apply_optional_overlay=false / profile=boot-first, or update the overlay." >&2
+            echo "FATAL: security/selinux/include/objsec.h has no selinux_cred() helper on this branch — the hooks.c selinux_cred() overlay pass is INCOMPATIBLE with the gavdoc38 lineage-24.0-xxksu3-susfs2 tree (UNVERIFIED). Use profile=boot-first, or update the overlay." >&2
             exit 1; }
           # CONFIG_CC_STACKPROTECTOR is a hidden def_bool selected by the choice
           # (NONE | REGULAR | STRONG); select the choice member instead.
@@ -1292,10 +1288,14 @@ jobs:
             echo "## Chimera Mk10r2 g38-xxksu3 — ${IN_PROFILE} / ${IN_TOOLCHAIN}"
             echo "- build scope: ${IN_BUILD_SCOPE}"
             if [[ "$IN_BUILD_SCOPE" == "config-only" ]]; then
-              echo "- **config-only**: overlay applied and final .config validated; NOTHING was compiled, linked, packaged or released. No KSU/SUSFS runtime behavior, boot or packaging was validated."
+              echo "- **config-only**: final .config validated; NOTHING was compiled, linked, packaged or released. No KSU/SUSFS runtime behavior, boot or packaging was validated."
             fi
-            echo "- overlay applied: ${APPLY_OVERLAY} (profile: ${OVERLAY_PROFILE_EFFECTIVE})"
-            echo "- Project_Chimera: ${CHIMERA_SHA:-n/a} (${CHIMERA_REF_SOURCE:-n/a})"
+            if [[ "$IN_PROFILE" == "boot-first" ]]; then
+              echo "- overlay: off — Project_Chimera checkout skipped (unless merge_ksu_fragment=true)"
+              echo "- chimera_ref retained for reproducibility only: ${IN_CHIMERA_REF}"
+            else
+              echo "- overlay: ${OVERLAY_PROFILE_EFFECTIVE} — Project_Chimera: ${CHIMERA_SHA:-n/a} (${CHIMERA_REF_SOURCE:-n/a})"
+            fi
             echo "- brand: ${BRAND:-n/a}"
             echo "- kernel base: ${GAVDOC_REPO_SLUG}@${BASE_COMMIT:-n/a} (${GAVDOC_REF_SOURCE:-n/a})"
             echo "- Krazey upstream (fetch only): ${KRAZEY_REPO:-not requested}@${KRAZEY_REF_RESOLVED:-n/a}"
@@ -1385,14 +1385,14 @@ jobs:
               "for potential use with a LineageOS 24 userspace. Runtime compatibility requires physical-device testing.\n\n"
               "| Field | Value |\n|---|---|\n"
               f"| Kernel base | `{v('GAVDOC_REPO_SLUG')}@{v('BASE_COMMIT')}` (`{v('GAVDOC_REF_SOURCE')}`) |\n"
-              f"| Chimera overlay (commit, checkout verified) | `{v('CHIMERA_SHA')}` (`{v('CHIMERA_REF_SOURCE')}`) |\n"
-              f"| Krazey upstream (fetch only, no merge) | `{v('KRAZEY_REPO') or 'not requested'}@{v('KRAZEY_REF_RESOLVED') or 'n/a'}` |\n"
-              f"| KSU Kconfig / fragment | `{v('KSU_KCONFIG_PATH')}` / `{v('KSU_FRAGMENT_USED') or 'none'}` |\n"
+              f"| Chimera overlay (commit, checkout verified) | `{m.get('CHIMERA_SHA') or 'none (boot-first)'}` (`{v('CHIMERA_REF_SOURCE')}`) |\n"
+              f"| Krazey upstream (fetch only, no merge) | `{m.get('KRAZEY_REPO') or 'not requested'}@{m.get('KRAZEY_REF_RESOLVED') or 'n/a'}` |\n"
+              f"| KSU Kconfig / fragment | `{v('KSU_KCONFIG_PATH')}` / `{m.get('KSU_FRAGMENT_USED') or 'none'}` |\n"
               f"| Profile / overlay / overlay profile | `{v('IN_PROFILE')}` / `{v('APPLY_OVERLAY')}` / `{v('OVERLAY_PROFILE_EFFECTIVE')}` |\n"
               f"| Toolchain mode | `{v('TOOLCHAIN')}` (`{v('COMPILER_KIND')}`) |\n"
               f"| Compiler | `{v('COMPILER_VERSION')}` |\n"
               f"| Linker | `{v('LINKER_VERSION')}` |\n"
-              f"| Full LLVM | `{v('FULL_LLVM_MODE') or '0'}` |\n"
+              f"| Full LLVM | `{m.get('FULL_LLVM_MODE') or '0'}` |\n"
               f"| Kernel release | `{v('KERNEL_RELEASE_ACTUAL')}` |\n"
               f"| Final config SHA-256 | `{v('FINAL_CONFIG_HASH')}` |\n"
           )
