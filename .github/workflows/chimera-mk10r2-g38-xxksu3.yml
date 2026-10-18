@@ -6,7 +6,7 @@
 #
 # TEST STATUS (what was and was not tested):
 #   TESTED (static, in a sandbox): YAML parses; actionlint 1.7.12 (with shellcheck) reports no findings, yamllint clean;
-#   every `run:` block is shellchecked; embedded Python heredocs compile; the workflow_dispatch input count (25) is within the GitHub limit.
+#   every `run:` block is shellchecked; embedded Python heredocs compile; the workflow_dispatch input count (22) is within the GitHub limit of 25.
 #   NOT TESTED: no GitHub Actions run, no kernel build. The gavdoc38 branch tree and the Project_Chimera branch
 #   could not be fetched, so nothing repo-specific was verified from source. These items are UNVERIFIED —
 #   REQUIRES CONFIRMATION and are checked fail-closed at run time instead: defconfig
@@ -23,9 +23,9 @@
 #   - build_date options reduced to "RISINGOS9: Mon Oct 12 15:30:15 UTC 2026" and "Other" (default Other).
 #   - REMOVED steps: integration-patch generation/apply, KernelSU-Next clone, KSU-Next-specific wiring checks, forced
 #     manual-hook/kprobe handling, integration-patch artifact. Branch is already integrated (no KSU/SUSFS patching here).
-#   - Inputs integration_base / integration_ref / integration_patch_sha256 are KEPT but default to empty; setting any of
-#     them FAILS the job (not applicable on this branch). ksu_commit is KEPT as an optional verify-only pin: if set it must
-#     equal a gitlink (submodule) commit of the checked-out tree, else the job fails.
+#   - REMOVED inputs: integration_base, integration_ref, integration_patch_sha256 (phased out: branch is already integrated).
+#     ksu_commit is KEPT as an optional verify-only pin: if set it must equal a gitlink (submodule) commit of the
+#     checked-out tree, else the job fails.
 #   - base_ref: full 40-hex SHA, or EMPTY (default) = resolve the live tip of base_branch_hint (default
 #     lineage-24.0-xxksu3-susfs2) and record the resolved SHA (that tip's SHA was not known when this file was written).
 #   - NEW input chimera_ref: full 40-hex SHA or EMPTY (default) = resolve tip of the Project_Chimera branch.
@@ -119,24 +119,6 @@ on:
         required: false
         type: string
         default: "lineage-24.0-xxksu3-susfs2"
-
-      integration_base:
-        description: "NOT APPLICABLE on this branch (already integrated). Must stay EMPTY; any value fails the job."
-        required: false
-        type: string
-        default: ""
-
-      integration_ref:
-        description: "NOT APPLICABLE on this branch (already integrated). Must stay EMPTY; any value fails the job."
-        required: false
-        type: string
-        default: ""
-
-      integration_patch_sha256:
-        description: "NOT APPLICABLE on this branch (no integration patch). Must stay EMPTY; any value fails the job."
-        required: false
-        type: string
-        default: ""
 
       ksu_commit:
         description: "OPTIONAL verify-only: full 40-hex SHA that must match a gitlink (submodule) commit in the checked-out kernel tree. Empty = skip."
@@ -243,9 +225,6 @@ env:
   IN_BASE_REPO: ${{ inputs.base_repo }}
   IN_BASE_REF: ${{ inputs.base_ref }}
   IN_BASE_BRANCH_HINT: ${{ inputs.base_branch_hint }}
-  IN_INT_BASE: ${{ inputs.integration_base }}
-  IN_INT_REF: ${{ inputs.integration_ref }}
-  IN_INT_PATCH_SHA256: ${{ inputs.integration_patch_sha256 }}
   IN_KSU_COMMIT: ${{ inputs.ksu_commit }}
   IN_CHIMERA_REF: ${{ inputs.chimera_ref }}
   IN_MERGE_KSU_FRAGMENT: ${{ inputs.merge_ksu_fragment }}
@@ -291,13 +270,6 @@ jobs:
           [[ "$IN_BASE_BRANCH_HINT" =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "FATAL: bad base_branch_hint" >&2; FAIL=1; }
           [[ "$IN_BUILD_VERSION" =~ ^[0-9]+$ ]] || { echo "FATAL: build_version must be digits" >&2; FAIL=1; }
           [[ "$IN_BUILD_HOST" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "FATAL: bad build_host" >&2; FAIL=1; }
-          # Retained-but-incompatible inputs: this branch is already KSU/SUSFS integrated, so no integration is performed.
-          for v in IN_INT_BASE IN_INT_REF IN_INT_PATCH_SHA256; do
-            if [[ -n "${!v}" ]]; then
-              echo "FATAL: input for $v is set but INCOMPATIBLE with this workflow: gavdoc38 lineage-24.0-xxksu3-susfs2 is already KSU+SUSFS integrated, so no integration patch is generated or applied. Leave integration_base / integration_ref / integration_patch_sha256 empty." >&2
-              FAIL=1
-            fi
-          done
           [[ "$FAIL" -eq 0 ]] || exit 1
           if [[ "$APPLY_OVERLAY" != "true" && "$IN_OVERLAY_PROFILE" != "full" ]]; then
             echo "::notice::overlay_profile=$IN_OVERLAY_PROFILE ignored: overlay inactive (profile=$IN_PROFILE, apply_optional_overlay=false)"
@@ -392,7 +364,7 @@ jobs:
           arm-linux-gnueabi-gcc --version | head -n1
 
       # ── 2. Checkouts ───────────────────────────────────────────────────────
-      - name: Checkout Project_Chimera overlay repo (cfg fragments + overlay scripts only)
+      - name: Checkout Project_Chimera overlay repo (full checkout; no sparse filter)
         uses: actions/checkout@v4
         with:
           repository: ${{ env.CHIMERA_REPO_SLUG }}
@@ -400,12 +372,6 @@ jobs:
           path: ${{ env.OVERLAY_DIR_NAME }}
           fetch-depth: 1
           clean: false
-          sparse-checkout: |
-            chimera-ksu-susfs.cfg
-            chimera-xxksu-susfs.cfg
-            chimera-device-specific.cfg
-            patches/
-          sparse-checkout-cone-mode: false
 
       - name: Record Project_Chimera revision and verify required files
         run: |
@@ -438,7 +404,11 @@ jobs:
           for f in "${NEED[@]}"; do
             if [[ -f "$OV/$f" ]]; then echo "OK: $f"; else echo "FATAL: missing $f in $CHIMERA_REPO_SLUG@$SHA" >&2; MISSING=1; fi
           done
-          [[ "$MISSING" -eq 0 ]] || exit 1
+          if [[ "$MISSING" -ne 0 ]]; then
+            echo "--- files actually present in $CHIMERA_REPO_SLUG@$SHA (HEAD: $(git -C "$OV" log -1 --format=%s)) ---" >&2
+            git -C "$OV" ls-tree -r --name-only HEAD >&2
+            exit 1
+          fi
           [[ ! -f "$OV/patches/apply_chimera_overlay_patches.sh" ]] || chmod +x "$OV/patches/apply_chimera_overlay_patches.sh"
           [[ ! -f "$OV/patches/apply_chimera_overlay_lite.sh" ]] || chmod +x "$OV/patches/apply_chimera_overlay_lite.sh"
 
