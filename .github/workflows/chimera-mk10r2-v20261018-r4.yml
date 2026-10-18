@@ -1,12 +1,64 @@
-# Workflow: chimera-mk10r2-v20261018-r3.yml (streamlined from chimera-mk9r2-v20261014-r2.yml)
+# Workflow: chimera-mk10r2-v20261018-r4.yml (refactored from chimera-mk10r2-v20261018-r3.yml)
 # gavdoc38: gavdoc38/android_kernel_samsung_exynos9810; branch lineage-24.0-xxksu3-susfs2; pinned 70afe12930584d6eb5beca9a903f78e1e167d3a2.
 # Project_Chimera: royd-jpg/Project_Chimera; branch lineage-24.0-xxksu3-susfs2; pinned 95b8142e6763cf6af9534fb1e4495fd59013d6eb.
 # krazey repo/ref: UNVERIFIED until supplied; fetched only and never merged into the kernel tree.
 # Overlay control: `profile` is the ONLY selector (boot-first | chimera-lite | chimera-full). No separate overlay toggle exists.
+#
+# ── CHANGELOG ────────────────────────────────────────────────────────────────
+# r4 changes vs r3:
+#   xxKSU (frozen to gavdoc38):
+#     - NEW policy: this workflow never modifies, replaces, bumps or re-integrates KernelSU/xxKSU. The xxKSU in the pinned
+#       gavdoc38 tree is the only xxKSU. Per the gavdoc38 v3.3.0 release notes it is xxKSU v3.3.1, build 32680, driver uapi v5,
+#       and it REQUIRES a uapi v5 manager (backslashxx/KernelSU v3.3.1). A uapi v6 manager must NOT be used with it.
+#     - NEW step "KSU freeze — record baseline": fingerprints the KSU directory + all submodule/gitlink state right after the
+#       integrated-tree checks, and logs submodule status and version/uapi hints (logs/ksu-baseline.txt).
+#     - NEW step "KSU freeze guard": re-fingerprints after every CI-time patch (identity, bcmdhd, hooks.c, overlay scripts)
+#       and FAILS the run if anything under the KSU directory or any submodule changed (fail closed, before Kconfig/compile).
+#     - NEW step "KSU freeze — post-build drift check": warning-only (build may legitimately emit generated files).
+#     - ksu_commit stays verify-only (must match a gitlink in the tree); it never selects or fetches a KSU commit.
+#     - uapi v5 / manager requirement is now carried in manifest.json, the job summary, the release body and the AK3 ui_print.
+#   AnyKernel3 / busybox hardening (opt-in package_anykernel; the root cause of the recovery busybox errors is UNVERIFIED,
+#   see NOTES — these changes remove the causes that CI can detect and make the rest observable):
+#     - NEW input anykernel_ref (empty or 40-hex SHA). Empty = AnyKernel3 HEAD at run time (not reproducible; warned and recorded).
+#     - AK3 is fetched as a single commit and checked out detached; resolved SHA is logged and written to manifest.json.
+#     - AK3 layout is verified (update-binary, updater-script, ak3-core.sh); every tools/busybox* is inventoried:
+#       sha256, ELF class/machine, static vs dynamically linked (a dynamic busybox needs the recovery's loader and is a classic
+#       cause of "not found"/exec errors in recoveries; reported as a warning).
+#     - NEW busybox smoke test under qemu-user (diagnostic only, never fails the build): runs `busybox --list` and `sh -c`,
+#       and warns if common applets are missing.
+#     - Shell scripts are rejected if they contain CRLF line endings (CR breaks `sh` shebangs/busybox applets on-device).
+#     - Executable bits are forced on update-binary and tools/*; the ZIP is built with `zip -r9 -X`, then verified:
+#       `unzip -t`, required entries present, busybox byte-identical to the source and still executable inside the ZIP.
+#     - anykernel.sh is generated from a quoted template (no shell expansion surprises) and syntax-checked with `sh -n`;
+#       kernel.string is sanitised to a conservative character set (no '#', '|', quotes).
+#     - qemu-user-static and unzip are installed only when needed; logs/ak3-*.txt go into the logs artifact.
+#   Unchanged from r3: all inputs/defaults except the new anykernel_ref, toolchain handling, overlay logic, config guard,
+#   build, symbol checks, artifacts, release job (plus new xxKSU rows in the release body).
 # r3 changes vs r2:
 #   - chimera-lite/full with the known overlay-less chimera_ref (CHIMERA_NO_OVERLAY_SHA) is rejected in input validation (seconds, not minutes).
 #   - concurrency group includes build_scope (config-only and full runs no longer queue behind each other).
 #   - release body shows 'none (boot-first)' when no Chimera checkout was made.
+#
+# ── NOTES ────────────────────────────────────────────────────────────────────
+# xxKSU / uapi:
+#   - Source of the version/uapi facts: gavdoc38 release v3.3.0 notes (kernel for kraZey90's LineageOS 24.0 14/10/2026 TESTBUILD RC2):
+#     "xxKSU updated to version 3.3.1, build 32680 ... driver is uapi v5 and so requires the manager to be uapi v5 ...
+#     Do not update to uapi v6 manager". Manager: https://github.com/backslashxx/KernelSU/releases/tag/v3.3.1
+#   - The CI cannot prove the uapi version of the built driver. It proves only that the KSU sources/gitlinks were not altered
+#     relative to the pinned gavdoc_ref checkout. Confirm uapi on device with the manager.
+#   - The KSU directory is derived from the Kconfig that defines `config KSU` (layout UNVERIFIED; submodule vs in-tree vs symlink).
+#     Submodule/gitlink state is fingerprinted globally regardless.
+#   - merge_ksu_fragment only merges a defconfig fragment (symbols); it cannot change the xxKSU driver sources, but it can change
+#     KSU Kconfig symbols. Leave it off unless the base defconfig fails the CONFIG_KSU=y check.
+# AnyKernel3:
+#   - gavdoc38's documented install path is fastbootd `fastboot flash BOOT boot.img` (or ODIN). AK3 packaging in this workflow is
+#     UNVERIFIED for star2lte (Samsung boot image, dtb concat format, partition name).
+#   - To root-cause the busybox error, the recovery log from the failing flash is needed (e.g. /tmp/recovery.log or the
+#     recovery's "copy log" output) plus the recovery name/version. Until then the CI checks above are best-effort diagnostics.
+#   - A qemu smoke test shows the busybox binary runs and which applets it has; it does NOT reproduce recovery SELinux/noexec/
+#     loader/toolbox conditions.
+# Supply chain (not changed in r4, UNVERIFIED): third-party GitHub Actions are pinned by major tag, not commit SHA; toolchain
+#   archives other than weebx have no SHA-256 pin. Pinning actions to reviewed commit SHAs is recommended once SHAs are verified.
 
 name: Project Chimera Mk10r2 — gavdoc38 lineage-24.0-xxksu3-susfs2
 
@@ -48,10 +100,16 @@ on:
         default: full
 
       package_anykernel:
-        description: "Also build an AnyKernel3 ZIP + raw dtb concat (packaging is UNVERIFIED for this device). Only with build_scope=full."
+        description: "Also build an AnyKernel3 ZIP + raw dtb concat (packaging is UNVERIFIED for this device; busybox/layout diagnostics run). Only with build_scope=full."
         required: false
         type: boolean
         default: false
+
+      anykernel_ref:
+        description: "OPTIONAL AnyKernel3 commit: empty or full 40-hex SHA. Empty = AnyKernel3 HEAD at run time (not reproducible; resolved SHA is recorded). Used only with package_anykernel=true."
+        required: false
+        type: string
+        default: ""
 
       do_release:
         description: "Create a GitHub prerelease (creates a tag — repository mutation). Only with build_scope=full; runs in a separate release job with contents: write."
@@ -60,13 +118,13 @@ on:
         default: false
 
       gavdoc_ref:
-        description: "gavdoc38 kernel commit: required immutable 40-hex SHA"
+        description: "gavdoc38 kernel commit: required immutable 40-hex SHA. xxKSU is taken from this tree unchanged (v3.3.1 build 32680, uapi v5 per gavdoc38 v3.3.0 notes)."
         required: true
         type: string
         default: "70afe12930584d6eb5beca9a903f78e1e167d3a2"
 
       ksu_commit:
-        description: "OPTIONAL verify-only: full 40-hex SHA that must match a gitlink (submodule) commit in the checked-out kernel tree. Empty = skip."
+        description: "OPTIONAL verify-only: full 40-hex SHA that must match a gitlink (submodule) commit in the checked-out kernel tree. It never selects or fetches a KSU commit. Empty = skip."
         required: false
         type: string
         default: ""
@@ -90,7 +148,7 @@ on:
         default: ""
 
       merge_ksu_fragment:
-        description: "Merge chimera-xxksu-susfs.cfg from the pinned overlay commit. Default off: branch is already integrated."
+        description: "Merge chimera-xxksu-susfs.cfg (defconfig symbols only) from the pinned overlay commit. Default off: branch is already integrated. Cannot change xxKSU driver sources."
         required: false
         type: boolean
         default: false
@@ -159,6 +217,10 @@ env:
   OVERLAY_DIR_NAME: "chimera_overlay"
   KRAZEY_DIR_NAME: "krazey_upstream"
 
+  # xxKSU policy: frozen to whatever the pinned gavdoc38 tree contains. Facts below come from the gavdoc38 v3.3.0 release notes.
+  KSU_POLICY: "frozen-to-gavdoc38-tree (no KSU change by CI)"
+  KSU_EXPECTED: "xxKSU v3.3.1 build 32680, driver uapi v5; manager must be uapi v5 (backslashxx/KernelSU v3.3.1); do NOT use a uapi v6 manager"
+
   KERNEL_DIR: "kernel"
   OUT_DIR: "kernel-out"
   LOG_DIR: "logs"
@@ -190,6 +252,7 @@ env:
   IN_CHIMERA_REF: ${{ inputs.chimera_ref }}
   IN_KRAZEY_REPO: ${{ inputs.krazey_repo }}
   IN_KRAZEY_REF: ${{ inputs.krazey_ref }}
+  IN_ANYKERNEL_REF: ${{ inputs.anykernel_ref }}
   IN_MERGE_KSU_FRAGMENT: ${{ inputs.merge_ksu_fragment }}
   IN_BRAND: ${{ inputs.brand }}
   IN_CUSTOM_BRAND: ${{ inputs.custom_brand }}
@@ -227,6 +290,7 @@ jobs:
           [[ "$IN_GAVDOC_REF" =~ ^[0-9a-f]{40}$ ]] || { echo "FATAL: gavdoc_ref must be an immutable full 40-hex SHA (branch names and short SHAs are rejected)" >&2; FAIL=1; }
           [[ "$IN_CHIMERA_REF" =~ ^[0-9a-f]{40}$ ]] || { echo "FATAL: chimera_ref must be an immutable full 40-hex SHA (branch names and short SHAs are rejected)" >&2; FAIL=1; }
           [[ -z "$IN_KSU_COMMIT" || "$IN_KSU_COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "FATAL: ksu_commit must be empty or a full 40-hex SHA" >&2; FAIL=1; }
+          [[ -z "$IN_ANYKERNEL_REF" || "$IN_ANYKERNEL_REF" =~ ^[0-9a-f]{40}$ ]] || { echo "FATAL: anykernel_ref must be empty or a full 40-hex SHA" >&2; FAIL=1; }
           if [[ -n "$IN_KRAZEY_REPO" ]]; then
             [[ "$IN_KRAZEY_REPO" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || { echo "FATAL: krazey_repo must be owner/repo" >&2; FAIL=1; }
             [[ "$IN_KRAZEY_REF" =~ ^[0-9a-f]{40}$ ]] || { echo "FATAL: krazey_ref is required with krazey_repo and must be an immutable full 40-hex SHA (branch names and short SHAs are rejected)" >&2; FAIL=1; }
@@ -248,6 +312,10 @@ jobs:
           if [[ "$IN_BUILD_SCOPE" == "config-only" && ( "$IN_PACKAGE_ANYKERNEL" == "true" || "$IN_DO_RELEASE" == "true" ) ]]; then
             echo "::notice::build_scope=config-only: package_anykernel / do_release are ignored (nothing is compiled)"
           fi
+          if [[ "$IN_PACKAGE_ANYKERNEL" == "true" && "$IN_BUILD_SCOPE" == "full" && -z "$IN_ANYKERNEL_REF" ]]; then
+            echo "::warning::package_anykernel=true with empty anykernel_ref: AnyKernel3 HEAD will be used (not reproducible). The resolved SHA is recorded; pass it as anykernel_ref to reproduce."
+          fi
+          echo "::notice::xxKSU policy: $KSU_POLICY — expected: $KSU_EXPECTED"
           echo "PASS: inputs valid (APPLY_OVERLAY=$APPLY_OVERLAY, OVERLAY_PROFILE_EFFECTIVE=$OVERLAY_PROFILE_EFFECTIVE, BUILD_SCOPE=$IN_BUILD_SCOPE)"
 
       - name: Record immutable gavdoc38 and Project_Chimera pins
@@ -313,7 +381,7 @@ jobs:
             aria2 bc bison build-essential ccache curl flex \
             gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi \
             git libelf-dev libssl-dev lz4 lzop pahole python3 rsync \
-            zstd xz-utils cpio zip
+            zstd xz-utils cpio zip unzip
           command -v pahole >/dev/null || { echo "::error::pahole missing (needed if DEBUG_INFO_BTF=y)"; exit 1; }
           pahole --version
           python3 --version
@@ -497,6 +565,20 @@ jobs:
           }
           chimera_make() {
             make O="$ABS_OUT" ARCH=arm64 "${TOOLCHAIN_ARGS[@]}" "$@"
+          }
+          # xxKSU freeze: fingerprint of everything that could carry KernelSU/xxKSU state.
+          # Run from the kernel tree root. $1 = KSU directory (dirname of the Kconfig defining `config KSU`).
+          # Covers: index entries under the KSU dir, global submodule/gitlink state, worktree changes under the KSU dir,
+          # and per-submodule HEAD + worktree status. Layout (submodule vs in-tree vs symlink) is UNVERIFIED, so all of it is hashed.
+          ksu_fingerprint() {
+            local d="$1"
+            {
+              echo "## ls-files -s $d";  git ls-files -s -- "$d"
+              echo "## submodule status"; git submodule status --recursive
+              echo "## status $d";        git status --porcelain --ignore-submodules=none -- "$d"
+              echo "## submodule worktrees"
+              git submodule foreach --quiet --recursive 'echo "$displaypath $(git rev-parse HEAD)"; git status --porcelain'
+            } 2>&1 | sha256sum | cut -d' ' -f1
           }
           LIBEOF
           bash -n "$CI_LIB"
@@ -759,6 +841,37 @@ jobs:
           [[ "$FAIL" -eq 0 ]] || exit 1
           echo "PASS: integrated tree present (no integration performed by this workflow)"
 
+      # ── 5b. xxKSU freeze: baseline (r4) ────────────────────────────────────
+      # The xxKSU in the pinned gavdoc38 tree (v3.3.1 build 32680, uapi v5 per gavdoc38 v3.3.0 notes) is the ONLY xxKSU.
+      # This step records its fingerprint; "KSU freeze guard" below fails the run if any CI patch alters it.
+      - name: KSU freeze — record xxKSU baseline (gavdoc38 tree is the single source of truth)
+        working-directory: ${{ env.KERNEL_DIR }}
+        run: |
+          set -Eeuo pipefail
+          # shellcheck source=/dev/null
+          source "$CI_LIB"
+          KSU_DIR="$(dirname "$KSU_KCONFIG_PATH")"
+          [[ -d "$KSU_DIR" ]] || { echo "FATAL: KSU dir '$KSU_DIR' (from $KSU_KCONFIG_PATH) is not a directory" >&2; exit 1; }
+          KSU_FP_BASE="$(ksu_fingerprint "$KSU_DIR")"
+          [[ "$KSU_FP_BASE" =~ ^[0-9a-f]{64}$ ]] || { echo "FATAL: could not compute KSU fingerprint" >&2; exit 1; }
+          {
+            echo "KSU_DIR=$KSU_DIR"
+            echo "KSU_FP_BASE=$KSU_FP_BASE"
+          } >> "$GITHUB_ENV"
+          HINTS="$(grep -rnIE '(uapi|KSU_VERSION|KERNEL_SU_VERSION|KSU_FULL_VERSION)' \
+            --include='*.h' --include='Kbuild' --include='Makefile' --include='Kconfig*' "$KSU_DIR" 2>/dev/null || true)"
+          {
+            echo "policy:      $KSU_POLICY"
+            echo "expected:    $KSU_EXPECTED"
+            echo "ksu_dir:     $KSU_DIR (layout UNVERIFIED)"
+            echo "fingerprint: $KSU_FP_BASE"
+            echo "--- submodule status ---"
+            git submodule status --recursive 2>&1 || true
+            echo "--- version/uapi hints (best effort; names UNVERIFIED; the build number is not necessarily a literal in the sources) ---"
+            if [[ -n "$HINTS" ]]; then printf '%s\n' "$HINTS" | sed -n '1,60p'; else echo "(none found)"; fi
+          } | tee "$ABS_LOG/ksu-baseline.txt"
+          echo "::notice::xxKSU frozen to the pinned gavdoc38 tree. Expected: $KSU_EXPECTED. Confirm uapi on device with the manager; CI cannot prove it."
+
       # ── 6. Identity (CI-time, cosmetic) ────────────────────────────────────
       - name: Apply build identity (CI-time patch, no push)
         working-directory: ${{ env.KERNEL_DIR }}
@@ -893,6 +1006,30 @@ jobs:
           fi
           [[ "$FAIL" -eq 0 ]] || exit 1
           echo "PASS: lite overlay markers present (5 mk + 2 fair.c), no DTS tuning"
+
+      # ── 7b. xxKSU freeze guard (r4): fail closed if any CI patch touched KSU ──
+      - name: KSU freeze guard — xxKSU must be unchanged after all CI-time patches
+        working-directory: ${{ env.KERNEL_DIR }}
+        run: |
+          set -Eeuo pipefail
+          # shellcheck source=/dev/null
+          source "$CI_LIB"
+          NOW="$(ksu_fingerprint "$KSU_DIR")"
+          if [[ "$NOW" != "$KSU_FP_BASE" ]]; then
+            {
+              echo "FATAL: xxKSU state changed after CI-time patches (policy: $KSU_POLICY)."
+              echo "  baseline: $KSU_FP_BASE"
+              echo "  now:      $NOW"
+              echo "  KSU dir:  $KSU_DIR"
+              echo "--- git status under KSU dir ---"
+              git status --short --ignore-submodules=none -- "$KSU_DIR" || true
+              echo "--- submodule status ---"
+              git submodule status --recursive || true
+              echo "Suspect: overlay patch script, merge_ksu_fragment, or a CI-time patch touching KernelSU/xxKSU paths."
+            } >&2
+            exit 1
+          fi
+          echo "PASS: xxKSU unchanged vs pinned gavdoc38 tree (fingerprint $NOW)"
 
       # ── 8. Kconfig ─────────────────────────────────────────────────────────
       - name: Configure kernel (defconfig + optional fragments; no KSU/SUSFS forcing)
@@ -1081,6 +1218,24 @@ jobs:
           [[ "$FAIL" -eq 0 ]] || exit 1
           echo "PASS: symbol/identity checks"
 
+      - name: KSU freeze — post-build drift check (warning only)
+        if: ${{ inputs.build_scope == 'full' }}
+        working-directory: ${{ env.KERNEL_DIR }}
+        run: |
+          set -Eeuo pipefail
+          # shellcheck source=/dev/null
+          source "$CI_LIB"
+          NOW="$(ksu_fingerprint "$KSU_DIR")"
+          if [[ "$NOW" == "$KSU_FP_BASE" ]]; then
+            echo "OK: xxKSU unchanged after build (fingerprint $NOW)"
+          else
+            echo "::warning::KSU directory/submodule state differs after the build (the build may emit generated files). Inspect logs/ksu-postbuild.txt; the pre-build freeze guard passed."
+            {
+              git status --short --ignore-submodules=none -- "$KSU_DIR" || true
+              git submodule status --recursive || true
+            } | tee "$ABS_LOG/ksu-postbuild.txt"
+          fi
+
       - name: Collect artifacts and metadata
         if: ${{ inputs.build_scope == 'full' }}
         run: |
@@ -1107,14 +1262,17 @@ jobs:
           keys = ["BUILD_TAG","GITHUB_RUN_ID","IN_PROFILE","TOOLCHAIN","APPLY_OVERLAY","GAVDOC_REPO_SLUG","GAVDOC_BRANCH",
                   "IN_GAVDOC_REF","GAVDOC_REF_RESOLVED","GAVDOC_REF_SOURCE","BASE_COMMIT","CHIMERA_REPO_SLUG","CHIMERA_BRANCH",
                   "CHIMERA_REF_RESOLVED","CHIMERA_REF_SOURCE","CHIMERA_SHA","IN_KRAZEY_REPO","IN_KRAZEY_REF","KRAZEY_REPO","KRAZEY_REF_RESOLVED",
-                  "IN_KSU_COMMIT","KSU_KCONFIG_PATH",
+                  "IN_KSU_COMMIT","KSU_KCONFIG_PATH","KSU_POLICY","KSU_EXPECTED","KSU_DIR","KSU_FP_BASE",
                   "IN_MERGE_KSU_FRAGMENT","KSU_FRAGMENT_USED","COMPILER_VERSION","LINKER_VERSION","TC_CACHE_KEY",
                   "TC_IDENTITY_HASH","KERNEL_VERSION","KERNEL_RELEASE_EXPECTED","KERNEL_RELEASE_ACTUAL","BUILD_KCFLAGS",
                   "FINAL_CONFIG_HASH","UNAME_PREVIEW","KBUILD_BUILD_USER","KBUILD_BUILD_HOST","KBUILD_BUILD_VERSION",
                   "KBUILD_BUILD_TIMESTAMP","FULL_LLVM_MODE","COMPILER_KIND","TC_CC","TC_LD","TC_AR","TC_NM","TC_OBJCOPY",
                   "TC_OBJDUMP","TC_STRIP","TC_READELF","RELAX_BCMDHD_WERROR","OVERLAY_PROFILE_EFFECTIVE"]
           m = {k: os.environ.get(k, "") for k in keys}
-          m["integration"] = "none performed by CI: base branch is already KSU+SUSFS integrated (gavdoc38 lineage-24.0-xxksu3-susfs2)"
+          m["integration"] = "none performed by CI: base branch is already KSU+SUSFS integrated (gavdoc38 lineage-24.0-xxksu3-susfs2); xxKSU is frozen to the pinned tree"
+          m["ksu_note"] = ("xxKSU is taken unchanged from the pinned gavdoc38 tree. Per gavdoc38 release v3.3.0 notes: xxKSU v3.3.1 build 32680, driver uapi v5, "
+                           "manager must be uapi v5 (backslashxx/KernelSU v3.3.1); do NOT use a uapi v6 manager. CI proves only that KSU sources/gitlinks were not "
+                           "altered by CI-time patches; it does not prove the uapi version of the built driver.")
           m["compatibility"] = ("Chimera Mk10r2 compatibility here means building the Exynos 9810 Linux 4.9.x vendor kernel from "
                                 "gavdoc38 lineage-24.0-xxksu3-susfs2 for potential use with a LineageOS 24 userspace. "
                                 "Runtime compatibility requires physical-device testing.")
@@ -1130,22 +1288,142 @@ jobs:
           PYEOF
 
       # ── 10. Optional AnyKernel3 packaging (UNVERIFIED for this device) ─────
-      - name: Package AnyKernel3 ZIP (opt-in, UNVERIFIED packaging)
+      # r4: pinned fetch, layout + busybox inventory, CRLF/exec-bit checks, qemu smoke test (diagnostic), verified ZIP.
+      - name: Install AnyKernel3 diagnostics (qemu-user for busybox smoke test)
         if: ${{ inputs.build_scope == 'full' && inputs.package_anykernel }}
         run: |
           set -Eeuo pipefail
-          git clone --depth=1 "$ANYKERNEL_REPO" "$ANYKERNEL_DIR"
-          git -C "$ANYKERNEL_DIR" rev-parse HEAD | tee "$ABS_LOG/anykernel3-commit.txt"
-          rm -rf "$ANYKERNEL_DIR/.git" "$ANYKERNEL_DIR/.github"
+          sudo apt-get update -qq
+          if ! sudo apt-get install -y --no-install-recommends qemu-user-static; then
+            echo "::warning::qemu-user-static could not be installed — the AK3 busybox smoke test will be skipped (diagnostic only)"
+          fi
+
+      - name: Fetch AnyKernel3 and verify layout, line endings and busybox (opt-in, UNVERIFIED packaging)
+        if: ${{ inputs.build_scope == 'full' && inputs.package_anykernel }}
+        run: |
+          set -Eeuo pipefail
+          AK="$GITHUB_WORKSPACE/$ANYKERNEL_DIR"
+          rm -rf "$AK"
+          git init -q "$AK"
+          git -C "$AK" remote add origin "$ANYKERNEL_REPO"
+          if [[ -n "$IN_ANYKERNEL_REF" ]]; then
+            git -C "$AK" fetch --no-tags --depth=1 origin "$IN_ANYKERNEL_REF"
+          else
+            echo "::warning::anykernel_ref empty — fetching AnyKernel3 HEAD (not reproducible)"
+            git -C "$AK" fetch --no-tags --depth=1 origin HEAD
+          fi
+          git -C "$AK" checkout -q --detach FETCH_HEAD
+          AK3_SHA="$(git -C "$AK" rev-parse HEAD)"
+          if [[ -n "$IN_ANYKERNEL_REF" && "$AK3_SHA" != "$IN_ANYKERNEL_REF" ]]; then
+            echo "FATAL: fetched AnyKernel3 commit $AK3_SHA != requested $IN_ANYKERNEL_REF" >&2; exit 1
+          fi
+          echo "AK3_SHA=$AK3_SHA" >> "$GITHUB_ENV"
+          echo "$AK3_SHA" | tee "$ABS_LOG/anykernel3-commit.txt"
+          rm -rf "$AK/.git" "$AK/.github"
+
+          # Layout (file names are UNVERIFIED expectations for the AnyKernel3 revision in use; fail closed with a listing).
+          REQ=(META-INF/com/google/android/update-binary META-INF/com/google/android/updater-script tools/ak3-core.sh)
+          MISSING=()
+          for f in "${REQ[@]}"; do [[ -f "$AK/$f" ]] || MISSING+=("$f"); done
+          if [[ "${#MISSING[@]}" -ne 0 ]]; then
+            echo "FATAL: AnyKernel3 $AK3_SHA is missing: ${MISSING[*]}" >&2
+            ( cd "$AK" && find . -maxdepth 3 -not -path './.git*' | sort ) >&2
+            exit 1
+          fi
+
+          # CRLF in shell scripts breaks sh/busybox on device (shebang and applet names get a trailing CR).
+          CRLF=()
+          for f in META-INF/com/google/android/update-binary META-INF/com/google/android/updater-script tools/ak3-core.sh; do
+            if grep -q $'\r' "$AK/$f"; then CRLF+=("$f"); fi
+          done
+          [[ "${#CRLF[@]}" -eq 0 ]] || { echo "FATAL: CRLF line endings in: ${CRLF[*]}" >&2; exit 1; }
+
+          # Executable bits (the ZIP carries Unix modes; recoveries that ignore them rely on AK3 chmod, but never ship non-exec tools).
+          chmod 755 "$AK/META-INF/com/google/android/update-binary"
+          find "$AK/tools" -type f -exec chmod 755 {} +
+
+          # Busybox inventory. Root cause of recovery busybox errors is UNVERIFIED; this records what CI can see.
+          : > "$ABS_LOG/ak3-busybox.txt"
+          mapfile -t BBS < <(cd "$AK" && find tools -maxdepth 2 -type f -iname 'busybox*' | sort)
+          if [[ "${#BBS[@]}" -eq 0 ]]; then
+            echo "::warning::no tools/busybox* found in AnyKernel3 $AK3_SHA — recoveries will use their own busybox/toybox (a likely source of applet errors)" | tee -a "$ABS_LOG/ak3-busybox.txt"
+          fi
+          AK3_BUSYBOX_LIST=""
+          for rel in "${BBS[@]}"; do
+            bb="$AK/$rel"
+            sha="$(sha256sum "$bb" | cut -d' ' -f1)"
+            {
+              echo "== $rel"
+              echo "sha256: $sha"
+            } | tee -a "$ABS_LOG/ak3-busybox.txt"
+            if ! readelf -h "$bb" >/dev/null 2>&1; then
+              echo "::warning::$rel is not an ELF file" | tee -a "$ABS_LOG/ak3-busybox.txt"
+              continue
+            fi
+            CLASS="$(readelf -h "$bb" | awk -F: '/Class:/{gsub(/^[ \t]+/,"",$2);print $2}')"
+            MACH="$(readelf -h "$bb" | awk -F: '/Machine:/{gsub(/^[ \t]+/,"",$2);print $2}')"
+            INTERP="$(readelf -l "$bb" 2>/dev/null | grep -i 'requesting program interpreter' || true)"
+            if [[ -n "$INTERP" ]]; then LINK="dynamic"; else LINK="static"; fi
+            {
+              echo "class: $CLASS   machine: $MACH   linking: $LINK"
+              [[ -z "$INTERP" ]] || echo "interpreter: $INTERP"
+            } | tee -a "$ABS_LOG/ak3-busybox.txt"
+            if [[ "$LINK" == "dynamic" ]]; then
+              echo "::warning::$rel is dynamically linked — it needs the recovery's loader/libs and can fail with 'not found' or exec errors in minimal recoveries"
+            fi
+            AK3_BUSYBOX_LIST+="${rel}:${sha}:${MACH}:${LINK};"
+
+            # Diagnostic-only smoke test under qemu-user (never fails the build; does not reproduce recovery SELinux/noexec/loader conditions).
+            case "$MACH" in
+              AArch64) Q=qemu-aarch64-static ;;
+              ARM)     Q=qemu-arm-static ;;
+              *)       Q="" ;;
+            esac
+            if [[ -n "$Q" ]] && command -v "$Q" >/dev/null 2>&1; then
+              cp "$bb" /tmp/ak3-bb && chmod +x /tmp/ak3-bb
+              if "$Q" /tmp/ak3-bb --list > /tmp/ak3-bb-applets.txt 2> "$ABS_LOG/ak3-busybox-qemu.err"; then
+                echo "qemu smoke: --list OK ($(wc -l < /tmp/ak3-bb-applets.txt) applets)" | tee -a "$ABS_LOG/ak3-busybox.txt"
+                cp /tmp/ak3-bb-applets.txt "$ABS_LOG/ak3-busybox-applets.txt"
+                # Applet list is a judgment call, UNVERIFIED against what this AK3 revision actually calls.
+                for a in sh ash cat chmod cp cut dd find grep ls mkdir mv readlink rm sed tr; do
+                  grep -qx "$a" /tmp/ak3-bb-applets.txt || echo "::warning::busybox applet '$a' missing in $rel (UNVERIFIED need)" | tee -a "$ABS_LOG/ak3-busybox.txt"
+                done
+                if "$Q" /tmp/ak3-bb sh -c 'echo bb-sh-ok' 2>>"$ABS_LOG/ak3-busybox-qemu.err" | grep -qx 'bb-sh-ok'; then
+                  echo "qemu smoke: sh -c OK" | tee -a "$ABS_LOG/ak3-busybox.txt"
+                else
+                  echo "::warning::qemu smoke: '$rel sh -c' failed (see logs/ak3-busybox-qemu.err)" | tee -a "$ABS_LOG/ak3-busybox.txt"
+                fi
+              else
+                echo "::warning::qemu smoke: '$rel --list' failed (see logs/ak3-busybox-qemu.err) — inconclusive for recoveries" | tee -a "$ABS_LOG/ak3-busybox.txt"
+              fi
+            else
+              echo "qemu smoke skipped (machine '$MACH', qemu '${Q:-n/a}')" | tee -a "$ABS_LOG/ak3-busybox.txt"
+            fi
+          done
+          echo "AK3_BUSYBOX_LIST=$AK3_BUSYBOX_LIST" >> "$GITHUB_ENV"
+
+      - name: Package AnyKernel3 ZIP and verify it (opt-in, UNVERIFIED packaging)
+        if: ${{ inputs.build_scope == 'full' && inputs.package_anykernel }}
+        run: |
+          set -Eeuo pipefail
+          AK="$GITHUB_WORKSPACE/$ANYKERNEL_DIR"
           # Raw concatenation of DTBs — format UNVERIFIED — REQUIRES CONFIRMATION
           cat "$ART_DIR"/dtb/*.dtb > "$ART_DIR/dtb.img"
           [[ -s "$ART_DIR/dtb.img" ]] || { echo "FATAL: dtb.img empty" >&2; exit 1; }
-          cp "$ART_DIR/Image" "$ANYKERNEL_DIR/Image"
-          cp "$ART_DIR/dtb.img" "$ANYKERNEL_DIR/dtb"
-          cat > "$ANYKERNEL_DIR/anykernel.sh" <<AK3SH
+          cp "$ART_DIR/Image" "$AK/Image"
+          cp "$ART_DIR/dtb.img" "$AK/dtb"
+
+          # kernel.string: conservative character set (no '#', '|', quotes, backslashes) so AK3's property parsing and ui_print stay safe.
+          KSTR_RAW="${UNAME_PREVIEW} / ${TOOLCHAIN} / cfg ${FINAL_CONFIG_HASH:0:12} / base ${BASE_COMMIT:0:8}"
+          KSTR="$(printf '%s' "$KSTR_RAW" | tr -cd 'A-Za-z0-9 ._+@:()/-')"
+          [[ -n "$KSTR" ]] || { echo "FATAL: kernel.string is empty after sanitising" >&2; exit 1; }
+          export AK KSTR
+
+          # Quoted template: nothing in here is expanded by the shell. @KERNEL_STRING@ is replaced below.
+          cat > "$AK/anykernel.sh" <<'AK3SH'
           ### AnyKernel3 script — Chimera Mk10r2 g38-xxksu3 (packaging UNVERIFIED for this device)
           properties() { '
-          kernel.string=${UNAME_PREVIEW} | ${TOOLCHAIN} | cfg_sha256=${FINAL_CONFIG_HASH:0:12} | base=${BASE_COMMIT:0:8}
+          kernel.string=@KERNEL_STRING@
           do.devicecheck=1
           do.modules=0
           do.systemless=1
@@ -1165,14 +1443,69 @@ jobs:
 
           . tools/ak3-core.sh
 
+          # xxKSU in this kernel is uapi v5 (gavdoc38 v3.3.0 notes): use the uapi v5 manager (backslashxx/KernelSU v3.3.1), NOT a uapi v6 manager.
+          command -v ui_print >/dev/null 2>&1 && ui_print "xxKSU uapi v5: use manager v3.3.1 (uapi v5), NOT a uapi v6 manager" || true
+
           dump_boot
           write_boot
           AK3SH
+          python3 - <<'PYEOF'
+          import os, pathlib
+          p = pathlib.Path(os.environ["AK"]) / "anykernel.sh"
+          s = p.read_text().replace("@KERNEL_STRING@", os.environ["KSTR"])
+          if "@KERNEL_STRING@" in s or "\r" in s:
+              raise SystemExit("FATAL: anykernel.sh template substitution failed")
+          p.write_text(s)
+          PYEOF
+          chmod 755 "$AK/anykernel.sh"
+          # Syntax check with a POSIX sh (dash): catches quoting/parse errors that would surface as errors under busybox ash.
+          sh -n "$AK/anykernel.sh" || { echo "FATAL: generated anykernel.sh has a shell syntax error" >&2; exit 1; }
+          sed -n '1,40p' "$AK/anykernel.sh" > "$ABS_LOG/ak3-anykernel.sh.txt"
+
           ZIP="$ART_DIR/${BUILD_TAG}-AnyKernel3-UNVERIFIED.zip"
-          ( cd "$ANYKERNEL_DIR" && zip -r9 "$ZIP" . )
+          ( cd "$AK" && zip -r9 -X "$ZIP" . )
           [[ -s "$ZIP" ]] || { echo "FATAL: zip empty" >&2; exit 1; }
+
+          # Verify the ZIP itself.
+          unzip -tq "$ZIP"
+          unzip -Z "$ZIP" > "$ABS_LOG/ak3-zip-listing.txt"
+          LIST="$(unzip -Z1 "$ZIP")"
+          for f in META-INF/com/google/android/update-binary META-INF/com/google/android/updater-script tools/ak3-core.sh anykernel.sh Image dtb; do
+            grep -qxF "$f" <<<"$LIST" || { echo "FATAL: ZIP lacks entry '$f'" >&2; exit 1; }
+          done
+          IFS=';' read -r -a ITEMS <<< "${AK3_BUSYBOX_LIST:-}"
+          for it in "${ITEMS[@]}"; do
+            [[ -n "$it" ]] || continue
+            rel="${it%%:*}"; rest="${it#*:}"; want="${rest%%:*}"
+            grep -qxF "$rel" <<<"$LIST" || { echo "FATAL: ZIP lacks busybox entry '$rel'" >&2; exit 1; }
+            got="$(unzip -p "$ZIP" "$rel" | sha256sum | cut -d' ' -f1)"
+            [[ "$got" == "$want" ]] || { echo "FATAL: busybox '$rel' in ZIP ($got) != source ($want)" >&2; exit 1; }
+            MODE="$(unzip -Z "$ZIP" "$rel")"
+            [[ "$MODE" =~ ^-r.x ]] || { echo "FATAL: busybox '$rel' is not executable inside the ZIP: $MODE" >&2; exit 1; }
+            echo "OK: ZIP busybox $rel sha256 matches source and is executable"
+          done
+          MODE="$(unzip -Z "$ZIP" META-INF/com/google/android/update-binary)"
+          [[ "$MODE" =~ ^-r.x ]] || echo "::warning::update-binary mode in ZIP is not executable: $MODE (recoveries normally exec it via their own mechanism; informational)"
           echo "ZIP_PATH=$ZIP" >> "$GITHUB_ENV"
           ( cd "$ART_DIR" && sha256sum dtb.img "$(basename "$ZIP")" >> SHA256SUMS )
+
+          # Record AK3 details in manifest.json (manifest is not part of SHA256SUMS by design).
+          export ZIP
+          python3 - <<'PYEOF'
+          import json, os, pathlib
+          mp = pathlib.Path(os.environ["ART_DIR"]) / "manifest.json"
+          m = json.loads(mp.read_text())
+          m["anykernel"] = {
+              "repo": os.environ.get("ANYKERNEL_REPO", ""),
+              "requested_ref": os.environ.get("IN_ANYKERNEL_REF", "") or "HEAD (unpinned)",
+              "resolved_sha": os.environ.get("AK3_SHA", ""),
+              "busybox": [x for x in os.environ.get("AK3_BUSYBOX_LIST", "").split(";") if x],
+              "zip": os.path.basename(os.environ.get("ZIP", "")),
+              "status": "UNVERIFIED packaging for star2lte; CI checks are diagnostics only (see logs/ak3-*.txt)",
+          }
+          mp.write_text(json.dumps(m, indent=2))
+          print(json.dumps(m["anykernel"], indent=2))
+          PYEOF
 
       # ── 11. Uploads / release / diagnostics ────────────────────────────────
       # actions/upload-artifact@v7 with archive: false uploads ONE file, UNZIPPED; the artifact name is the file name.
@@ -1264,7 +1597,7 @@ jobs:
             echo '```'
             echo "### diagnostics"
             echo '```'
-            for f in base-commit.txt gitlinks.txt submodule-status.txt fragment-cleanup.txt fragment-dropped-symbols.txt config-guard.log bcmdhd-werror-before.txt bcmdhd-werror-after.txt; do
+            for f in base-commit.txt gitlinks.txt submodule-status.txt ksu-baseline.txt ksu-postbuild.txt fragment-cleanup.txt fragment-dropped-symbols.txt config-guard.log bcmdhd-werror-before.txt bcmdhd-werror-after.txt anykernel3-commit.txt ak3-busybox.txt ak3-zip-listing.txt; do
               if [[ -f "${ABS_LOG:-/nonexistent}/$f" ]]; then echo "--- $f ---"; head -n 40 "$ABS_LOG/$f"; fi
             done
             echo '```'
@@ -1300,10 +1633,15 @@ jobs:
             echo "- kernel base: ${GAVDOC_REPO_SLUG}@${BASE_COMMIT:-n/a} (${GAVDOC_REF_SOURCE:-n/a})"
             echo "- Krazey upstream (fetch only): ${KRAZEY_REPO:-not requested}@${KRAZEY_REF_RESOLVED:-n/a}"
             echo "- KSU/SUSFS: pre-integrated in base branch; no integration performed (Kconfig: ${KSU_KCONFIG_PATH:-n/a}; fragment: ${KSU_FRAGMENT_USED:-none})"
+            echo "- **xxKSU policy**: ${KSU_POLICY} — fingerprint: ${KSU_FP_BASE:-n/a}"
+            echo "- **xxKSU expected (from gavdoc38 v3.3.0 notes)**: ${KSU_EXPECTED}"
+            if [[ "$IN_PACKAGE_ANYKERNEL" == "true" && "$IN_BUILD_SCOPE" == "full" ]]; then
+              echo "- AnyKernel3: ${AK3_SHA:-n/a} (requested: ${IN_ANYKERNEL_REF:-HEAD, unpinned}); busybox: ${AK3_BUSYBOX_LIST:-none found}; packaging UNVERIFIED — see logs/ak3-*.txt"
+            fi
             echo "- compiler: ${COMPILER_VERSION:-n/a}"
             echo "- kernel release: ${KERNEL_RELEASE_ACTUAL:-n/a}"
             echo
-            echo "A green build proves none of: boot, root, SUSFS, SELinux, Samsung RKP/TIMA/KNOX, flashability, vendor blobs, camera, modem, audio, thermal, charging, recovery, boot-image layout, or ABI compatibility."
+            echo "A green build proves none of: boot, root, SUSFS, SELinux, Samsung RKP/TIMA/KNOX, flashability, vendor blobs, camera, modem, audio, thermal, charging, recovery, boot-image layout, xxKSU uapi version, or ABI compatibility."
           } >> "$GITHUB_STEP_SUMMARY"
 
       # Build logs are many files, so they stay ONE zipped artifact (archive: false allows a single file only).
@@ -1383,8 +1721,14 @@ jobs:
               "Chimera Mk10r2 compatibility here means building the Exynos 9810 Linux 4.9.x vendor kernel from "
               "gavdoc38 lineage-24.0-xxksu3-susfs2 (KSU+SUSFS pre-integrated in the branch; no integration performed by CI) "
               "for potential use with a LineageOS 24 userspace. Runtime compatibility requires physical-device testing.\n\n"
+              "**xxKSU:** frozen to the pinned gavdoc38 tree (no KSU change by CI). Per the gavdoc38 v3.3.0 notes this is "
+              "xxKSU v3.3.1 build 32680, driver uapi v5 — use the uapi v5 manager "
+              "(https://github.com/backslashxx/KernelSU/releases/tag/v3.3.1) and do NOT use a uapi v6 manager. "
+              "CI does not prove the built driver's uapi version.\n\n"
               "| Field | Value |\n|---|---|\n"
               f"| Kernel base | `{v('GAVDOC_REPO_SLUG')}@{v('BASE_COMMIT')}` (`{v('GAVDOC_REF_SOURCE')}`) |\n"
+              f"| xxKSU policy / expected | `{v('KSU_POLICY')}` / `{v('KSU_EXPECTED')}` |\n"
+              f"| xxKSU baseline fingerprint (KSU dir / hash) | `{v('KSU_DIR')}` / `{v('KSU_FP_BASE')}` |\n"
               f"| Chimera overlay (commit, checkout verified) | `{m.get('CHIMERA_SHA') or 'none (boot-first)'}` (`{v('CHIMERA_REF_SOURCE')}`) |\n"
               f"| Krazey upstream (fetch only, no merge) | `{m.get('KRAZEY_REPO') or 'not requested'}@{m.get('KRAZEY_REF_RESOLVED') or 'n/a'}` |\n"
               f"| KSU Kconfig / fragment | `{v('KSU_KCONFIG_PATH')}` / `{m.get('KSU_FRAGMENT_USED') or 'none'}` |\n"
