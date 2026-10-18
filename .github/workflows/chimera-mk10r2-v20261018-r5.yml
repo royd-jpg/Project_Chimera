@@ -1,10 +1,37 @@
-# Workflow: chimera-mk10r2-v20261018-r4.yml (refactored from chimera-mk10r2-v20261018-r3.yml)
-# gavdoc38: gavdoc38/android_kernel_samsung_exynos9810; branch lineage-24.0-xxksu3-susfs2; pinned 70afe12930584d6eb5beca9a903f78e1e167d3a2.
+# Workflow: chimera-mk10r2-v20261018-r5.yml (refactored from chimera-mk10r2-v20261018-r4.yml)
+# gavdoc38: gavdoc38/android_kernel_samsung_exynos9810; default pin 11f2256b423acdec8860eaf7f670f13b06e27778 (= release v3.3.0 commit; differs from
+#   branch lineage-24.0-xxksu3-susfs2@70afe129 ONLY in the KernelSU gitlink — verified by diff-tree).
 # Project_Chimera: royd-jpg/Project_Chimera; branch lineage-24.0-xxksu3-susfs2; pinned 95b8142e6763cf6af9534fb1e4495fd59013d6eb.
 # krazey repo/ref: UNVERIFIED until supplied; fetched only and never merged into the kernel tree.
 # Overlay control: `profile` is the ONLY selector (boot-first | chimera-lite | chimera-full). No separate overlay toggle exists.
 #
 # ── CHANGELOG ────────────────────────────────────────────────────────────────
+# r5 changes vs r4:
+#   xxKSU permanently pinned to v3.3.1 (32680-5):
+#     - ROOT CAUSE of the 32693-6 build: gavdoc_ref 70afe129 (branch lineage-24.0-xxksu3-susfs2, 2026-10-18) points KernelSU at
+#       00551a81 whose kernel/Makefile hard-codes -DKSU_VERSION=32693. The v3.3.0 release commit 11f2256 points KernelSU at
+#       5c595611 ("Override version to match manager (32680)"), Makefile -DKSU_VERSION=32680. Kernel-side tree is otherwise identical.
+#       The r4 freeze guard did its job (nothing changed after checkout) but froze the WRONG KSU.
+#     - gavdoc_ref default is now 11f2256b423acdec8860eaf7f670f13b06e27778 (release v3.3.0 commit).
+#     - NEW permanent env pin KSU_PIN_SHA=5c595611d1924b1bbc86e84b0766fb91a52c257a and KSU_PIN_VERSION=32680. A hard gate
+#       (before any patch) requires: the KernelSU gitlink == pin, the submodule checked out at the pin, and kernel/Makefile
+#       containing -DKSU_VERSION=32680. Any other gavdoc_ref whose KernelSU differs now FAILS in minutes with a clear message.
+#       To change xxKSU in future you must edit KSU_PIN_SHA/KSU_PIN_VERSION in this file deliberately.
+#     - The ksu_commit input is removed (superseded by the permanent pin).
+#   BBR + FQ_CoDel in every profile:
+#     - NEW input net_bbr_fq_codel (default true): merges a small fragment last (NET_SCHED, NET_SCH_FQ, NET_SCH_FQ_CODEL,
+#       TCP_CONG_ADVANCED/CUBIC/BBR, DEFAULT_BBR). Config guard hard-requires those plus CONFIG_DEFAULT_TCP_CONG="bbr".
+#     - VERIFIED in the gavdoc38 tree: net/sched/Kconfig has NO DEFAULT_NET_SCH / DEFAULT_FQ_CODEL choice, and sch_generic.c hard-codes
+#       default_qdisc_ops = &pfifo_fast_ops. fq_codel is therefore compiled in and selectable, but the DEFAULT qdisc can only be
+#       changed at runtime: `sysctl -w net.core.default_qdisc=fq_codel` (or from an init script/module). No source patch is applied.
+#   Upstream fetch (fetch-only, never merged):
+#     - krazey_repo/krazey_ref replaced by krazey_upstreams (comma list of owner/repo[@branch]); default fetches the LATEST tip of
+#       krazey/android_kernel_samsung_exynos9810@android-4.9-s and ExyHyperBrick/android_kernel_samsung_exynos9810@lineage-24.0.
+#       Tips are resolved at run time and recorded (manifest KRAZEY_FETCHED). Failure to fetch only warns (build is unaffected).
+#     - NEW advisory report per upstream (logs/krazey-*.txt): tip, last 30 commits, and a changed-path summary
+#       (kernel base -> upstream tip, grouped by top 2 directories). Use it to pick cherry-pick candidates by hand.
+#   AnyKernel3 busybox smoke test fixed: busybox selects its applet from the executable's NAME, and r4 copied it to
+#   /tmp/ak3-bb, so '--list' failed ("inconclusive" warning in your run). It is now run as a file named 'busybox'.
 # r4 changes vs r3:
 #   xxKSU (frozen to gavdoc38):
 #     - NEW policy: this workflow never modifies, replaces, bumps or re-integrates KernelSU/xxKSU. The xxKSU in the pinned
@@ -50,6 +77,19 @@
 #     Submodule/gitlink state is fingerprinted globally regardless.
 #   - merge_ksu_fragment only merges a defconfig fragment (symbols); it cannot change the xxKSU driver sources, but it can change
 #     KSU Kconfig symbols. Leave it off unless the base defconfig fails the CONFIG_KSU=y check.
+# xxKSU pin (r5):
+#   - Pinned KernelSU commit 5c595611 is NOT on any branch of gavdoc38/KernelSU (orphaned by a force-push; verified not an ancestor of
+#     xxksu-susfs). It is still fetchable by SHA today, but GitHub may garbage-collect it. If the checkout ever fails, mirror that commit
+#     into a repo you own and update .gitmodules/the pin deliberately. The gate fails closed rather than silently using another KSU.
+#   - uapi v5 / the "-5" suffix come from the maintainer's release notes; only KSU_VERSION=32680 is verifiable from the sources.
+#   - xxKSU uses syscall-table / branch-link / kprobe hooks, so the ksu_handle_* "not found" warnings for fs/*.c call sites and
+#     vmlinux symbols are expected noise for this variant (UNVERIFIED; they were never hard checks).
+# BBR / fq_codel on this 4.9 kernel: BBR is the compiled-in default congestion control (DEFAULT_TCP_CONG="bbr"); fq_codel and fq are
+#   built in, but the default qdisc stays pfifo_fast until set at runtime (see r5 changelog). UNVERIFIED: BBR pacing on 4.9 relies on
+#   the fq qdisc, so BBR with fq_codel may lack proper pacing; compare `net.core.default_qdisc=fq` vs `fq_codel` on device.
+# Upstream "krazey": two candidates were found. krazey/android_kernel_samsung_exynos9810 exists (default branch master = 4.11-testing, 2022;
+#   it also carries android-4.9-* branches). ExyHyperBrick/android_kernel_samsung_exynos9810 is the fork root of gavdoc38's repo; its
+#   lineage-24.0 head e5906667 equals gavdoc38's lineage-24.0 head. Which one you mean is UNVERIFIED, so both are fetched.
 # AnyKernel3:
 #   - gavdoc38's documented install path is fastbootd `fastboot flash BOOT boot.img` (or ODIN). AK3 packaging in this workflow is
 #     UNVERIFIED for star2lte (Samsung boot image, dtb concat format, partition name).
@@ -118,16 +158,10 @@ on:
         default: false
 
       gavdoc_ref:
-        description: "gavdoc38 kernel commit: required immutable 40-hex SHA. xxKSU is taken from this tree unchanged (v3.3.1 build 32680, uapi v5 per gavdoc38 v3.3.0 notes)."
+        description: "gavdoc38 kernel commit: required immutable 40-hex SHA. Default 11f2256b... = release v3.3.0 commit (KernelSU 5c595611, xxKSU v3.3.1 build 32680). A gavdoc_ref whose KernelSU gitlink differs from the permanent pin is rejected."
         required: true
         type: string
-        default: "70afe12930584d6eb5beca9a903f78e1e167d3a2"
-
-      ksu_commit:
-        description: "OPTIONAL verify-only: full 40-hex SHA that must match a gitlink (submodule) commit in the checked-out kernel tree. It never selects or fetches a KSU commit. Empty = skip."
-        required: false
-        type: string
-        default: ""
+        default: "11f2256b423acdec8860eaf7f670f13b06e27778"
 
       chimera_ref:
         description: "Project_Chimera commit: required immutable 40-hex SHA. Default 95b8142e... contains chimera-xxksu-susfs.cfg but NOT the Chimera overlay files; it works only with boot-first (chimera-lite/full with this SHA is rejected at input validation)."
@@ -135,17 +169,17 @@ on:
         type: string
         default: "95b8142e6763cf6af9534fb1e4495fd59013d6eb"
 
-      krazey_repo:
-        description: "Optional upstream repository to fetch only (owner/repo). UNVERIFIED until supplied; no merge is performed."
+      krazey_upstreams:
+        description: "Fetch-only upstreams (never merged): comma list of owner/repo[@branch]; latest tip is resolved at run time and recorded. Empty = skip. Writes logs/krazey-*.txt (commits + changed-path summary vs the kernel base)."
         required: false
         type: string
-        default: ""
+        default: "krazey/android_kernel_samsung_exynos9810@android-4.9-s,ExyHyperBrick/android_kernel_samsung_exynos9810@lineage-24.0"
 
-      krazey_ref:
-        description: "Required with krazey_repo: immutable 40-hex commit SHA to fetch only."
+      net_bbr_fq_codel:
+        description: "Enable TCP BBR (default congestion control) and fq_codel + fq qdiscs in every profile via a last-merged fragment. Hard-checked in the final .config. Default qdisc is runtime-only on this kernel (net.core.default_qdisc)."
         required: false
-        type: string
-        default: ""
+        type: boolean
+        default: true
 
       merge_ksu_fragment:
         description: "Merge chimera-xxksu-susfs.cfg (defconfig symbols only) from the pinned overlay commit. Default off: branch is already integrated. Cannot change xxKSU driver sources."
@@ -208,7 +242,7 @@ on:
 env:
   GAVDOC_REPO_SLUG: "gavdoc38/android_kernel_samsung_exynos9810"
   GAVDOC_REPO: "https://github.com/gavdoc38/android_kernel_samsung_exynos9810.git"
-  GAVDOC_BRANCH: "lineage-24.0-xxksu3-susfs2"
+  GAVDOC_BRANCH: "lineage-24.0-xxksu3-susfs2 (default pin = release v3.3.0 commit)"
   CHIMERA_REPO_SLUG: "royd-jpg/Project_Chimera"
   CHIMERA_REPO: "https://github.com/royd-jpg/Project_Chimera.git"
   CHIMERA_BRANCH: "lineage-24.0-xxksu3-susfs2"
@@ -218,8 +252,10 @@ env:
   KRAZEY_DIR_NAME: "krazey_upstream"
 
   # xxKSU policy: frozen to whatever the pinned gavdoc38 tree contains. Facts below come from the gavdoc38 v3.3.0 release notes.
-  KSU_POLICY: "frozen-to-gavdoc38-tree (no KSU change by CI)"
-  KSU_EXPECTED: "xxKSU v3.3.1 build 32680, driver uapi v5; manager must be uapi v5 (backslashxx/KernelSU v3.3.1); do NOT use a uapi v6 manager"
+  KSU_POLICY: "permanently pinned (KernelSU commit + KSU_VERSION gated), then frozen (no KSU change by CI)"
+  KSU_PIN_SHA: "5c595611d1924b1bbc86e84b0766fb91a52c257a"
+  KSU_PIN_VERSION: "32680"
+  KSU_EXPECTED: "xxKSU v3.3.1 (32680-5), KernelSU commit 5c595611d1924b1bbc86e84b0766fb91a52c257a, KSU_VERSION=32680, driver uapi v5; manager must be uapi v5 (backslashxx/KernelSU v3.3.1); do NOT use a uapi v6 manager"
 
   KERNEL_DIR: "kernel"
   OUT_DIR: "kernel-out"
@@ -248,10 +284,9 @@ env:
   IN_PROFILE: ${{ inputs.profile }}
   IN_TOOLCHAIN: ${{ inputs.toolchain }}
   IN_GAVDOC_REF: ${{ inputs.gavdoc_ref }}
-  IN_KSU_COMMIT: ${{ inputs.ksu_commit }}
   IN_CHIMERA_REF: ${{ inputs.chimera_ref }}
-  IN_KRAZEY_REPO: ${{ inputs.krazey_repo }}
-  IN_KRAZEY_REF: ${{ inputs.krazey_ref }}
+  IN_KRAZEY_UPSTREAMS: ${{ inputs.krazey_upstreams }}
+  IN_NET_BBR_FQ_CODEL: ${{ inputs.net_bbr_fq_codel }}
   IN_ANYKERNEL_REF: ${{ inputs.anykernel_ref }}
   IN_MERGE_KSU_FRAGMENT: ${{ inputs.merge_ksu_fragment }}
   IN_BRAND: ${{ inputs.brand }}
@@ -289,13 +324,13 @@ jobs:
           [[ "$IN_TOOLCHAIN" =~ ^(gcc|llvm-full|llvm22|llvm21|llvm20|aosp23|aosp22|aosp21|aosp20|aosp19|neutron19|neutron23|neutron24|zyc_stable|weebx)$ ]] || { echo "FATAL: bad toolchain '$IN_TOOLCHAIN'" >&2; FAIL=1; }
           [[ "$IN_GAVDOC_REF" =~ ^[0-9a-f]{40}$ ]] || { echo "FATAL: gavdoc_ref must be an immutable full 40-hex SHA (branch names and short SHAs are rejected)" >&2; FAIL=1; }
           [[ "$IN_CHIMERA_REF" =~ ^[0-9a-f]{40}$ ]] || { echo "FATAL: chimera_ref must be an immutable full 40-hex SHA (branch names and short SHAs are rejected)" >&2; FAIL=1; }
-          [[ -z "$IN_KSU_COMMIT" || "$IN_KSU_COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "FATAL: ksu_commit must be empty or a full 40-hex SHA" >&2; FAIL=1; }
           [[ -z "$IN_ANYKERNEL_REF" || "$IN_ANYKERNEL_REF" =~ ^[0-9a-f]{40}$ ]] || { echo "FATAL: anykernel_ref must be empty or a full 40-hex SHA" >&2; FAIL=1; }
-          if [[ -n "$IN_KRAZEY_REPO" ]]; then
-            [[ "$IN_KRAZEY_REPO" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || { echo "FATAL: krazey_repo must be owner/repo" >&2; FAIL=1; }
-            [[ "$IN_KRAZEY_REF" =~ ^[0-9a-f]{40}$ ]] || { echo "FATAL: krazey_ref is required with krazey_repo and must be an immutable full 40-hex SHA (branch names and short SHAs are rejected)" >&2; FAIL=1; }
-          elif [[ -n "$IN_KRAZEY_REF" ]]; then
-            echo "FATAL: krazey_ref was supplied without krazey_repo" >&2; FAIL=1
+          if [[ -n "$IN_KRAZEY_UPSTREAMS" ]]; then
+            IFS=',' read -r -a KZ <<< "$IN_KRAZEY_UPSTREAMS"
+            for kz in "${KZ[@]}"; do
+              kz="${kz//[[:space:]]/}"; [[ -n "$kz" ]] || continue
+              [[ "$kz" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+(@[A-Za-z0-9._/-]+)?$ ]] || { echo "FATAL: krazey_upstreams entry '$kz' must be owner/repo or owner/repo@branch" >&2; FAIL=1; }
+            done
           fi
           [[ "$IN_BUILD_VERSION" =~ ^[0-9]+$ ]] || { echo "FATAL: build_version must be digits" >&2; FAIL=1; }
           [[ "$IN_BUILD_HOST" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "FATAL: bad build_host" >&2; FAIL=1; }
@@ -470,23 +505,46 @@ jobs:
             echo "ART_DIR=$GITHUB_WORKSPACE/artifacts"
           } >> "$GITHUB_ENV"
 
-      - name: Fetch optional Krazey upstream (no merge)
-        if: ${{ inputs.krazey_repo != '' }}
+      - name: Fetch upstream krazey repos (latest tip, fetch-only, no merge) and write advisory reports
+        if: ${{ inputs.krazey_upstreams != '' }}
+        continue-on-error: true
         run: |
           set -Eeuo pipefail
-          KRAZEY_DIR="$GITHUB_WORKSPACE/$KRAZEY_DIR_NAME"
-          rm -rf "$KRAZEY_DIR"
-          git init -q "$KRAZEY_DIR"
-          git -C "$KRAZEY_DIR" remote add origin "https://github.com/${IN_KRAZEY_REPO}.git"
-          git -C "$KRAZEY_DIR" fetch --no-tags --depth=1 origin "$IN_KRAZEY_REF"
-          KRAZEY_REF_RESOLVED="$(git -C "$KRAZEY_DIR" rev-parse FETCH_HEAD^{commit})"
-          [[ "$KRAZEY_REF_RESOLVED" == "$IN_KRAZEY_REF" ]] || { echo "FATAL: fetched Krazey commit $KRAZEY_REF_RESOLVED != requested $IN_KRAZEY_REF" >&2; exit 1; }
-          {
-            echo "KRAZEY_REPO=$IN_KRAZEY_REPO"
-            echo "KRAZEY_REF_RESOLVED=$KRAZEY_REF_RESOLVED"
-          } >> "$GITHUB_ENV"
-          git -C "$KRAZEY_DIR" show -s --format='format=%H%n%s' FETCH_HEAD | tee "$ABS_LOG/krazey-upstream.txt"
-          echo "Fetched $IN_KRAZEY_REPO@$KRAZEY_REF_RESOLVED; no merge or patch is applied."
+          ROOT="$GITHUB_WORKSPACE/$KRAZEY_DIR_NAME"
+          BASE="$GAVDOC_REF_RESOLVED"
+          rm -rf "$ROOT"; mkdir -p "$ROOT"
+          RESOLVED=""
+          IFS=',' read -r -a ENTRIES <<< "$IN_KRAZEY_UPSTREAMS"
+          for raw in "${ENTRIES[@]}"; do
+            e="${raw//[[:space:]]/}"; [[ -n "$e" ]] || continue
+            repo="${e%%@*}"; branch=""; if [[ "$e" == *@* ]]; then branch="${e#*@}"; fi
+            slug="$(printf '%s' "$repo" | tr '/' '_')"; d="$ROOT/$slug"; rpt="$ABS_LOG/krazey-${slug}.txt"
+            spec="HEAD"; if [[ -n "$branch" ]]; then spec="refs/heads/$branch"; fi
+            git init -q "$d" || { echo "::warning::krazey: git init failed for $e"; continue; }
+            git -C "$d" remote add origin "https://github.com/${repo}.git" || { echo "::warning::krazey: remote add failed for $e"; continue; }
+            git -C "$d" fetch -q --no-tags --depth=50 --filter=blob:none origin "$spec" || { echo "::warning::krazey: fetch failed for $e (fetch-only; build unaffected)"; continue; }
+            tip="$(git -C "$d" rev-parse "FETCH_HEAD^{commit}")" || { echo "::warning::krazey: cannot resolve tip for $e"; continue; }
+            {
+              echo "upstream: $repo  branch: ${branch:-<remote default HEAD>}"
+              echo "tip: $tip"
+              echo "--- last 30 commits ---"
+              git -C "$d" log -n 30 --format='%h %ci %an | %s' "$tip"
+              echo "--- changed paths: kernel base $BASE -> upstream tip (grouped by top 2 dirs; count status dir) ---"
+            } > "$rpt"
+            if git -C "$d" fetch -q --no-tags --depth=1 --filter=blob:none "$GAVDOC_REPO" "$BASE"; then
+              base_tip="$(git -C "$d" rev-parse "FETCH_HEAD^{commit}")"
+              git -C "$d" diff-tree -r --name-status --no-renames "$base_tip" "$tip" \
+                | awk '{n=split($2,a,"/"); k=(n>1)?a[1]"/"a[2]:a[1]; c[$1" "k]++} END{for(x in c) print c[x], x}' \
+                | sort -rn | sed -n '1,60p' >> "$rpt" || true
+              echo "total changed paths: $(git -C "$d" diff-tree -r --name-only --no-renames "$base_tip" "$tip" | wc -l)" >> "$rpt"
+            else
+              echo "(could not fetch kernel base $BASE for comparison)" >> "$rpt"
+            fi
+            RESOLVED+="${repo}@${branch:-HEAD}=${tip};"
+            sed -n '1,12p' "$rpt"
+          done
+          echo "KRAZEY_FETCHED=$RESOLVED" >> "$GITHUB_ENV"
+          echo "Fetched (no merge, no patch applied): ${RESOLVED:-none}"
 
       - name: Deepen submodules if present (KSU Kbuild may run git describe/rev-list) — UNVERIFIED need
         working-directory: ${{ env.KERNEL_DIR }}
@@ -785,15 +843,6 @@ jobs:
           KSU_KCONFIG="$(grep -rlE --include='Kconfig*' --exclude-dir=.git '^config KSU$' . 2>/dev/null | head -n1 || true)"
           [[ -n "$KSU_KCONFIG" ]] || { echo "FATAL: no Kconfig defining 'config KSU' found — branch does not look KernelSU-integrated; this workflow performs NO integration" >&2; exit 1; }
           echo "KSU Kconfig: $KSU_KCONFIG"
-          if [[ -n "$IN_KSU_COMMIT" ]]; then
-            if git ls-files -s | awk '$1=="160000"{print $2}' | grep -qx "$IN_KSU_COMMIT"; then
-              echo "OK: ksu_commit $IN_KSU_COMMIT matches a gitlink in the kernel tree"
-            else
-              echo "FATAL: ksu_commit $IN_KSU_COMMIT is not a gitlink/submodule commit of this tree (in-tree KSU may not be a submodule, or the pin differs). Gitlinks present:" >&2
-              git ls-files -s | awk '$1=="160000"{print $2, $4}' >&2 || true
-              exit 1
-            fi
-          fi
           git ls-files -s | awk '$1=="160000"{print $2, $4}' > "$ABS_LOG/gitlinks.txt" || true
           echo "$BASE_COMMIT" > "$ABS_LOG/base-commit.txt"
           UNAME_PREVIEW="Linux version ${KV}${BRAND} (${KBUILD_BUILD_USER}@${KBUILD_BUILD_HOST}) #${KBUILD_BUILD_VERSION} SMP PREEMPT"
@@ -844,7 +893,7 @@ jobs:
       # ── 5b. xxKSU freeze: baseline (r4) ────────────────────────────────────
       # The xxKSU in the pinned gavdoc38 tree (v3.3.1 build 32680, uapi v5 per gavdoc38 v3.3.0 notes) is the ONLY xxKSU.
       # This step records its fingerprint; "KSU freeze guard" below fails the run if any CI patch alters it.
-      - name: KSU freeze — record xxKSU baseline (gavdoc38 tree is the single source of truth)
+      - name: KSU pin gate + freeze baseline (permanent xxKSU v3.3.1, KSU_VERSION 32680)
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
@@ -852,6 +901,20 @@ jobs:
           source "$CI_LIB"
           KSU_DIR="$(dirname "$KSU_KCONFIG_PATH")"
           [[ -d "$KSU_DIR" ]] || { echo "FATAL: KSU dir '$KSU_DIR' (from $KSU_KCONFIG_PATH) is not a directory" >&2; exit 1; }
+          # PERMANENT xxKSU PIN GATE: gitlink, checked-out commit and KSU_VERSION must all match the pin (v3.3.1 build 32680).
+          GL="$(git ls-files -s | awk '$1=="160000"{print $2, $4}')"
+          if ! grep -q "^${KSU_PIN_SHA} " <<<"$GL"; then
+            { echo "FATAL: no gitlink equals the permanent xxKSU pin $KSU_PIN_SHA. This gavdoc_ref ($BASE_COMMIT) points KernelSU elsewhere:"; echo "$GL"
+              echo "Use gavdoc_ref=11f2256b423acdec8860eaf7f670f13b06e27778 (release v3.3.0), or edit KSU_PIN_SHA/KSU_PIN_VERSION in this workflow deliberately."; } >&2
+            exit 1
+          fi
+          SS="$(git submodule status --recursive)"
+          if grep -qE '^[-+U]' <<<"$SS"; then echo "FATAL: a submodule is not at its recorded commit:" >&2; echo "$SS" >&2; exit 1; fi
+          awk '{print $1}' <<<"$(sed -E 's/^.//' <<<"$SS")" | grep -qx "$KSU_PIN_SHA" || { echo "FATAL: KernelSU submodule is not checked out at $KSU_PIN_SHA" >&2; echo "$SS" >&2; exit 1; }
+          VLINE="$(grep -hE 'DKSU_VERSION=' "$KSU_DIR/Makefile" 2>/dev/null || true)"
+          echo "KSU_VERSION line: $VLINE"
+          [[ "$VLINE" == *"-DKSU_VERSION=${KSU_PIN_VERSION}"* ]] || { echo "FATAL: $KSU_DIR/Makefile does not define -DKSU_VERSION=$KSU_PIN_VERSION" >&2; exit 1; }
+          echo "PASS: xxKSU pin gate (commit $KSU_PIN_SHA, KSU_VERSION=$KSU_PIN_VERSION)"
           KSU_FP_BASE="$(ksu_fingerprint "$KSU_DIR")"
           [[ "$KSU_FP_BASE" =~ ^[0-9a-f]{64}$ ]] || { echo "FATAL: could not compute KSU fingerprint" >&2; exit 1; }
           {
@@ -1068,6 +1131,23 @@ jobs:
           done
           [[ -s "$ABS_LOG/fragment-cleanup.txt" ]] || echo "fragment cleanup: nothing to remove (or no fragments merged)" | tee "$ABS_LOG/fragment-cleanup.txt"
 
+          # BBR + fq_codel (+fq) in every profile, merged last. Only symbols VERIFIED to exist in this tree are used (no DEFAULT_NET_SCH /
+          # DEFAULT_FQ_CODEL here: the default qdisc is runtime-only). DEFAULT_TCP_CONG="bbr" follows from DEFAULT_BBR and is hard-checked below.
+          if [[ "$IN_NET_BBR_FQ_CODEL" == "true" ]]; then
+            cat > /tmp/chimera-net.cfg <<'NETEOF'
+          CONFIG_NET_SCHED=y
+          CONFIG_NET_SCH_FQ=y
+          CONFIG_NET_SCH_FQ_CODEL=y
+          CONFIG_TCP_CONG_ADVANCED=y
+          CONFIG_TCP_CONG_CUBIC=y
+          CONFIG_TCP_CONG_BBR=y
+          # CONFIG_DEFAULT_RENO is not set
+          # CONFIG_DEFAULT_CUBIC is not set
+          CONFIG_DEFAULT_BBR=y
+          NETEOF
+            FRAGS+=(/tmp/chimera-net.cfg)
+          fi
+
           chimera_make "$(basename "$DEFCONFIG")" | tee "$ABS_LOG/defconfig-base.log"
           if [[ "${#FRAGS[@]}" -gt 0 ]]; then
             scripts/kconfig/merge_config.sh -m -O "$ABS_OUT" "$ABS_OUT/.config" "${FRAGS[@]}" | tee "$ABS_LOG/merge-config.log"
@@ -1110,6 +1190,7 @@ jobs:
           REQUIRED_LITE=(CONFIG_KSU_SUSFS_SUS_MAP CONFIG_CPU_FREQ_GOV_SCHEDUTIL CONFIG_ARM_EXYNOS_UFC)
           REQUIRED_FULL=(CONFIG_HZ_300 CONFIG_TCP_CONG_ADVANCED CONFIG_TCP_CONG_BBR CONFIG_TCP_CONG_CUBIC CONFIG_DEFAULT_BBR CONFIG_NET_SCHED CONFIG_NET_SCH_FQ CONFIG_NET_SCH_FQ_CODEL CONFIG_MFD_MADERA CONFIG_MFD_MADERA_SPI CONFIG_MFD_CS47L92 CONFIG_PINCTRL_MADERA CONFIG_GPIO_MADERA)
           FORBIDDEN=(CONFIG_RKP_KDP CONFIG_UH_RKP CONFIG_TIMA CONFIG_TIMA_LKMAUTH CONFIG_FIVE CONFIG_SEC_RESTRICT_ROOTING CONFIG_SEC_RESTRICT_SETUID CONFIG_SECURITY_DEFEX CONFIG_KNOX_KAP)
+          REQUIRED_NET=(CONFIG_NET_SCHED CONFIG_NET_SCH_FQ CONFIG_NET_SCH_FQ_CODEL CONFIG_TCP_CONG_ADVANCED CONFIG_TCP_CONG_CUBIC CONFIG_TCP_CONG_BBR CONFIG_DEFAULT_BBR)
           REQUIRED=("${REQUIRED_BASE[@]}")
           SETS="BASE"
           case "$OVERLAY_PROFILE_EFFECTIVE" in
@@ -1118,6 +1199,7 @@ jobs:
             full)          REQUIRED+=("${REQUIRED_SECURITY[@]}" "${REQUIRED_LITE[@]}" "${REQUIRED_FULL[@]}"); SETS+="+SECURITY+LITE+FULL" ;;
             *) echo "FATAL: unexpected OVERLAY_PROFILE_EFFECTIVE '$OVERLAY_PROFILE_EFFECTIVE'" >&2; exit 1 ;;
           esac
+          if [[ "$IN_NET_BBR_FQ_CODEL" == "true" ]]; then REQUIRED+=("${REQUIRED_NET[@]}"); SETS+="+NET"; fi
           FAIL=0
           : > "$ABS_LOG/config-guard.log"
           echo "guard symbol sets: $SETS (overlay profile: $OVERLAY_PROFILE_EFFECTIVE)" | tee -a "$ABS_LOG/config-guard.log"
@@ -1125,6 +1207,12 @@ jobs:
             if grep -qE "^${s}=y$" "$CFG"; then echo "OK: $s=y" | tee -a "$ABS_LOG/config-guard.log"
             else echo "FATAL: $s not enabled" | tee -a "$ABS_LOG/config-guard.log"; FAIL=1; fi
           done
+          if [[ "$IN_NET_BBR_FQ_CODEL" == "true" ]]; then
+            for kv in 'CONFIG_DEFAULT_TCP_CONG="bbr"'; do
+              if grep -qxF "$kv" "$CFG"; then echo "OK: $kv" | tee -a "$ABS_LOG/config-guard.log"
+              else echo "FATAL: $kv not in final .config" | tee -a "$ABS_LOG/config-guard.log"; FAIL=1; fi
+            done
+          fi
           if [[ "$APPLY_OVERLAY" == "true" ]]; then
             for s in CONFIG_CC_STACKPROTECTOR_NONE CONFIG_CC_STACKPROTECTOR_STRONG; do
               if grep -qE "^${s}=y$" "$CFG"; then echo "FATAL: $s=y (overlay requires CC_STACKPROTECTOR_REGULAR)" | tee -a "$ABS_LOG/config-guard.log"; FAIL=1; fi
@@ -1261,8 +1349,8 @@ jobs:
           def sha(p): return hashlib.sha256(p.read_bytes()).hexdigest()
           keys = ["BUILD_TAG","GITHUB_RUN_ID","IN_PROFILE","TOOLCHAIN","APPLY_OVERLAY","GAVDOC_REPO_SLUG","GAVDOC_BRANCH",
                   "IN_GAVDOC_REF","GAVDOC_REF_RESOLVED","GAVDOC_REF_SOURCE","BASE_COMMIT","CHIMERA_REPO_SLUG","CHIMERA_BRANCH",
-                  "CHIMERA_REF_RESOLVED","CHIMERA_REF_SOURCE","CHIMERA_SHA","IN_KRAZEY_REPO","IN_KRAZEY_REF","KRAZEY_REPO","KRAZEY_REF_RESOLVED",
-                  "IN_KSU_COMMIT","KSU_KCONFIG_PATH","KSU_POLICY","KSU_EXPECTED","KSU_DIR","KSU_FP_BASE",
+                  "CHIMERA_REF_RESOLVED","CHIMERA_REF_SOURCE","CHIMERA_SHA","IN_KRAZEY_UPSTREAMS","KRAZEY_FETCHED","IN_NET_BBR_FQ_CODEL",
+                  "KSU_PIN_SHA","KSU_PIN_VERSION","KSU_KCONFIG_PATH","KSU_POLICY","KSU_EXPECTED","KSU_DIR","KSU_FP_BASE",
                   "IN_MERGE_KSU_FRAGMENT","KSU_FRAGMENT_USED","COMPILER_VERSION","LINKER_VERSION","TC_CACHE_KEY",
                   "TC_IDENTITY_HASH","KERNEL_VERSION","KERNEL_RELEASE_EXPECTED","KERNEL_RELEASE_ACTUAL","BUILD_KCFLAGS",
                   "FINAL_CONFIG_HASH","UNAME_PREVIEW","KBUILD_BUILD_USER","KBUILD_BUILD_HOST","KBUILD_BUILD_VERSION",
@@ -1380,15 +1468,15 @@ jobs:
               *)       Q="" ;;
             esac
             if [[ -n "$Q" ]] && command -v "$Q" >/dev/null 2>&1; then
-              cp "$bb" /tmp/ak3-bb && chmod +x /tmp/ak3-bb
-              if "$Q" /tmp/ak3-bb --list > /tmp/ak3-bb-applets.txt 2> "$ABS_LOG/ak3-busybox-qemu.err"; then
+              mkdir -p /tmp/ak3-bbdir && cp "$bb" /tmp/ak3-bbdir/busybox && chmod +x /tmp/ak3-bbdir/busybox   # applet is chosen from the file NAME
+              if "$Q" /tmp/ak3-bbdir/busybox --list > /tmp/ak3-bb-applets.txt 2> "$ABS_LOG/ak3-busybox-qemu.err"; then
                 echo "qemu smoke: --list OK ($(wc -l < /tmp/ak3-bb-applets.txt) applets)" | tee -a "$ABS_LOG/ak3-busybox.txt"
                 cp /tmp/ak3-bb-applets.txt "$ABS_LOG/ak3-busybox-applets.txt"
                 # Applet list is a judgment call, UNVERIFIED against what this AK3 revision actually calls.
                 for a in sh ash cat chmod cp cut dd find grep ls mkdir mv readlink rm sed tr; do
                   grep -qx "$a" /tmp/ak3-bb-applets.txt || echo "::warning::busybox applet '$a' missing in $rel (UNVERIFIED need)" | tee -a "$ABS_LOG/ak3-busybox.txt"
                 done
-                if "$Q" /tmp/ak3-bb sh -c 'echo bb-sh-ok' 2>>"$ABS_LOG/ak3-busybox-qemu.err" | grep -qx 'bb-sh-ok'; then
+                if "$Q" /tmp/ak3-bbdir/busybox sh -c 'echo bb-sh-ok' 2>>"$ABS_LOG/ak3-busybox-qemu.err" | grep -qx 'bb-sh-ok'; then
                   echo "qemu smoke: sh -c OK" | tee -a "$ABS_LOG/ak3-busybox.txt"
                 else
                   echo "::warning::qemu smoke: '$rel sh -c' failed (see logs/ak3-busybox-qemu.err)" | tee -a "$ABS_LOG/ak3-busybox.txt"
@@ -1631,7 +1719,9 @@ jobs:
             fi
             echo "- brand: ${BRAND:-n/a}"
             echo "- kernel base: ${GAVDOC_REPO_SLUG}@${BASE_COMMIT:-n/a} (${GAVDOC_REF_SOURCE:-n/a})"
-            echo "- Krazey upstream (fetch only): ${KRAZEY_REPO:-not requested}@${KRAZEY_REF_RESOLVED:-n/a}"
+            echo "- upstream fetch-only (never merged): ${KRAZEY_FETCHED:-none/not requested} — see logs/krazey-*.txt"
+            echo "- BBR (default CC) + fq_codel/fq built in: ${IN_NET_BBR_FQ_CODEL} (default qdisc is runtime-only: net.core.default_qdisc)"
+            echo "- xxKSU pin: ${KSU_PIN_SHA} / KSU_VERSION ${KSU_PIN_VERSION}"
             echo "- KSU/SUSFS: pre-integrated in base branch; no integration performed (Kconfig: ${KSU_KCONFIG_PATH:-n/a}; fragment: ${KSU_FRAGMENT_USED:-none})"
             echo "- **xxKSU policy**: ${KSU_POLICY} — fingerprint: ${KSU_FP_BASE:-n/a}"
             echo "- **xxKSU expected (from gavdoc38 v3.3.0 notes)**: ${KSU_EXPECTED}"
@@ -1721,7 +1811,7 @@ jobs:
               "Chimera Mk10r2 compatibility here means building the Exynos 9810 Linux 4.9.x vendor kernel from "
               "gavdoc38 lineage-24.0-xxksu3-susfs2 (KSU+SUSFS pre-integrated in the branch; no integration performed by CI) "
               "for potential use with a LineageOS 24 userspace. Runtime compatibility requires physical-device testing.\n\n"
-              "**xxKSU:** frozen to the pinned gavdoc38 tree (no KSU change by CI). Per the gavdoc38 v3.3.0 notes this is "
+              "**xxKSU:** permanently pinned (KernelSU 5c595611, KSU_VERSION 32680) and frozen (no KSU change by CI). Per the gavdoc38 v3.3.0 notes this is "
               "xxKSU v3.3.1 build 32680, driver uapi v5 — use the uapi v5 manager "
               "(https://github.com/backslashxx/KernelSU/releases/tag/v3.3.1) and do NOT use a uapi v6 manager. "
               "CI does not prove the built driver's uapi version.\n\n"
@@ -1730,7 +1820,9 @@ jobs:
               f"| xxKSU policy / expected | `{v('KSU_POLICY')}` / `{v('KSU_EXPECTED')}` |\n"
               f"| xxKSU baseline fingerprint (KSU dir / hash) | `{v('KSU_DIR')}` / `{v('KSU_FP_BASE')}` |\n"
               f"| Chimera overlay (commit, checkout verified) | `{m.get('CHIMERA_SHA') or 'none (boot-first)'}` (`{v('CHIMERA_REF_SOURCE')}`) |\n"
-              f"| Krazey upstream (fetch only, no merge) | `{m.get('KRAZEY_REPO') or 'not requested'}@{m.get('KRAZEY_REF_RESOLVED') or 'n/a'}` |\n"
+              f"| Upstream fetch-only (no merge) | `{m.get('KRAZEY_FETCHED') or 'not requested'}` |\n"
+              f"| BBR + fq_codel | `{v('IN_NET_BBR_FQ_CODEL')}` |\n"
+              f"| xxKSU pin / KSU_VERSION | `{v('KSU_PIN_SHA')}` / `{v('KSU_PIN_VERSION')}` |\n"
               f"| KSU Kconfig / fragment | `{v('KSU_KCONFIG_PATH')}` / `{m.get('KSU_FRAGMENT_USED') or 'none'}` |\n"
               f"| Profile / overlay / overlay profile | `{v('IN_PROFILE')}` / `{v('APPLY_OVERLAY')}` / `{v('OVERLAY_PROFILE_EFFECTIVE')}` |\n"
               f"| Toolchain mode | `{v('TOOLCHAIN')}` (`{v('COMPILER_KIND')}`) |\n"
