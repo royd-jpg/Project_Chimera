@@ -1,4 +1,4 @@
-# Workflow: chimera-mk10r2-v20261018-r5.yml (refactored from chimera-mk10r2-v20261018-r4.yml)
+# Workflow: chimera-mk10r2-v20261018-r6.yml (refactored from chimera-mk10r2-v20261018-r5.yml)
 # gavdoc38: gavdoc38/android_kernel_samsung_exynos9810; default pin 11f2256b423acdec8860eaf7f670f13b06e27778 (= release v3.3.0 commit; differs from
 #   branch lineage-24.0-xxksu3-susfs2@70afe129 ONLY in the KernelSU gitlink — verified by diff-tree).
 # Project_Chimera: royd-jpg/Project_Chimera; branch lineage-24.0-xxksu3-susfs2; pinned 95b8142e6763cf6af9534fb1e4495fd59013d6eb.
@@ -6,6 +6,23 @@
 # Overlay control: `profile` is the ONLY selector (boot-first | chimera-lite | chimera-full). No separate overlay toggle exists.
 #
 # ── CHANGELOG ────────────────────────────────────────────────────────────────
+# r6 changes vs r5 (Project_Chimera overlay support; boot-first stays the default profile):
+#   - The overlay files do NOT exist on royd-jpg/Project_Chimera lineage-24.0* branches (tips 0fe372ac / 04b9eb3e, and not at 95b8142e).
+#     They exist only on branch lineage-23.2-ksun3-susfs2: all four required files (chimera-device-specific.cfg,
+#     patches/apply_chimera_overlay_patches.sh, patches/apply_chimera_overlay_lite.sh, the madera patch) first appear together at
+#     4652a0051ec3c41c8d4a51207930638e77dec4e5 (2026-10-02) and are byte-identical at the branch tip 9c37776b8a81e6cdd15ba010ddff3288f8d74f61.
+#   - chimera_ref default is now 9c37776b... (overlay-containing). Still unused for boot-first. 95b8142e remains rejected for lite/full.
+#   - Dry-run of the real overlay steps against gavdoc38 11f2256 (release v3.3.0) with that overlay:
+#       chimera-lite: all 5 markers + 2 fair.c checks PASS unmodified; KernelSU untouched.
+#       chimera-full: FAILED twice, both fixed by a CI-time shim (below):
+#         1) "camera ION size": upstream commit "mm: Use CMA for the camera heap" changed the camera ION node from `ion,recyclable;`
+#            to `ion,reusable;`; the overlay regex only knows `recyclable`.
+#         2) the script reads the madera patch from $GITHUB_WORKSPACE/patches/..., which does not exist in this two-repo layout
+#            (overlay lives in $GITHUB_WORKSPACE/chimera_overlay).
+#   - NEW CI-time compat shim (profile full only): runs the overlay script from a PRIVATE COPY ($RUNNER_TEMP/chimera-overlay-ws);
+#     widens the camera regex to (?:recyclable|reusable) with an exactly-one-match assert (skips if the overlay already accepts both)
+#     and points GITHUB_WORKSPACE for that one invocation at the copy so the madera patch resolves. The overlay checkout is not modified.
+#     Preferred long-term fix: commit the same two changes to Project_Chimera and pin the new SHA (shim then becomes a no-op).
 # r5 changes vs r4:
 #   xxKSU permanently pinned to v3.3.1 (32680-5):
 #     - ROOT CAUSE of the 32693-6 build: gavdoc_ref 70afe129 (branch lineage-24.0-xxksu3-susfs2, 2026-10-18) points KernelSU at
@@ -164,10 +181,10 @@ on:
         default: "11f2256b423acdec8860eaf7f670f13b06e27778"
 
       chimera_ref:
-        description: "Project_Chimera commit: required immutable 40-hex SHA. Default 95b8142e... contains chimera-xxksu-susfs.cfg but NOT the Chimera overlay files; it works only with boot-first (chimera-lite/full with this SHA is rejected at input validation)."
+        description: "Project_Chimera commit: required immutable 40-hex SHA, used only for chimera-lite/full (and merge_ksu_fragment). Default 9c37776b... (branch lineage-23.2-ksun3-susfs2) contains all overlay files and chimera-xxksu-susfs.cfg. 95b8142e... has NO overlay files and is rejected for lite/full."
         required: true
         type: string
-        default: "95b8142e6763cf6af9534fb1e4495fd59013d6eb"
+        default: "9c37776b8a81e6cdd15ba010ddff3288f8d74f61"
 
       krazey_upstreams:
         description: "Fetch-only upstreams (never merged): comma list of owner/repo[@branch]; latest tip is resolved at run time and recorded. Empty = skip. Writes logs/krazey-*.txt (commits + changed-path summary vs the kernel base)."
@@ -245,7 +262,7 @@ env:
   GAVDOC_BRANCH: "lineage-24.0-xxksu3-susfs2 (default pin = release v3.3.0 commit)"
   CHIMERA_REPO_SLUG: "royd-jpg/Project_Chimera"
   CHIMERA_REPO: "https://github.com/royd-jpg/Project_Chimera.git"
-  CHIMERA_BRANCH: "lineage-24.0-xxksu3-susfs2"
+  CHIMERA_BRANCH: "lineage-23.2-ksun3-susfs2 (overlay files; absent from lineage-24.0*)"
   # Known to contain chimera-xxksu-susfs.cfg but NO overlay/patch files; rejected for chimera-lite/full at validation.
   CHIMERA_NO_OVERLAY_SHA: "95b8142e6763cf6af9534fb1e4495fd59013d6eb"
   OVERLAY_DIR_NAME: "chimera_overlay"
@@ -1034,7 +1051,27 @@ jobs:
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -Eeuo pipefail
-          bash "$OVERLAY_DIR/patches/apply_chimera_overlay_patches.sh" 2>&1 | tee "$ABS_LOG/overlay.log"
+          # CI-time compat shim (r6): the overlay script is run from a PRIVATE COPY; the checked-out overlay repo is never modified.
+          #  1) camera ION node: `ion,recyclable;` became `ion,reusable;` upstream ("mm: Use CMA for the camera heap").
+          #  2) the script reads the madera patch from $GITHUB_WORKSPACE/patches/, absent in the two-repo layout -> point it at the copy.
+          SHIM_WS="$RUNNER_TEMP/chimera-overlay-ws"
+          rm -rf "$SHIM_WS"; mkdir -p "$SHIM_WS"
+          cp -a "$OVERLAY_DIR/patches" "$SHIM_WS/patches"
+          export SHIM_WS
+          python3 - <<'PYEOF' 2>&1 | tee "$ABS_LOG/overlay-shims.txt"
+          import os, pathlib, sys
+          p = pathlib.Path(os.environ["SHIM_WS"]) / "patches" / "apply_chimera_overlay_patches.sh"
+          s = p.read_text()
+          old, new = "ion,recyclable;", "ion,(?:recyclable|reusable);"
+          if "(?:recyclable|reusable)" in s:
+              print("shim 1: overlay already accepts recyclable|reusable - skipped")
+          elif s.count(old) == 1:
+              p.write_text(s.replace(old, new)); print("shim 1: camera ION regex widened to (?:recyclable|reusable)")
+          else:
+              sys.exit(f"FATAL: shim 1: expected exactly 1 '{old}' in the overlay script, found {s.count(old)}")
+          print("shim 2: GITHUB_WORKSPACE for the overlay script -> private copy containing patches/")
+          PYEOF
+          GITHUB_WORKSPACE="$SHIM_WS" bash "$SHIM_WS/patches/apply_chimera_overlay_patches.sh" 2>&1 | tee "$ABS_LOG/overlay.log"
           FAIL=0
           mk() { if grep -q "$2" "$3" 2>/dev/null; then echo "OK:    $1"; else echo "FATAL: $1 — marker $2 missing in $3 (markers UNVERIFIED for this overlay branch)"; FAIL=1; fi; }
           mk "UFC short-circuit"     CMK9_UFC_SHORT_CIRCUIT        drivers/cpufreq/exynos-ufc.c
