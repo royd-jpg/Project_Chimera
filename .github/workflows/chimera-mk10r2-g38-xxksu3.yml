@@ -1,48 +1,8 @@
-# Base workflow : chimera-mk9r2-v20261014-r2.yml (Project Chimera Mk9r2, v.20261014-r2), as supplied in the
-#                 conversation, renamed to Chimera Mk10r2. The blob URL given for it returned HTTP 404, so the
-#                 supplied text is the only base that was inspected.
-# Source        : gavdoc38/android_kernel_samsung_exynos9810 @ branch lineage-24.0-xxksu3-susfs2 (already KSU+SUSFS integrated).
-# Overlay       : royd-jpg/Project_Chimera @ branch lineage-24.0-xxksu3-susfs2 (checked out to $GITHUB_WORKSPACE/chimera_overlay).
-#
-# TEST STATUS (what was and was not tested):
-#   TESTED (static, in a sandbox): YAML parses; actionlint 1.7.12 (with shellcheck) reports no findings, yamllint clean;
-#   every `run:` block is shellchecked; embedded Python heredocs compile; the workflow_dispatch input count (22) is within the GitHub limit of 25.
-#   RUN EVIDENCE (Actions run logs, 2026-10-18): inputs validation, base/overlay ref resolution and the Project_Chimera
-#   checkout work. That Project_Chimera branch tip is itself a full kernel tree (Linux 4.9-era, KernelSU gitlink +
-#   drivers/kernelsu, fs/susfs.c, include/linux/susfs*.h, exynos9810-star2lte_defconfig, the star2lte_eur_open_26 DTS,
-#   chimera-xxksu-susfs.cfg) but does NOT contain chimera-device-specific.cfg or patches/ — so profile=chimera-full
-#   (overlay_profile full/lite/security-only all need chimera-device-specific.cfg) fails closed there unless chimera_ref
-#   points at a commit that has the overlay files.
-#   NOT TESTED: no full build has been run. The gavdoc38 branch tree and the Project_Chimera branch
-#   could not be fetched, so nothing repo-specific was verified from source. These items are UNVERIFIED —
-#   REQUIRES CONFIRMATION and are checked fail-closed at run time instead: defconfig
-#   arch/arm64/configs/exynos9810-star2lte_defconfig, DTB dts/exynos/exynos9810-star2lte_eur_open_26.dtb,
-#   fs/susfs.c + include/linux/susfs.h, an in-tree 'config KSU' Kconfig, kernelversion 4.9.x, CONFIG_* guard
-#   symbols (KSU, KSU_SUSFS, SUS_PATH/KSTAT/MAP), overlay markers CMK9_* (owned by the overlay scripts, NOT renamed),
-#   and Project_Chimera file names (chimera-device-specific.cfg, chimera-xxksu-susfs.cfg, patches/apply_chimera_overlay_*.sh).
-#   Toolchain URLs/layouts are carried over unchanged from the base. First recommended run:
-#   profile=boot-first, build_scope=config-only (fast; exercises refs, preflight, Kconfig and the config guard).
-#
-# INTENTIONALLY CHANGED / DISABLED vs base:
-#   - RENAMED to Chimera Mk10r2: workflow/kernel name, brand options ("-Chimera_Mk10r2", "-24463729", "-c10r2x[git7]"
-#     default, "Other"), BUILD_TAG / concurrency / ccache / log-artifact prefixes (chimera-mk10-...).
-#   - build_date options reduced to "RISINGOS9: Mon Oct 12 15:30:15 UTC 2026" and "Other" (default Other).
-#   - REMOVED steps: integration-patch generation/apply, KernelSU-Next clone, KSU-Next-specific wiring checks, forced
-#     manual-hook/kprobe handling, integration-patch artifact. Branch is already integrated (no KSU/SUSFS patching here).
-#   - REMOVED inputs: integration_base, integration_ref, integration_patch_sha256 (phased out: branch is already integrated).
-#     ksu_commit is KEPT as an optional verify-only pin: if set it must equal a gitlink (submodule) commit of the
-#     checked-out tree, else the job fails.
-#   - base_ref: full 40-hex SHA, or EMPTY (default) = resolve the live tip of base_branch_hint (default
-#     lineage-24.0-xxksu3-susfs2) and record the resolved SHA (that tip's SHA was not known when this file was written).
-#   - NEW input chimera_ref: full 40-hex SHA or EMPTY (default) = resolve tip of the Project_Chimera branch.
-#   - NEW input merge_ksu_fragment (default false): merge chimera-xxksu-susfs.cfg (fallback chimera-ksu-susfs.cfg) from the
-#     overlay repo. Off by default because the branch defconfig is expected to carry KSU/SUSFS (UNVERIFIED).
-#   - Kernel-version pin 4.9.337 replaced by a 4.9.* check; kernel checkout uses submodules: recursive (UNVERIFIED need).
-#   - Symbol checks: only generic ksu_*/susfs_* presence is fatal; named hook symbols are warnings (names UNVERIFIED for xxksu).
-#   - AnyKernel3 'supported.versions=9-16' removed (LOS24 Android version UNVERIFIED; would risk aborting installs).
-#   - Base has no 'chimera-overlay' name: the equivalent options are profile=chimera-full, apply_optional_overlay and
-#     overlay_profile (full|lite|security-only); all kept. Base has no clean-build, LTO, boot.img or KSU-variant inputs; none added.
-#   - Only workflow_dispatch trigger (as in base; no push/schedule).
+# Base workflow: chimera-mk9r2-v20261014-r2.yml, as supplied by the user.
+# gavdoc38: gavdoc38/android_kernel_samsung_exynos9810; branch lineage-24.0-xxksu3-susfs2; pinned 70afe12930584d6eb5beca9a903f78e1e167d3a2.
+# Project_Chimera: royd-jpg/Project_Chimera; branch lineage-24.0-xxksu3-susfs2; pinned 95b8142e6763cf6af9534fb1e4495fd59013d6eb.
+# krazey repo/ref: UNVERIFIED until supplied; fetched only and never merged into the kernel tree.
+# Changed behavior: immutable gavdoc/chimera pins; chimera-full requires the overlay toggle; enabled overlays preflight all required files; config-only stops after Config guard.
 
 name: Project Chimera Mk10r2 — gavdoc38 lineage-24.0-xxksu3-susfs2 (boot-first / chimera-full)
 
@@ -50,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: chimera-mk10-g38-${{ github.event.inputs.profile }}-${{ github.event.inputs.overlay_profile }}-${{ github.event.inputs.toolchain }}-${{ github.event.inputs.base_ref }}
+  group: chimera-mk10-g38-${{ github.event.inputs.profile }}-${{ github.event.inputs.overlay_profile }}-${{ github.event.inputs.toolchain }}-${{ github.event.inputs.gavdoc_ref }}
   cancel-in-progress: false
 
 on:
@@ -77,10 +37,10 @@ on:
         default: false
 
       overlay_profile:
-        description: "Chimera source-overlay set. Only used when the overlay is active (profile=chimera-full or apply_optional_overlay=true); otherwise ignored. full = apply_chimera_overlay_patches.sh. lite = apply_chimera_overlay_lite.sh. security-only = NO mk/grep source overlays. In ALL three, the hooks.c selinux_cred() pass, the stack-protector edit and chimera-device-specific.cfg are still applied."
+        description: "Chimera source-overlay set. Used only when apply_optional_overlay=true. full = apply_chimera_overlay_patches.sh; lite = apply_chimera_overlay_lite.sh. Both also apply the hooks.c pass, stack-protector setting, and chimera-device-specific.cfg."
         required: false
         type: choice
-        options: [full, lite, security-only]
+        options: [full, lite]
         default: full
 
       relax_bcmdhd_werror:
@@ -108,23 +68,11 @@ on:
         type: boolean
         default: false
 
-      base_repo:
-        description: "Kernel source repo (owner/repo)"
-        required: false
+      gavdoc_ref:
+        description: "gavdoc38 kernel commit: required immutable 40-hex SHA"
+        required: true
         type: string
-        default: "gavdoc38/android_kernel_samsung_exynos9810"
-
-      base_ref:
-        description: "Kernel source commit: full 40-hex SHA, or EMPTY = resolve live tip of base_branch_hint and record the resolved SHA"
-        required: false
-        type: string
-        default: ""
-
-      base_branch_hint:
-        description: "Branch resolved when base_ref is empty; otherwise compared against base_ref for drift logging only"
-        required: false
-        type: string
-        default: "lineage-24.0-xxksu3-susfs2"
+        default: "70afe12930584d6eb5beca9a903f78e1e167d3a2"
 
       ksu_commit:
         description: "OPTIONAL verify-only: full 40-hex SHA that must match a gitlink (submodule) commit in the checked-out kernel tree. Empty = skip."
@@ -133,13 +81,25 @@ on:
         default: ""
 
       chimera_ref:
-        description: "Project_Chimera overlay commit: full 40-hex SHA, or EMPTY = resolve tip of branch lineage-24.0-xxksu3-susfs2 and record the SHA"
+        description: "Project_Chimera overlay commit: required immutable 40-hex SHA"
+        required: true
+        type: string
+        default: "95b8142e6763cf6af9534fb1e4495fd59013d6eb"
+
+      krazey_repo:
+        description: "Optional upstream repository to fetch only (owner/repo). UNVERIFIED until supplied; no merge is performed."
+        required: false
+        type: string
+        default: ""
+
+      krazey_ref:
+        description: "Required with krazey_repo: immutable 40-hex commit SHA to fetch only."
         required: false
         type: string
         default: ""
 
       merge_ksu_fragment:
-        description: "Merge the KSU/SUSFS .cfg fragment from the overlay repo (chimera-xxksu-susfs.cfg, fallback chimera-ksu-susfs.cfg). Default off: branch is already integrated."
+        description: "Merge chimera-xxksu-susfs.cfg from the pinned overlay commit. Default off: branch is already integrated."
         required: false
         type: boolean
         default: false
@@ -197,10 +157,14 @@ on:
         type: string
 
 env:
+  GAVDOC_REPO_SLUG: "gavdoc38/android_kernel_samsung_exynos9810"
+  GAVDOC_REPO: "https://github.com/gavdoc38/android_kernel_samsung_exynos9810.git"
+  GAVDOC_BRANCH: "lineage-24.0-xxksu3-susfs2"
   CHIMERA_REPO_SLUG: "royd-jpg/Project_Chimera"
   CHIMERA_REPO: "https://github.com/royd-jpg/Project_Chimera.git"
   CHIMERA_BRANCH: "lineage-24.0-xxksu3-susfs2"
   OVERLAY_DIR_NAME: "chimera_overlay"
+  KRAZEY_DIR_NAME: "krazey_upstream"
 
   KERNEL_DIR: "kernel"
   OUT_DIR: "kernel-out"
@@ -208,7 +172,7 @@ env:
   ANYKERNEL_DIR: "anykernel3"
   ANYKERNEL_REPO: "https://github.com/osm0sis/AnyKernel3.git"
 
-  # UNVERIFIED on gavdoc38/lineage-24.0-xxksu3-susfs2 — checked fail-closed in preflight.
+  # Verified at the gavdoc_ref default; the remaining compatibility checks fail closed at run time.
   DEFCONFIG: "arch/arm64/configs/exynos9810-star2lte_defconfig"
   STAR2_DTB_REL: "dts/exynos/exynos9810-star2lte_eur_open_26.dtb"
   CCACHE_MAXSIZE: "3G"
@@ -228,11 +192,11 @@ env:
   TOOLCHAIN: ${{ inputs.toolchain }}
   IN_PROFILE: ${{ inputs.profile }}
   IN_TOOLCHAIN: ${{ inputs.toolchain }}
-  IN_BASE_REPO: ${{ inputs.base_repo }}
-  IN_BASE_REF: ${{ inputs.base_ref }}
-  IN_BASE_BRANCH_HINT: ${{ inputs.base_branch_hint }}
+  IN_GAVDOC_REF: ${{ inputs.gavdoc_ref }}
   IN_KSU_COMMIT: ${{ inputs.ksu_commit }}
   IN_CHIMERA_REF: ${{ inputs.chimera_ref }}
+  IN_KRAZEY_REPO: ${{ inputs.krazey_repo }}
+  IN_KRAZEY_REF: ${{ inputs.krazey_ref }}
   IN_MERGE_KSU_FRAGMENT: ${{ inputs.merge_ksu_fragment }}
   IN_BRAND: ${{ inputs.brand }}
   IN_CUSTOM_BRAND: ${{ inputs.custom_brand }}
@@ -243,12 +207,12 @@ env:
   IN_BUILD_DATE: ${{ inputs.build_date }}
   IN_CUSTOM_BUILD_DATE: ${{ inputs.custom_build_date }}
   RELAX_BCMDHD_WERROR: ${{ inputs.relax_bcmdhd_werror }}
-  APPLY_OVERLAY: ${{ inputs.profile == 'chimera-full' || inputs.apply_optional_overlay }}
+  APPLY_OVERLAY: ${{ inputs.apply_optional_overlay }}
   IN_OVERLAY_PROFILE: ${{ inputs.overlay_profile }}
   IN_BUILD_SCOPE: ${{ inputs.build_scope }}
   IN_PACKAGE_ANYKERNEL: ${{ inputs.package_anykernel }}
   IN_DO_RELEASE: ${{ inputs.do_release }}
-  OVERLAY_PROFILE_EFFECTIVE: ${{ (inputs.profile == 'chimera-full' || inputs.apply_optional_overlay) && inputs.overlay_profile || 'off' }}
+  OVERLAY_PROFILE_EFFECTIVE: ${{ inputs.apply_optional_overlay && inputs.overlay_profile || 'off' }}
 
 jobs:
   build:
@@ -266,16 +230,23 @@ jobs:
           set -Eeuo pipefail
           FAIL=0
           [[ "$IN_PROFILE" =~ ^(boot-first|chimera-full)$ ]] || { echo "FATAL: bad profile '$IN_PROFILE'" >&2; FAIL=1; }
-          [[ "$IN_OVERLAY_PROFILE" =~ ^(full|lite|security-only)$ ]] || { echo "FATAL: bad overlay_profile '$IN_OVERLAY_PROFILE'" >&2; FAIL=1; }
+          [[ "$IN_OVERLAY_PROFILE" =~ ^(full|lite)$ ]] || { echo "FATAL: bad overlay_profile '$IN_OVERLAY_PROFILE'" >&2; FAIL=1; }
           [[ "$IN_BUILD_SCOPE" =~ ^(full|config-only)$ ]] || { echo "FATAL: bad build_scope '$IN_BUILD_SCOPE'" >&2; FAIL=1; }
           [[ "$IN_TOOLCHAIN" =~ ^(gcc|llvm-full|llvm22|llvm21|llvm20|aosp23|aosp22|aosp21|aosp20|aosp19|neutron19|neutron23|neutron24|zyc_stable|weebx)$ ]] || { echo "FATAL: bad toolchain '$IN_TOOLCHAIN'" >&2; FAIL=1; }
-          [[ -z "$IN_BASE_REF" || "$IN_BASE_REF" =~ ^[0-9a-f]{40}$ ]] || { echo "FATAL: base_ref must be empty or a full 40-hex SHA" >&2; FAIL=1; }
-          [[ -z "$IN_CHIMERA_REF" || "$IN_CHIMERA_REF" =~ ^[0-9a-f]{40}$ ]] || { echo "FATAL: chimera_ref must be empty or a full 40-hex SHA" >&2; FAIL=1; }
+          [[ "$IN_GAVDOC_REF" =~ ^[0-9a-f]{40}$ ]] || { echo "FATAL: gavdoc_ref must be an immutable full 40-hex SHA (branch names and short SHAs are rejected)" >&2; FAIL=1; }
+          [[ "$IN_CHIMERA_REF" =~ ^[0-9a-f]{40}$ ]] || { echo "FATAL: chimera_ref must be an immutable full 40-hex SHA (branch names and short SHAs are rejected)" >&2; FAIL=1; }
           [[ -z "$IN_KSU_COMMIT" || "$IN_KSU_COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "FATAL: ksu_commit must be empty or a full 40-hex SHA" >&2; FAIL=1; }
-          [[ "$IN_BASE_REPO" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || { echo "FATAL: base_repo must be owner/repo" >&2; FAIL=1; }
-          [[ "$IN_BASE_BRANCH_HINT" =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "FATAL: bad base_branch_hint" >&2; FAIL=1; }
+          if [[ -n "$IN_KRAZEY_REPO" ]]; then
+            [[ "$IN_KRAZEY_REPO" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || { echo "FATAL: krazey_repo must be owner/repo" >&2; FAIL=1; }
+            [[ "$IN_KRAZEY_REF" =~ ^[0-9a-f]{40}$ ]] || { echo "FATAL: krazey_ref is required with krazey_repo and must be an immutable full 40-hex SHA (branch names and short SHAs are rejected)" >&2; FAIL=1; }
+          elif [[ -n "$IN_KRAZEY_REF" ]]; then
+            echo "FATAL: krazey_ref was supplied without krazey_repo" >&2; FAIL=1
+          fi
           [[ "$IN_BUILD_VERSION" =~ ^[0-9]+$ ]] || { echo "FATAL: build_version must be digits" >&2; FAIL=1; }
           [[ "$IN_BUILD_HOST" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "FATAL: bad build_host" >&2; FAIL=1; }
+          if [[ "$IN_PROFILE" == "chimera-full" && "$APPLY_OVERLAY" != "true" ]]; then
+            echo "FATAL: profile=chimera-full requires apply_optional_overlay=true. Use profile=boot-first with apply_optional_overlay=false to build without the Chimera overlay." >&2; FAIL=1
+          fi
           [[ "$FAIL" -eq 0 ]] || exit 1
           if [[ "$APPLY_OVERLAY" != "true" && "$IN_OVERLAY_PROFILE" != "full" ]]; then
             echo "::notice::overlay_profile=$IN_OVERLAY_PROFILE ignored: overlay inactive (profile=$IN_PROFILE, apply_optional_overlay=false)"
@@ -285,31 +256,18 @@ jobs:
           fi
           echo "PASS: inputs valid (APPLY_OVERLAY=$APPLY_OVERLAY, OVERLAY_PROFILE_EFFECTIVE=$OVERLAY_PROFILE_EFFECTIVE, BUILD_SCOPE=$IN_BUILD_SCOPE)"
 
-      - name: Resolve kernel base and Chimera overlay commits (immutable SHAs)
+      - name: Record immutable gavdoc38 and Project_Chimera pins
         run: |
           set -Eeuo pipefail
-          tip() { git ls-remote "$1" "refs/heads/$2" | cut -f1 | head -n1; }
-          if [[ -n "$IN_BASE_REF" ]]; then
-            BASE_REF_RESOLVED="$IN_BASE_REF"; BASE_REF_SOURCE="input-pin"
-          else
-            BASE_REF_RESOLVED="$(tip "https://github.com/${IN_BASE_REPO}.git" "$IN_BASE_BRANCH_HINT" || true)"
-            BASE_REF_SOURCE="branch-tip:${IN_BASE_BRANCH_HINT}"
-          fi
-          [[ "$BASE_REF_RESOLVED" =~ ^[0-9a-f]{40}$ ]] || { echo "FATAL: could not resolve base commit for ${IN_BASE_REPO} branch '${IN_BASE_BRANCH_HINT}' (got '${BASE_REF_RESOLVED}')" >&2; exit 1; }
-          if [[ -n "$IN_CHIMERA_REF" ]]; then
-            CHIMERA_REF_RESOLVED="$IN_CHIMERA_REF"; CHIMERA_REF_SOURCE="input-pin"
-          else
-            CHIMERA_REF_RESOLVED="$(tip "$CHIMERA_REPO" "$CHIMERA_BRANCH" || true)"
-            CHIMERA_REF_SOURCE="branch-tip:${CHIMERA_BRANCH}"
-          fi
-          [[ "$CHIMERA_REF_RESOLVED" =~ ^[0-9a-f]{40}$ ]] || { echo "FATAL: could not resolve Project_Chimera commit for branch '${CHIMERA_BRANCH}' (got '${CHIMERA_REF_RESOLVED}')" >&2; exit 1; }
+          GAVDOC_REF_RESOLVED="$IN_GAVDOC_REF"; GAVDOC_REF_SOURCE="workflow_dispatch:gavdoc_ref"
+          CHIMERA_REF_RESOLVED="$IN_CHIMERA_REF"; CHIMERA_REF_SOURCE="workflow_dispatch:chimera_ref"
           {
-            echo "BASE_REF_RESOLVED=$BASE_REF_RESOLVED"
-            echo "BASE_REF_SOURCE=$BASE_REF_SOURCE"
+            echo "GAVDOC_REF_RESOLVED=$GAVDOC_REF_RESOLVED"
+            echo "GAVDOC_REF_SOURCE=$GAVDOC_REF_SOURCE"
             echo "CHIMERA_REF_RESOLVED=$CHIMERA_REF_RESOLVED"
             echo "CHIMERA_REF_SOURCE=$CHIMERA_REF_SOURCE"
           } >> "$GITHUB_ENV"
-          echo "base:    $IN_BASE_REPO@$BASE_REF_RESOLVED ($BASE_REF_SOURCE)"
+          echo "gavdoc:  $GAVDOC_REPO_SLUG@$GAVDOC_REF_RESOLVED ($GAVDOC_REF_SOURCE)"
           echo "chimera: $CHIMERA_REPO@$CHIMERA_REF_RESOLVED ($CHIMERA_REF_SOURCE)"
 
       - name: Resolve build identity inputs
@@ -318,7 +276,7 @@ jobs:
           if [[ "$IN_BRAND" == "Other" ]]; then
             FINAL_BRAND="$IN_CUSTOM_BRAND"
           elif [[ "$IN_BRAND" == "-c10r2x[git7]" ]]; then
-            FINAL_BRAND="-c10r2x${BASE_REF_RESOLVED:0:7}"
+            FINAL_BRAND="-c10r2x${GAVDOC_REF_RESOLVED:0:7}"
           else
             FINAL_BRAND="$IN_BRAND"
           fi
@@ -391,43 +349,46 @@ jobs:
           NEED=()
           KSU_FRAGMENT_USED=""
           if [[ "$IN_MERGE_KSU_FRAGMENT" == "true" ]]; then
-            if   [[ -f "$OV/chimera-xxksu-susfs.cfg" ]]; then KSU_FRAGMENT_USED="chimera-xxksu-susfs.cfg"
-            elif [[ -f "$OV/chimera-ksu-susfs.cfg"   ]]; then KSU_FRAGMENT_USED="chimera-ksu-susfs.cfg"
-            else echo "FATAL: merge_ksu_fragment=true but neither chimera-xxksu-susfs.cfg nor chimera-ksu-susfs.cfg exists in $CHIMERA_REPO_SLUG@$SHA (UNVERIFIED file names)" >&2; exit 1
-            fi
+            [[ -f "$OV/chimera-xxksu-susfs.cfg" ]] || { echo "FATAL: merge_ksu_fragment=true but chimera-xxksu-susfs.cfg is absent from $CHIMERA_REPO_SLUG@$SHA" >&2; exit 1; }
+            KSU_FRAGMENT_USED="chimera-xxksu-susfs.cfg"
             NEED+=("$KSU_FRAGMENT_USED")
           fi
           echo "KSU_FRAGMENT_USED=$KSU_FRAGMENT_USED" >> "$GITHUB_ENV"
           if [[ "$APPLY_OVERLAY" == "true" ]]; then
-            NEED+=(chimera-device-specific.cfg)   # merged in ALL overlay profiles
+            # Validate these exact files before any overlay change is made, even for the lite profile.
+            NEED+=(
+              chimera-device-specific.cfg
+              patches/apply_chimera_overlay_patches.sh
+              patches/0001-mfd-madera-core-settle-delay-after-reset-release.patch
+            )
             case "$IN_OVERLAY_PROFILE" in
-              full) NEED+=(patches/apply_chimera_overlay_patches.sh patches/0001-mfd-madera-core-settle-delay-after-reset-release.patch) ;;
+              full) ;;
               lite) NEED+=(patches/apply_chimera_overlay_lite.sh) ;;
-              security-only) ;;
             esac
           fi
-          MISSING=0
+          MISSING=()
           for f in "${NEED[@]}"; do
-            if [[ -f "$OV/$f" ]]; then echo "OK: $f"; else echo "FATAL: missing $f in $CHIMERA_REPO_SLUG@$SHA" >&2; MISSING=1; fi
+            if [[ -f "$OV/$f" ]]; then echo "OK: $f"; else MISSING+=("$f"); fi
           done
-          if [[ "$MISSING" -ne 0 ]]; then
+          if [[ "${#MISSING[@]}" -ne 0 ]]; then
+            echo "FATAL: missing required Chimera overlay file(s) in $CHIMERA_REPO_SLUG@$SHA: ${MISSING[*]}" >&2
             echo "--- $CHIMERA_REPO_SLUG@$SHA (HEAD: $(git -C "$OV" log -1 --format=%s)) ---" >&2
             echo "tracked files: $(git -C "$OV" ls-tree -r --name-only HEAD | wc -l)" >&2
             echo "--- top level ---" >&2
             git -C "$OV" ls-tree --name-only HEAD | tr '\n' ' ' >&2; echo >&2
             echo "--- chimera*, patches/, *.cfg, apply_* entries ---" >&2
             git -C "$OV" ls-tree -r --name-only HEAD | grep -E '(^|/)(chimera[^/]*|patches/.*|[^/]*\.cfg|apply_[^/]*)$' >&2 || echo "(none)" >&2
-            echo "::error::Overlay files are not in this Project_Chimera commit. Pass chimera_ref=<40-hex commit that contains them>, add them to the branch, or run profile=boot-first with apply_optional_overlay=false." >&2
+            echo "::error::Use profile=boot-first with apply_optional_overlay=false, or select a chimera_ref commit containing the listed overlay files." >&2
             exit 1
           fi
           [[ ! -f "$OV/patches/apply_chimera_overlay_patches.sh" ]] || chmod +x "$OV/patches/apply_chimera_overlay_patches.sh"
           [[ ! -f "$OV/patches/apply_chimera_overlay_lite.sh" ]] || chmod +x "$OV/patches/apply_chimera_overlay_lite.sh"
 
-      - name: Checkout kernel base (resolved commit; submodules recursive — UNVERIFIED need)
+      - name: Checkout pinned gavdoc38 kernel (submodules recursive — UNVERIFIED need)
         uses: actions/checkout@v4
         with:
-          repository: ${{ inputs.base_repo }}
-          ref: ${{ env.BASE_REF_RESOLVED }}
+          repository: ${{ env.GAVDOC_REPO_SLUG }}
+          ref: ${{ env.GAVDOC_REF_RESOLVED }}
           path: ${{ env.KERNEL_DIR }}
           fetch-depth: 1
           submodules: recursive
@@ -445,17 +406,23 @@ jobs:
             echo "ART_DIR=$GITHUB_WORKSPACE/artifacts"
           } >> "$GITHUB_ENV"
 
-      - name: Detect base branch-tip drift (log only)
+      - name: Fetch optional Krazey upstream (no merge)
+        if: ${{ inputs.krazey_repo != '' }}
         run: |
           set -Eeuo pipefail
-          TIP="$(git ls-remote "https://github.com/${IN_BASE_REPO}.git" "refs/heads/${IN_BASE_BRANCH_HINT}" | cut -f1 || true)"
+          KRAZEY_DIR="$GITHUB_WORKSPACE/$KRAZEY_DIR_NAME"
+          rm -rf "$KRAZEY_DIR"
+          git init -q "$KRAZEY_DIR"
+          git -C "$KRAZEY_DIR" remote add origin "https://github.com/${IN_KRAZEY_REPO}.git"
+          git -C "$KRAZEY_DIR" fetch --no-tags --depth=1 origin "$IN_KRAZEY_REF"
+          KRAZEY_REF_RESOLVED="$(git -C "$KRAZEY_DIR" rev-parse FETCH_HEAD^{commit})"
+          [[ "$KRAZEY_REF_RESOLVED" == "$IN_KRAZEY_REF" ]] || { echo "FATAL: fetched Krazey commit $KRAZEY_REF_RESOLVED != requested $IN_KRAZEY_REF" >&2; exit 1; }
           {
-            echo "resolved base commit: $BASE_REF_RESOLVED ($BASE_REF_SOURCE)"
-            echo "live tip of $IN_BASE_BRANCH_HINT: ${TIP:-<lookup failed>}"
-          } | tee "$ABS_LOG/base-drift.txt"
-          if [[ -n "$TIP" && "$TIP" != "$BASE_REF_RESOLVED" ]]; then
-            echo "::warning::resolved base commit differs from live tip $TIP; pin NOT advanced."
-          fi
+            echo "KRAZEY_REPO=$IN_KRAZEY_REPO"
+            echo "KRAZEY_REF_RESOLVED=$KRAZEY_REF_RESOLVED"
+          } >> "$GITHUB_ENV"
+          git -C "$KRAZEY_DIR" show -s --format='format=%H%n%s' FETCH_HEAD | tee "$ABS_LOG/krazey-upstream.txt"
+          echo "Fetched $IN_KRAZEY_REPO@$KRAZEY_REF_RESOLVED; no merge or patch is applied."
 
       - name: Deepen submodules if present (KSU Kbuild may run git describe/rev-list) — UNVERIFIED need
         working-directory: ${{ env.KERNEL_DIR }}
@@ -724,7 +691,7 @@ jobs:
             echo "FATAL: base checkout not clean" >&2; git status --short; exit 1
           fi
           BASE_COMMIT="$(git rev-parse HEAD)"
-          [[ "$BASE_COMMIT" == "$BASE_REF_RESOLVED" ]] || { echo "FATAL: HEAD $BASE_COMMIT != resolved base $BASE_REF_RESOLVED" >&2; exit 1; }
+          [[ "$BASE_COMMIT" == "$GAVDOC_REF_RESOLVED" ]] || { echo "FATAL: HEAD $BASE_COMMIT != requested gavdoc_ref $GAVDOC_REF_RESOLVED" >&2; exit 1; }
           KV="$(make -s --no-print-directory kernelversion)"
           echo "kernelversion: $KV"
           [[ "$KV" =~ ^4\.9\. ]] || { echo "FATAL: kernelversion '$KV' is not 4.9.x (expected for Exynos 9810 LOS kernel — UNVERIFIED assumption)" >&2; exit 1; }
@@ -759,7 +726,7 @@ jobs:
             echo "KSU_KCONFIG_PATH=$KSU_KCONFIG"
             echo "UNAME_PREVIEW=$UNAME_PREVIEW"
           } >> "$GITHUB_ENV"
-          echo "OK: base $IN_BASE_REPO@$BASE_COMMIT, $KV, defconfig present, KSU/SUSFS integration present"
+          echo "OK: gavdoc base $GAVDOC_REPO_SLUG@$BASE_COMMIT, $KV, defconfig present, KSU/SUSFS integration present"
 
       - name: Verify integrated tree (hard presence checks; call-site checks are warnings — names UNVERIFIED for xxksu3)
         working-directory: ${{ env.KERNEL_DIR }}
@@ -931,23 +898,6 @@ jobs:
           [[ "$FAIL" -eq 0 ]] || exit 1
           echo "PASS: lite overlay markers present (5 mk + 2 fair.c), no DTS tuning"
 
-      - name: Optional overlay — security-only (no Chimera mk/grep source overlays) leak check
-        if: ${{ env.OVERLAY_PROFILE_EFFECTIVE == 'security-only' }}
-        working-directory: ${{ env.KERNEL_DIR }}
-        run: |
-          set -Eeuo pipefail
-          FAIL=0
-          leak() { if grep -q "$1" "$2" 2>/dev/null; then echo "FATAL: marker $1 present in $2 (profile security-only)"; FAIL=1; fi; }
-          leak CMK9_UFC_SHORT_CIRCUIT        drivers/cpufreq/exynos-ufc.c
-          leak CMK9_MEM_RW_SUS_MAP_GUARD     fs/proc/base.c
-          leak CMK9_NAMEI_SUS_PATH_RECHECK   fs/namei.c
-          leak CMK9_DTS_BOARD_TUNING         arch/arm64/boot/dts/exynos/exynos9810-star2lte_eur_open_26.dts
-          leak CMK9_SUGOV_RATE_LIMIT         kernel/sched/cpufreq_schedutil.c
-          leak CMK9_SUGOV_KTHREAD_PRIORITY   kernel/sched/cpufreq_schedutil.c
-          leak CMK9_SUGOV_INIT_RATE_LIMIT    kernel/sched/cpufreq_schedutil.c
-          [[ "$FAIL" -eq 0 ]] || exit 1
-          echo "PASS: overlay_profile=security-only — no Chimera mk overlay markers present (hooks.c / stack-protector / device cfg still applied)"
-
       # ── 8. Kconfig ─────────────────────────────────────────────────────────
       - name: Configure kernel (defconfig + optional fragments; no KSU/SUSFS forcing)
         working-directory: ${{ env.KERNEL_DIR }}
@@ -1031,7 +981,6 @@ jobs:
           SETS="BASE"
           case "$OVERLAY_PROFILE_EFFECTIVE" in
             off) ;;
-            security-only) REQUIRED+=("${REQUIRED_SECURITY[@]}"); SETS+="+SECURITY" ;;
             lite)          REQUIRED+=("${REQUIRED_SECURITY[@]}" "${REQUIRED_LITE[@]}"); SETS+="+SECURITY+LITE" ;;
             full)          REQUIRED+=("${REQUIRED_SECURITY[@]}" "${REQUIRED_LITE[@]}" "${REQUIRED_FULL[@]}"); SETS+="+SECURITY+LITE+FULL" ;;
             *) echo "FATAL: unexpected OVERLAY_PROFILE_EFFECTIVE '$OVERLAY_PROFILE_EFFECTIVE'" >&2; exit 1 ;;
@@ -1066,7 +1015,7 @@ jobs:
         run: echo "::notice::build_scope=config-only — config and .config validated only; no compile, link, packaging, boot or KSU/SUSFS runtime validation was performed."
 
       # ── 9. Build (build_scope=full only) ───────────────────────────────────
-      - name: Build kernel Image, vmlinux and DTBs
+      - name: Build kernel Image, Image.gz, vmlinux and DTBs
         if: ${{ inputs.build_scope == 'full' }}
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
@@ -1083,7 +1032,7 @@ jobs:
             echo "KBUILD_LDFLAGS: (not passed)"
             printf 'make arg: %s\n' "${TOOLCHAIN_ARGS[@]}"
           } | tee "$ABS_LOG/build-flags.txt"
-          chimera_make -j"$(nproc)" "KCFLAGS=$BUILD_KCFLAGS" Image vmlinux dtbs 2>&1 | tee "$ABS_LOG/build.log"
+          chimera_make -j"$(nproc)" "KCFLAGS=$BUILD_KCFLAGS" Image Image.gz vmlinux dtbs 2>&1 | tee "$ABS_LOG/build.log"
 
       - name: Verify compiler identity, kernel release, hook symbols and DTB
         if: ${{ inputs.build_scope == 'full' }}
@@ -1092,6 +1041,7 @@ jobs:
           set -Eeuo pipefail
           VMLINUX="$ABS_OUT/vmlinux"
           [[ -s "$ABS_OUT/arch/arm64/boot/Image" ]] || { echo "FATAL: Image missing/empty" >&2; exit 1; }
+          [[ -s "$ABS_OUT/arch/arm64/boot/Image.gz" ]] || { echo "FATAL: Image.gz missing/empty" >&2; exit 1; }
           [[ -s "$VMLINUX" ]] || { echo "FATAL: vmlinux missing/empty" >&2; exit 1; }
           if [[ ! -s "$ABS_OUT/arch/arm64/boot/$STAR2_DTB_REL" ]]; then
             echo "FATAL: star2lte DTB missing: arch/arm64/boot/$STAR2_DTB_REL (UNVERIFIED path). DTBs produced:" >&2
@@ -1142,6 +1092,7 @@ jobs:
           BOOT="$ABS_OUT/arch/arm64/boot"
           mkdir -p "$ART_DIR/dtb"
           cp "$BOOT/Image" "$ART_DIR/Image"
+          cp "$BOOT/Image.gz" "$ART_DIR/Image.gz"
           [[ ! -f "$ABS_OUT/System.map" ]] || cp "$ABS_OUT/System.map" "$ART_DIR/System.map"
           cp "$ABS_OUT/.config" "$ART_DIR/final.config"
           ls -la "$BOOT" > "$ABS_LOG/boot-dir-listing.txt"
@@ -1157,9 +1108,10 @@ jobs:
           import json, os, hashlib, pathlib
           art = pathlib.Path(os.environ["ART_DIR"])
           def sha(p): return hashlib.sha256(p.read_bytes()).hexdigest()
-          keys = ["BUILD_TAG","GITHUB_RUN_ID","IN_PROFILE","TOOLCHAIN","APPLY_OVERLAY","CHIMERA_REPO_SLUG","CHIMERA_BRANCH",
-                  "CHIMERA_REF_RESOLVED","CHIMERA_REF_SOURCE","CHIMERA_SHA","IN_BASE_REPO","IN_BASE_BRANCH_HINT",
-                  "BASE_REF_RESOLVED","BASE_REF_SOURCE","BASE_COMMIT","IN_KSU_COMMIT","KSU_KCONFIG_PATH",
+          keys = ["BUILD_TAG","GITHUB_RUN_ID","IN_PROFILE","TOOLCHAIN","APPLY_OVERLAY","GAVDOC_REPO_SLUG","GAVDOC_BRANCH",
+                  "IN_GAVDOC_REF","GAVDOC_REF_RESOLVED","GAVDOC_REF_SOURCE","BASE_COMMIT","CHIMERA_REPO_SLUG","CHIMERA_BRANCH",
+                  "CHIMERA_REF_RESOLVED","CHIMERA_REF_SOURCE","CHIMERA_SHA","IN_KRAZEY_REPO","IN_KRAZEY_REF","KRAZEY_REPO","KRAZEY_REF_RESOLVED",
+                  "IN_KSU_COMMIT","KSU_KCONFIG_PATH",
                   "IN_MERGE_KSU_FRAGMENT","KSU_FRAGMENT_USED","COMPILER_VERSION","LINKER_VERSION","TC_CACHE_KEY",
                   "TC_IDENTITY_HASH","KERNEL_VERSION","KERNEL_RELEASE_EXPECTED","KERNEL_RELEASE_ACTUAL","BUILD_KCFLAGS",
                   "FINAL_CONFIG_HASH","UNAME_PREVIEW","KBUILD_BUILD_USER","KBUILD_BUILD_HOST","KBUILD_BUILD_VERSION",
@@ -1233,6 +1185,14 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           path: artifacts/Image
+          archive: false
+          if-no-files-found: error
+
+      - name: Upload Image.gz
+        if: ${{ inputs.build_scope == 'full' }}
+        uses: actions/upload-artifact@v7
+        with:
+          path: artifacts/Image.gz
           archive: false
           if-no-files-found: error
 
@@ -1337,7 +1297,8 @@ jobs:
             echo "- overlay applied: ${APPLY_OVERLAY} (profile: ${OVERLAY_PROFILE_EFFECTIVE})"
             echo "- Project_Chimera: ${CHIMERA_SHA:-n/a} (${CHIMERA_REF_SOURCE:-n/a})"
             echo "- brand: ${BRAND:-n/a}"
-            echo "- kernel base: ${IN_BASE_REPO}@${BASE_COMMIT:-n/a} (${BASE_REF_SOURCE:-n/a})"
+            echo "- kernel base: ${GAVDOC_REPO_SLUG}@${BASE_COMMIT:-n/a} (${GAVDOC_REF_SOURCE:-n/a})"
+            echo "- Krazey upstream (fetch only): ${KRAZEY_REPO:-not requested}@${KRAZEY_REF_RESOLVED:-n/a}"
             echo "- KSU/SUSFS: pre-integrated in base branch; no integration performed (Kconfig: ${KSU_KCONFIG_PATH:-n/a}; fragment: ${KSU_FRAGMENT_USED:-none})"
             echo "- compiler: ${COMPILER_VERSION:-n/a}"
             echo "- kernel release: ${KERNEL_RELEASE_ACTUAL:-n/a}"
@@ -1423,8 +1384,9 @@ jobs:
               "gavdoc38 lineage-24.0-xxksu3-susfs2 (KSU+SUSFS pre-integrated in the branch; no integration performed by CI) "
               "for potential use with a LineageOS 24 userspace. Runtime compatibility requires physical-device testing.\n\n"
               "| Field | Value |\n|---|---|\n"
-              f"| Kernel base | `{v('IN_BASE_REPO')}@{v('BASE_COMMIT')}` (`{v('BASE_REF_SOURCE')}`) |\n"
+              f"| Kernel base | `{v('GAVDOC_REPO_SLUG')}@{v('BASE_COMMIT')}` (`{v('GAVDOC_REF_SOURCE')}`) |\n"
               f"| Chimera overlay (commit, checkout verified) | `{v('CHIMERA_SHA')}` (`{v('CHIMERA_REF_SOURCE')}`) |\n"
+              f"| Krazey upstream (fetch only, no merge) | `{v('KRAZEY_REPO') or 'not requested'}@{v('KRAZEY_REF_RESOLVED') or 'n/a'}` |\n"
               f"| KSU Kconfig / fragment | `{v('KSU_KCONFIG_PATH')}` / `{v('KSU_FRAGMENT_USED') or 'none'}` |\n"
               f"| Profile / overlay / overlay profile | `{v('IN_PROFILE')}` / `{v('APPLY_OVERLAY')}` / `{v('OVERLAY_PROFILE_EFFECTIVE')}` |\n"
               f"| Toolchain mode | `{v('TOOLCHAIN')}` (`{v('COMPILER_KIND')}`) |\n"
