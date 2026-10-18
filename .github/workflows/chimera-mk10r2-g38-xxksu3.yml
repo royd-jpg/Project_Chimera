@@ -5,8 +5,8 @@
 # Overlay       : royd-jpg/Project_Chimera @ branch lineage-24.0-xxksu3-susfs2 (checked out to $GITHUB_WORKSPACE/chimera_overlay).
 #
 # TEST STATUS (what was and was not tested):
-#   TESTED (static, in a sandbox): YAML parses; actionlint 1.7.12 clean; every `run:` block passes shellcheck and
-#   bash -n; embedded Python heredocs compile; the workflow_dispatch input count (25) is within the GitHub limit.
+#   TESTED (static, in a sandbox): YAML parses; actionlint 1.7.12 (with shellcheck) reports no findings, yamllint clean;
+#   every `run:` block is shellchecked; embedded Python heredocs compile; the workflow_dispatch input count (25) is within the GitHub limit.
 #   NOT TESTED: no GitHub Actions run, no kernel build. The gavdoc38 branch tree and the Project_Chimera branch
 #   could not be fetched, so nothing repo-specific was verified from source. These items are UNVERIFIED —
 #   REQUIRES CONFIRMATION and are checked fail-closed at run time instead: defconfig
@@ -749,7 +749,7 @@ jobs:
           [[ "$KV" =~ ^4\.9\. ]] || { echo "FATAL: kernelversion '$KV' is not 4.9.x (expected for Exynos 9810 LOS kernel — UNVERIFIED assumption)" >&2; exit 1; }
           if [[ ! -f "$DEFCONFIG" ]]; then
             echo "FATAL: defconfig missing: $DEFCONFIG (UNVERIFIED path). Available Exynos 9810 defconfigs:" >&2
-            ls arch/arm64/configs | grep -i 9810 >&2 || echo "(none matching 9810)" >&2
+            find arch/arm64/configs -maxdepth 1 -iname '*9810*' >&2 || true
             exit 1
           fi
           # Integrated-tree presence (inverse of base's 'pristine' check). Names are UNVERIFIED for xxksu3.
@@ -916,16 +916,16 @@ jobs:
           set -Eeuo pipefail
           bash "$OVERLAY_DIR/patches/apply_chimera_overlay_patches.sh" 2>&1 | tee "$ABS_LOG/overlay.log"
           FAIL=0
-          mk() { grep -q "$2" "$3" 2>/dev/null && echo "OK:    $1" || { echo "FATAL: $1 — marker $2 missing in $3 (markers UNVERIFIED for this overlay branch)"; FAIL=1; }; }
+          mk() { if grep -q "$2" "$3" 2>/dev/null; then echo "OK:    $1"; else echo "FATAL: $1 — marker $2 missing in $3 (markers UNVERIFIED for this overlay branch)"; FAIL=1; fi; }
           mk "UFC short-circuit"     CMK9_UFC_SHORT_CIRCUIT        drivers/cpufreq/exynos-ufc.c
           mk "mem_rw SUS_MAP guard"  CMK9_MEM_RW_SUS_MAP_GUARD     fs/proc/base.c
           mk "board DTS tuning"      CMK9_DTS_BOARD_TUNING         arch/arm64/boot/dts/exynos/exynos9810-star2lte_eur_open_26.dts
           mk "sugov rate limit"      CMK9_SUGOV_RATE_LIMIT         kernel/sched/cpufreq_schedutil.c
           mk "sugov kthread prio"    CMK9_SUGOV_KTHREAD_PRIORITY   kernel/sched/cpufreq_schedutil.c
           mk "sugov_init rate limit" CMK9_SUGOV_INIT_RATE_LIMIT    kernel/sched/cpufreq_schedutil.c
-          grep -q 'normalized_sysctl_sched_min_granularity = 5000000ULL' kernel/sched/fair.c && echo "OK:    fair.c min_granularity" || { echo "FATAL: fair.c min_granularity"; FAIL=1; }
-          grep -q 'sysctl_sched_migration_cost = 2000000UL' kernel/sched/fair.c && echo "OK:    fair.c migration_cost" || { echo "FATAL: fair.c migration_cost"; FAIL=1; }
-          grep -q 'Allow internal boot ROM / SPI interface to become ready' drivers/mfd/madera-core.c && echo "OK:    madera-core settle delay" || { echo "FATAL: madera-core settle delay"; FAIL=1; }
+          if grep -q 'normalized_sysctl_sched_min_granularity = 5000000ULL' kernel/sched/fair.c; then echo "OK:    fair.c min_granularity"; else echo "FATAL: fair.c min_granularity"; FAIL=1; fi
+          if grep -q 'sysctl_sched_migration_cost = 2000000UL' kernel/sched/fair.c; then echo "OK:    fair.c migration_cost"; else echo "FATAL: fair.c migration_cost"; FAIL=1; fi
+          if grep -q 'Allow internal boot ROM / SPI interface to become ready' drivers/mfd/madera-core.c; then echo "OK:    madera-core settle delay"; else echo "FATAL: madera-core settle delay"; FAIL=1; fi
           [[ "$FAIL" -eq 0 ]] || exit 1
           echo "PASS: overlay markers present"
 
@@ -936,14 +936,14 @@ jobs:
           set -Eeuo pipefail
           bash "$OVERLAY_DIR/patches/apply_chimera_overlay_lite.sh" 2>&1 | tee "$ABS_LOG/overlay.log"
           FAIL=0
-          mk() { grep -q "$2" "$3" 2>/dev/null && echo "OK:    $1" || { echo "FATAL: $1 — marker $2 missing in $3 (markers UNVERIFIED for this overlay branch)"; FAIL=1; }; }
+          mk() { if grep -q "$2" "$3" 2>/dev/null; then echo "OK:    $1"; else echo "FATAL: $1 — marker $2 missing in $3 (markers UNVERIFIED for this overlay branch)"; FAIL=1; fi; }
           mk "UFC short-circuit"      CMK9_UFC_SHORT_CIRCUIT        drivers/cpufreq/exynos-ufc.c
           mk "mem_rw SUS_MAP guard"   CMK9_MEM_RW_SUS_MAP_GUARD     fs/proc/base.c
           mk "sugov rate limit"       CMK9_SUGOV_RATE_LIMIT         kernel/sched/cpufreq_schedutil.c
           mk "sugov kthread prio"     CMK9_SUGOV_KTHREAD_PRIORITY   kernel/sched/cpufreq_schedutil.c
           mk "sugov_init rate limit"  CMK9_SUGOV_INIT_RATE_LIMIT    kernel/sched/cpufreq_schedutil.c
-          grep -q 'normalized_sysctl_sched_min_granularity = 5000000ULL' kernel/sched/fair.c && echo "OK:    fair.c min_granularity" || { echo "FATAL: fair.c min_granularity"; FAIL=1; }
-          grep -q 'sysctl_sched_migration_cost = 2000000UL' kernel/sched/fair.c && echo "OK:    fair.c migration_cost" || { echo "FATAL: fair.c migration_cost"; FAIL=1; }
+          if grep -q 'normalized_sysctl_sched_min_granularity = 5000000ULL' kernel/sched/fair.c; then echo "OK:    fair.c min_granularity"; else echo "FATAL: fair.c min_granularity"; FAIL=1; fi
+          if grep -q 'sysctl_sched_migration_cost = 2000000UL' kernel/sched/fair.c; then echo "OK:    fair.c migration_cost"; else echo "FATAL: fair.c migration_cost"; FAIL=1; fi
           if grep -q 'CMK9_DTS_BOARD_TUNING' arch/arm64/boot/dts/exynos/exynos9810-star2lte_eur_open_26.dts 2>/dev/null; then
             echo "FATAL: DTS board tuning present in lite profile"; FAIL=1
           fi
