@@ -7,7 +7,13 @@
 # TEST STATUS (what was and was not tested):
 #   TESTED (static, in a sandbox): YAML parses; actionlint 1.7.12 (with shellcheck) reports no findings, yamllint clean;
 #   every `run:` block is shellchecked; embedded Python heredocs compile; the workflow_dispatch input count (22) is within the GitHub limit of 25.
-#   NOT TESTED: no GitHub Actions run, no kernel build. The gavdoc38 branch tree and the Project_Chimera branch
+#   RUN EVIDENCE (Actions run logs, 2026-10-18): inputs validation, base/overlay ref resolution and the Project_Chimera
+#   checkout work. That Project_Chimera branch tip is itself a full kernel tree (Linux 4.9-era, KernelSU gitlink +
+#   drivers/kernelsu, fs/susfs.c, include/linux/susfs*.h, exynos9810-star2lte_defconfig, the star2lte_eur_open_26 DTS,
+#   chimera-xxksu-susfs.cfg) but does NOT contain chimera-device-specific.cfg or patches/ — so profile=chimera-full
+#   (overlay_profile full/lite/security-only all need chimera-device-specific.cfg) fails closed there unless chimera_ref
+#   points at a commit that has the overlay files.
+#   NOT TESTED: no full build has been run. The gavdoc38 branch tree and the Project_Chimera branch
 #   could not be fetched, so nothing repo-specific was verified from source. These items are UNVERIFIED —
 #   REQUIRES CONFIRMATION and are checked fail-closed at run time instead: defconfig
 #   arch/arm64/configs/exynos9810-star2lte_defconfig, DTB dts/exynos/exynos9810-star2lte_eur_open_26.dtb,
@@ -405,8 +411,13 @@ jobs:
             if [[ -f "$OV/$f" ]]; then echo "OK: $f"; else echo "FATAL: missing $f in $CHIMERA_REPO_SLUG@$SHA" >&2; MISSING=1; fi
           done
           if [[ "$MISSING" -ne 0 ]]; then
-            echo "--- files actually present in $CHIMERA_REPO_SLUG@$SHA (HEAD: $(git -C "$OV" log -1 --format=%s)) ---" >&2
-            git -C "$OV" ls-tree -r --name-only HEAD >&2
+            echo "--- $CHIMERA_REPO_SLUG@$SHA (HEAD: $(git -C "$OV" log -1 --format=%s)) ---" >&2
+            echo "tracked files: $(git -C "$OV" ls-tree -r --name-only HEAD | wc -l)" >&2
+            echo "--- top level ---" >&2
+            git -C "$OV" ls-tree --name-only HEAD | tr '\n' ' ' >&2; echo >&2
+            echo "--- chimera*, patches/, *.cfg, apply_* entries ---" >&2
+            git -C "$OV" ls-tree -r --name-only HEAD | grep -E '(^|/)(chimera[^/]*|patches/.*|[^/]*\.cfg|apply_[^/]*)$' >&2 || echo "(none)" >&2
+            echo "::error::Overlay files are not in this Project_Chimera commit. Pass chimera_ref=<40-hex commit that contains them>, add them to the branch, or run profile=boot-first with apply_optional_overlay=false." >&2
             exit 1
           fi
           [[ ! -f "$OV/patches/apply_chimera_overlay_patches.sh" ]] || chmod +x "$OV/patches/apply_chimera_overlay_patches.sh"
